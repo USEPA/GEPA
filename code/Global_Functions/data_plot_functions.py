@@ -80,7 +80,7 @@ def plot_annual_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,
         m.drawcountries(linewidth=0.4,zorder=3)
     
         xpi,ypi = m(xp,yp)
-        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
+        plot = m.pcolormesh(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
         cb = m.colorbar(plot, location = "bottom", pad = "1%")
         tick_locator = ticker.MaxNLocator(nbins=5)
         cb.locator = tick_locator
@@ -145,7 +145,7 @@ def plot_diff_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,sa
     m.drawstates(linewidth=0.2,zorder=3)
     m.drawcountries(linewidth=0.4,zorder=3)
     xpi,ypi = m(xp,yp)
-    plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=-2.5, vmax=2.5, snap=True,zorder=2,shading='nearest')
+    plot = m.pcolormesh(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=-2.5, vmax=2.5, snap=True,zorder=2,shading='nearest')
     cb = m.colorbar(plot, location = "bottom", pad = "1%")
     tick_locator = ticker.MaxNLocator(nbins=5)
     cb.locator = tick_locator
@@ -223,7 +223,7 @@ def plot_annual_activity_map(Activity_Map, Plot_Frac, Lat, Lon, year_range, titl
         #    scale_max 
     
         xpi,ypi = m(xp,yp)
-        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
+        plot = m.pcolormesh(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
         cb = m.colorbar(plot, location = "bottom", pad = "1%")
         tick_locator = ticker.MaxNLocator(nbins=5)
         cb.locator = tick_locator
