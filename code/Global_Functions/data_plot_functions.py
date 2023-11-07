@@ -1,9 +1,9 @@
 #data_plot_functions
 # Common GEPA functions to plot data
 #### Authors: 
-# Erin E. McDuffie, Joannes D. Maasakkers, Candice F. Z. Chen
+# Erin E. McDuffie, Joannes D. Maasakkers
 #### Date Last Updated: 
-# Feb. 26, 2021
+# Nov. 7, 2023
 
 # Import Modules
 import matplotlib.pyplot as plt
@@ -57,8 +57,8 @@ def plot_annual_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,
         my_cmap._lut[:,-1] = alphas
         my_cmap.set_under('gray', alpha=0)
     
-        Lon_cor = Lon[50:632]-0.05
-        Lat_cor = Lat[43:300]-0.05
+        Lon_cor = Lon[50:632]
+        Lat_cor = Lat[43:300]
     
         xpoints = Lon_cor
         ypoints = Lat_cor
@@ -75,12 +75,12 @@ def plot_annual_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,
                    urcrnrlat=yp.max(), projection='merc', resolution='h', area_thresh=5000)
         m.drawmapboundary(fill_color='Azure')
         m.fillcontinents(color='FloralWhite', lake_color='Azure',zorder=1)
-        m.drawcoastlines(linewidth=0.5,zorder=3)
-        m.drawstates(linewidth=0.25,zorder=3)
-        m.drawcountries(linewidth=0.5,zorder=3)
+        m.drawcoastlines(linewidth=0.4,zorder=3)
+        m.drawstates(linewidth=0.2,zorder=3)
+        m.drawcountries(linewidth=0.4,zorder=3)
     
         xpi,ypi = m(xp,yp)
-        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2)
+        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
         cb = m.colorbar(plot, location = "bottom", pad = "1%")
         tick_locator = ticker.MaxNLocator(nbins=5)
         cb.locator = tick_locator
@@ -129,8 +129,8 @@ def plot_diff_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,sa
     alphas[alphas>1] = 1
     my_cmap._lut[:,-1] = alphas
     
-    Lon_cor = Lon[50:632]-0.05
-    Lat_cor = Lat[43:300]-0.05
+    Lon_cor = Lon[50:632]
+    Lat_cor = Lat[43:300]
     xpoints = Lon_cor
     ypoints = Lat_cor
     yp,xp = np.meshgrid(ypoints,xpoints)
@@ -141,11 +141,11 @@ def plot_diff_emission_flux_map(Emi_flux_map, Lat, Lon, year_range, title_str,sa
                urcrnrlat=yp.max(), projection='merc', resolution='h', area_thresh=5000)
     m.drawmapboundary(fill_color='Azure')
     m.fillcontinents(color='FloralWhite', lake_color='Azure',zorder=1)
-    m.drawcoastlines(linewidth=0.5,zorder=3)
-    m.drawstates(linewidth=0.25,zorder=3)
-    m.drawcountries(linewidth=0.5,zorder=3)
+    m.drawcoastlines(linewidth=0.4,zorder=3)
+    m.drawstates(linewidth=0.2,zorder=3)
+    m.drawcountries(linewidth=0.4,zorder=3)
     xpi,ypi = m(xp,yp)
-    plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=-2.5, vmax=2.5, snap=True,zorder=2)
+    plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=-2.5, vmax=2.5, snap=True,zorder=2,shading='nearest')
     cb = m.colorbar(plot, location = "bottom", pad = "1%")
     tick_locator = ticker.MaxNLocator(nbins=5)
     cb.locator = tick_locator
@@ -191,8 +191,8 @@ def plot_annual_activity_map(Activity_Map, Plot_Frac, Lat, Lon, year_range, titl
         my_cmap._lut[:,-1] = alphas
         my_cmap.set_under('gray', alpha=0)
     
-        Lon_cor = Lon[50:632]-0.05
-        Lat_cor = Lat[43:300]-0.05
+        Lon_cor = Lon[50:632]
+        Lat_cor = Lat[43:300]
     
         xpoints = Lon_cor
         ypoints = Lat_cor
@@ -215,15 +215,15 @@ def plot_annual_activity_map(Activity_Map, Plot_Frac, Lat, Lon, year_range, titl
                    urcrnrlat=yp.max(), projection='merc', resolution='h', area_thresh=5000)
         m.drawmapboundary(fill_color='Azure')
         m.fillcontinents(color='FloralWhite', lake_color='Azure',zorder=1)
-        m.drawcoastlines(linewidth=0.5,zorder=3)
-        m.drawstates(linewidth=0.25,zorder=3)
-        m.drawcountries(linewidth=0.5,zorder=3)
+        m.drawcoastlines(linewidth=0.4,zorder=3)
+        m.drawstates(linewidth=0.2,zorder=3)
+        m.drawcountries(linewidth=0.4,zorder=3)
         
         #if Plot_Frac == 1:
         #    scale_max 
     
         xpi,ypi = m(xp,yp)
-        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2)
+        plot = m.pcolor(xpi,ypi,zp.transpose(), cmap=my_cmap, vmin=10**-15, vmax=scale_max, snap=True,zorder=2,shading='nearest')
         cb = m.colorbar(plot, location = "bottom", pad = "1%")
         tick_locator = ticker.MaxNLocator(nbins=5)
         cb.locator = tick_locator
