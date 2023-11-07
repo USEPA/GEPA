@@ -1,0 +1,21 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+#inputdata files
+code/*/*.ipynb_checkpoints/*
+code/GEPA_Livestock/*Figure.ipynb
+
+#final data files
+code/Final_Gridded_Data/EPA_*
+code/Final_Gridded_Data/GEPA2_*
+code/Final_Gridded_Data/Extension/v2_input_data/*
+code/Final_Gridded_Data/Extension/v2_ext_final/*
+code/Global_Functions/Calc_Line*
+
+# Jupyter checkpoints
+.ipynb_checkpoints
+**/*.ipynb_checkpoints/*
+
+*.zip
