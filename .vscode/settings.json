@@ -1,0 +1,11 @@
+{
+    "black-formatter.args": [
+        "--line-length=88"
+    ],
+    "flake8.args": [
+        "--max-line-length=88"
+    ],
+    "editor.rulers": [
+        88,
+    ],
+}

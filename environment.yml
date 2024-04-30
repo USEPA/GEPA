@@ -1,0 +1,46 @@
+# conda env create --file environment.yml
+# mamba env create --file environment.yml
+name: gch4i
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  # - basemap # added by Nathan -- needed for module data_plot_functions (in "Global_Functions")
+  - black
+  # - xlrd # added by Hannah -- needed in Coal
+  - invoke
+  - jupyter
+  - jupyterlab
+  - matplotlib
+  # - missingno
+  # - nbdime
+  - numpy
+  - pandas
+  - pandas-flavor
+  - pandas-profiling
+  # - plotly
+  # - pyjanitor
+  - pylint
+  # - pyodbc # added by Nathan -- needed in Wastewater
+  - pyprojroot
+  # - pyshp # added by Hannah -- needed in Petroleum Systems
+  - python-duckdb
+  - python-dotenv
+  # - scikit-learn
+  - seaborn
+  - netCDF4
+  - xarray
+  - openpyxl
+  # - tabula-py
+  - pyarrow
+  - geopandas
+  # - pyodbc
+  # - geopy
+  # - PyPDF2
+  - pytask
+  - rasterio
+  - geocube
+  - pip
+  - pip:
+      - -e . # this will install the gch4i package in your environment in dev mode
+ 
