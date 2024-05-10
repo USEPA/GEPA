@@ -1,7 +1,23 @@
 # %%
-# %load_ext autoreload
-# %autoreload 2
-# %%
+# Name: 2C2_ferroalloy_production.py
+
+# Authors Name: N. Kruskamp, H. Lohman (RTI International), Erin McDuffie (EPA/OAP)
+# Date Last Modified: 5/10/2024
+# Purpose: Spatially allocates methane emissions for source category 2C2 Ferroalloy production
+# 
+# Input Files: 
+#      - State_Ferroalloys_1990-2021.xlsx, SubpartK_Ferroalloy_Facilities.csv,
+#           all_ghgi_mappings.csv, all_proxy_mappings.csv
+# Output Files:
+#      - f"{INDUSTRY_NAME}_ch4_kt_per_year.tif, f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
+# Notes:
+# TODO: update to use facility locations from 2024 GHGI state inventory files
+# TODO: include plotting functionaility
+# TODO: include netCDF writting functionality 
+    
+# ---------------------------------------------------------------------
+# %% STEP 0. Load packages, configuration files, and local parameters
+
 import calendar
 import warnings
 from pathlib import Path
@@ -18,17 +34,21 @@ from IPython.display import display
 from rasterio.features import rasterize
 
 from gch4i.config import (ghgi_data_dir_path, max_year, min_year,
-                          tmp_data_dir_path)
+                          tmp_data_dir_path, data_dir_path)
 from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
 from gch4i.utils import calc_conversion_factor, load_area_matrix, write_outputs
 
-# %%
+# %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data
+# Set output paths
+# EEM: add constants (note, we should try to do conversions using variable names, so 
+#      that we don't have constants hard coded into the scripts)
+tg_to_kt = 1000                     # conversion factor, teragrams to kilotonnes
+
 
 # @mark.persist
 # @task
 # def task_sector_industry_ferroalloy():
 #     pass
-
 
 # https://www.epa.gov/system/files/documents/2024-02/us-ghg-inventory-2024-main-text.pdf
 INDUSTRY_NAME = "2C2_industry_ferroalloy"
@@ -43,24 +63,31 @@ EPA_ghgrp_ferrofacility_inputfile = (
     ghgi_data_dir_path / "SubpartK_Ferroalloy_Facilities.csv"
 )
 
-# OUTPUT FILES
+# OUTPUT FILES (TODO: include netCDF flux files)
 ch4_kt_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_kt_per_year.tif"
 ch4_flux_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
 
 # NOTE: I think it makes sense to still load the area matrix in here so it persists
 # in memory and we pass it to the flux calculation function when needed.
+# EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix, 
+# in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function 
+# and specify which we're using here?
 area_matrix = load_area_matrix()
+#----------------------------------------------------------------------------
 
-# %%
+# %% STEP 1. Load GHGI-Proxy Mapping Files
 
 # NOTE: looking at rework of the proxy mapping files into an aggregate flat file
 # that would then be formed into a proxy dictionary to retain the existing approach
 # but allow for interrogation of the objects when needed.
-proxy_mapping_dir = Path(
-    "C:/Users/nkruskamp/Research Triangle Institute/EPA Gridded Methane - Task 2/data"
-)
-ghgi_map_path = proxy_mapping_dir / "all_ghgi_mappings.csv"
-proxy_map_path = proxy_mapping_dir / "all_proxy_mappings.csv"
+# EEM: updated to v3 path
+#proxy_mapping_dir = Path(
+#    "C:/Users/nkruskamp/Research Triangle Institute/EPA Gridded Methane - Task 2/data"
+#)
+#ghgi_map_path = proxy_mapping_dir / "all_ghgi_mappings.csv"
+#proxy_map_path = proxy_mapping_dir / "all_proxy_mappings.csv"
+ghgi_map_path = data_dir_path / "all_ghgi_mappings.csv"
+proxy_map_path = data_dir_path / "all_proxy_mappings.csv"
 ghgi_map_df = pd.read_csv(ghgi_map_path)
 proxy_map_df = pd.read_csv(proxy_map_path)
 
@@ -99,6 +126,7 @@ ferro_map_data_dict["Emi_Ferro"] = {
 #     vars()[proxy_ind_map.loc[igroup,'Proxy_Group']+'_nongrid'] = np.zeros([num_years])
 #     vars()[proxy_ind_map.loc[igroup,'GHGI_Emi_Group']] = np.zeros([num_years])
 
+# -----------------------------------------------------------------------
 
 # %%
 
@@ -108,8 +136,8 @@ ferro_map_data_dict["Emi_Ferro"] = {
 # )
 
 
-# %%
-# STEP 1: GET STATE EMISSIONS DATA BY YEAR
+# %% 
+# STEP 2: Read In EPA State GHGI Emissions by Year
 
 # read in the ch4_kt values for each state
 # This pulls from the full table, but ends up the same as the CH4 kt table found on
@@ -177,7 +205,7 @@ EPA_ferro_emissions = (
     .reset_index()
     # make the table long by state/year
     .melt(id_vars="state", var_name="year", value_name="ch4_tg")
-    .assign(ch4_kt=lambda df: df["ch4_tg"] * 1000)
+    .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
     .drop(columns=["ch4_tg"])
     # make the columns types correcet
     .astype({"year": int, "ch4_kt": float})
@@ -186,7 +214,9 @@ EPA_ferro_emissions = (
     .query("year.between(@min_year, @max_year)")
 )
 EPA_ferro_emissions.head()
-# %%
+
+# %% 
+# QA/QC - check counts of years of state data and plot by state
 display(EPA_ferro_emissions["state"].value_counts())
 display(EPA_ferro_emissions["year"].min(), EPA_ferro_emissions["year"].max())
 
@@ -199,12 +229,13 @@ sns.relplot(
     hue="state",
     # legend=False,
 )
+# ------------------------------------------------------------------------
+
 # %%
-
-
-# STEP 2: GET PROXY DATA
+# STEP 3: GET AND FORMAT PROXY DATA
 # TODO: explore if it makes sense to write a function / task for every proxy.
 # there are about 65 unique ones.
+# EEM: this sounds like a good apprach. I'll leave that decision to RTI
 def task_map_ferro_proxy():
     pass
 
@@ -315,7 +346,7 @@ ferro_facilities_gdf.head()
 # %%
 # quick look at the data.
 sns.lineplot(
-    ferro_facilities_gdf, x="year", y="ch4_kt", hue="facility_name", legend=False
+    ferro_facilities_gdf, x="year", y="ch4_kt", hue="facility_name", legend=True
 )
 # %%
 # EPA_ghgrp_ferro_inputfile = ghgi_path / "SubpartK_Ferroalloy.csv"
@@ -332,27 +363,28 @@ sns.lineplot(
 #     .join(ferro_subk_info_df.set_index(["facility_id", "year"]))
 #     .reset_index()
 # )
-# %%
+# %% QA/QC
 # make sure the merge gave us the number of results we expected.
 if not (ferro_facilities_gdf.shape[0] == ferro_facilities_df.shape[0]):
     print("WARNING the merge shape does not match the original data")
-# %%
-
-# save a shapefile of the v3 ferro facilities for reference
+# %% # save a shapefile of the v3 ferro facilities for reference
 fac_locations = ferro_facilities_gdf.dissolve("formatted_fac_name")
 fac_locations[fac_locations.is_valid].loc[:, ["geometry"]].to_file(
     tmp_data_dir_path / "v3_ferro_facilities.shp.zip", driver="ESRI Shapefile"
 )
 
 
-# %%
+# %% QA/QC
 
 # some checks of the data
 # how many na values are there
+print('Number of NaN values:')
 display(ferro_facilities_gdf.isna().sum())
 # how many missing locations are there by year
+print("Number of Facilities with Missing Locations Each Year")
 display(ferro_facilities_gdf[ferro_facilities_gdf["zip"].isna()]["year"].value_counts())
 # how many missing locations are there by facility name
+print("For Each Facility with Missing Data, How Many Missing Years")
 display(
     ferro_facilities_gdf[ferro_facilities_gdf["zip"].isna()][
         "formatted_fac_name"
@@ -386,31 +418,38 @@ sns.lineplot(
 #     emi_sum = data["ch4_kt"].sum()
 #     fac_sum = ferro_facilities_gdf.query("year == @year")["ch4_kt"].sum()
 #     print(year, np.isclose(fac_sum, emi_sum))
+# ----------------------------------------------------------------------------
 
 # %%
 
-# STEP 3: ALLOCATION STATE / YEAR EMISSIONS BY PROXY FRACTION
-# ALLOCATE the relative facility emissions data by state/year to the state summary
-# emissions
+# STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO EACH FACILITY
+#         (BY PROXY FRACTION IN EACH GRIDCELL)
+# For this source, state-level emissions are spatially allocated using the
+#   the fraction of facility-level emissions within each grid cell in each state, 
+#   for each year
+# EEM: question - for sources where we go from the state down to the grid-level, 
+#      will we still have this calculation step, or will we go straight to the 
+#      rasterize step?
 
 # This does the allocation for us in a function by state and year.
 
 
 def state_year_allocation_emissions(fac_emissions, inventory_df):
 
-    # fac_emissions are the reported emission for the facilities located in that state
-    # and year. It can be one or more facilities. Inventory_df is the summary
-    # emissions table data we query based on the state and year.
+    # fac_emissions are the total emissions for the facilities located in that state
+    # and year. It can be one or more facilities. Inventory_df EPA state GHGI summary
+    # emissions table
 
     # get the target state and year
     state, year = fac_emissions.name
-    # get the summary emissions for that state and year. It will be a single value.
+    # get the total proxy data (e.g., emissions) within that state and year. 
+    # It will be a single value.
     emi_sum = inventory_df[
         (inventory_df["state"] == state) & (inventory_df["year"] == year)
     ]["ch4_kt"].iat[0]
 
-    # allocate the summary emissions to the individual facilities based on their
-    # proportion of reported emissions.
+    # allocate the EPA GHGI state emissions to each individual facility based on their
+    # proportion emissions (i.e., the fraction of total state-level emissions occuring at each facility)
     allocated_fac_emissions = ((fac_emissions / fac_emissions.sum()) * emi_sum).fillna(
         0
     )
@@ -423,8 +462,8 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 ferro_facilities_gdf["allocated_ch4_kt"] = ferro_facilities_gdf.groupby(
     ["state", "year"]
 )["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_ferro_emissions)
-# %%
-# We now check that the sum of facility emissions equals the summary emissions by state
+# %% QA/QC
+# We now check that the sum of facility emissions equals the EPA GHGI emissions by state
 # and year. The resulting sum_check table shows you where the emissions data DO NOT
 # equal and need more investigation.
 # NOTE: currently we are missing facilities in states, so we also check below that the
@@ -461,7 +500,8 @@ print(
 
 # %%
 
-# STEP 4: RASTERIZE THE CH4 KT AND FLUX
+# STEP 5: RASTERIZE THE CH4 KT AND FLUX
+#         e.g., calculate fluxes and place the facility-level emissions on the CONUS grid
 
 # for each year, grid the adjusted emissions data in kt and do conversion for flux.
 ch4_kt_result_rasters = {}
@@ -501,13 +541,15 @@ with warnings.catch_warnings():
 
         ch4_kt_result_rasters[year] = ch4_kt_raster
         ch4_flux_result_rasters[year] = ch4_flux_raster
+# --------------------------------------------------------------------------
 
 
 # %%
-# STEP 4.1: SAVE THE FILES
+# STEP 6: SAVE THE FILES
 
 # check the sums all together now...
 # TODO: report QC metrics for both kt and flux values
+
 for year, raster in ch4_kt_result_rasters.items():
     raster_sum = raster.sum()
     fac_sum = ferro_facilities_gdf.query("year == @year")["allocated_ch4_kt"].sum()
@@ -533,7 +575,17 @@ for year, raster in ch4_kt_result_rasters.items():
     )
     print()
 
-# %%
+# %% Write files
+
+# EEM: TODO: add netCDF output
 write_outputs(ch4_kt_result_rasters, ch4_kt_dst_path)
 write_outputs(ch4_flux_result_rasters, ch4_flux_dst_path)
+# ------------------------------------------------------------------------
 # %%
+# STEP 7: PLOT
+
+# TODO: add map of output flux data
+
+#%%
+
+# END

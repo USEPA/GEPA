@@ -7,12 +7,13 @@ from pathlib import Path
 
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
-Molarch4 = 16.04  # g/mol
-Res01 = 0.1  # degrees
-tg_scale = (
-    0.001  # Tg scale number [New file allows for the exclusion of the territories]
-)
-GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units)
+Molarch4 = 16.04                    # CH4 molecular weight (g/mol)
+Res01 = 0.1                         # output resolution (degrees)
+tg_to_kt = 1000                     # conversion factor, teragrams to kilotonnes
+#tg_scale = (
+#    0.001  # Tg conversion factor 
+#)
+GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
 
 # TODO finish this and move to utils
 def calc_conversion_factor(days_in_year, cell_area_matrix):
