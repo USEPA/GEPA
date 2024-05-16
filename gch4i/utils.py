@@ -15,7 +15,7 @@ tg_scale = (
 GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units)
 
 # TODO finish this and move to utils
-def calc_conversion_factor(days_in_year, cell_area_matrix):
+def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array):
      return (
             10**9 * Avogadro / float(Molarch4 * days_in_year * 24 * 60 * 60) / cell_area_matrix
         )

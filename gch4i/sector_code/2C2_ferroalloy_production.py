@@ -537,3 +537,5 @@ for year, raster in ch4_kt_result_rasters.items():
 write_outputs(ch4_kt_result_rasters, ch4_kt_dst_path)
 write_outputs(ch4_flux_result_rasters, ch4_flux_dst_path)
 # %%
+# TODO: write NetCDF files
+# TODO: write visual outputs for QC check
