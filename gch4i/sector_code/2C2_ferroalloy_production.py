@@ -4,8 +4,8 @@
 # Authors Name: N. Kruskamp, H. Lohman (RTI International), Erin McDuffie (EPA/OAP)
 # Date Last Modified: 5/10/2024
 # Purpose: Spatially allocates methane emissions for source category 2C2 Ferroalloy production
-# 
-# Input Files: 
+#
+# Input Files:
 #      - State_Ferroalloys_1990-2021.xlsx, SubpartK_Ferroalloy_Facilities.csv,
 #           all_ghgi_mappings.csv, all_proxy_mappings.csv
 # Output Files:
@@ -13,8 +13,8 @@
 # Notes:
 # TODO: update to use facility locations from 2024 GHGI state inventory files
 # TODO: include plotting functionaility
-# TODO: include netCDF writting functionality 
-    
+# TODO: include netCDF writting functionality
+
 # ---------------------------------------------------------------------
 # %% STEP 0. Load packages, configuration files, and local parameters
 
@@ -30,19 +30,30 @@ import rasterio
 import rasterio.enums
 import seaborn as sns
 from IPython.display import display
+
 # from pytask import Product, task
 from rasterio.features import rasterize
 
-from gch4i.config import (ghgi_data_dir_path, max_year, min_year,
-                          tmp_data_dir_path, data_dir_path)
+from gch4i.config import (
+    ghgi_data_dir_path,
+    max_year,
+    min_year,
+    tmp_data_dir_path,
+    data_dir_path,
+)
 from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
-from gch4i.utils import calc_conversion_factor, load_area_matrix, write_outputs
+from gch4i.utils import (
+    calc_conversion_factor,
+    load_area_matrix,
+    write_tif_output,
+    write_ncdf_output,
+)
 
 # %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data
 # Set output paths
-# EEM: add constants (note, we should try to do conversions using variable names, so 
+# EEM: add constants (note, we should try to do conversions using variable names, so
 #      that we don't have constants hard coded into the scripts)
-tg_to_kt = 1000                     # conversion factor, teragrams to kilotonnes
+tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 
 
 # @mark.persist
@@ -52,6 +63,13 @@ tg_to_kt = 1000                     # conversion factor, teragrams to kilotonnes
 
 # https://www.epa.gov/system/files/documents/2024-02/us-ghg-inventory-2024-main-text.pdf
 INDUSTRY_NAME = "2C2_industry_ferroalloy"
+
+netcdf_title = f"EPA methane emissions from {INDUSTRY_NAME.split('_')[-1]} production"
+netcdf_description = (
+    f"Gridded EPA Inventory - {INDUSTRY_NAME.split('_')[1]} - "
+    f"{INDUSTRY_NAME.split('_')[-1]} - IPCC Source Category {INDUSTRY_NAME.split('_')[0]}"
+)
+
 
 # NOTE: We expect both the summary emissions and the proxy to come from the same file
 # for this sector.
@@ -69,11 +87,11 @@ ch4_flux_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
 
 # NOTE: I think it makes sense to still load the area matrix in here so it persists
 # in memory and we pass it to the flux calculation function when needed.
-# EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix, 
-# in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function 
+# EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix,
+# in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function
 # and specify which we're using here?
 area_matrix = load_area_matrix()
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 # %% STEP 1. Load GHGI-Proxy Mapping Files
 
@@ -81,11 +99,11 @@ area_matrix = load_area_matrix()
 # that would then be formed into a proxy dictionary to retain the existing approach
 # but allow for interrogation of the objects when needed.
 # EEM: updated to v3 path
-#proxy_mapping_dir = Path(
+# proxy_mapping_dir = Path(
 #    "C:/Users/nkruskamp/Research Triangle Institute/EPA Gridded Methane - Task 2/data"
-#)
-#ghgi_map_path = proxy_mapping_dir / "all_ghgi_mappings.csv"
-#proxy_map_path = proxy_mapping_dir / "all_proxy_mappings.csv"
+# )
+# ghgi_map_path = proxy_mapping_dir / "all_ghgi_mappings.csv"
+# proxy_map_path = proxy_mapping_dir / "all_proxy_mappings.csv"
 ghgi_map_path = data_dir_path / "all_ghgi_mappings.csv"
 proxy_map_path = data_dir_path / "all_proxy_mappings.csv"
 ghgi_map_df = pd.read_csv(ghgi_map_path)
@@ -129,45 +147,9 @@ ferro_map_data_dict["Emi_Ferro"] = {
 # -----------------------------------------------------------------------
 
 # %%
-
-
-# state_gdf = gpd.read_file(
-#     "https://www2.census.gov/geo/tiger/GENZ2022/shp/cb_2022_us_state_20m.zip"
-# )
-
-
-# %% 
 # STEP 2: Read In EPA State GHGI Emissions by Year
 
 # read in the ch4_kt values for each state
-# This pulls from the full table, but ends up the same as the CH4 kt table found on
-# sheet "Ferroallow_State_Disagg_calcs"
-# EPA_ferro_emissions = (
-#     # read in the data
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="State Summary",
-#         skiprows=124,
-#         nrows=57,
-#         usecols="B:AJ",
-#     )
-#     # name column names lower
-#     .rename(columns=lambda x: str(x).lower())
-#     # drop columns we don't need
-#     .drop(columns=["source", "ghg"])
-#     # remove the national total column
-#     .query("state != 'National'")
-#     # set the index as the state
-#     .set_index("state")
-#     # drop states that are all na / have no data
-#     .dropna(how="all")
-#     # reset the index
-#     .reset_index()
-#     # make the table long
-#     .melt(id_vars="state", var_name="year", value_name="ch4_kt")
-#     .astype({"year": int})
-#     .query("year.between(@min_year, @max_year)")
-# )
 EPA_ferro_emissions = (
     # read in the data
     pd.read_excel(
@@ -215,7 +197,7 @@ EPA_ferro_emissions = (
 )
 EPA_ferro_emissions.head()
 
-# %% 
+# %%
 # QA/QC - check counts of years of state data and plot by state
 display(EPA_ferro_emissions["state"].value_counts())
 display(EPA_ferro_emissions["year"].min(), EPA_ferro_emissions["year"].max())
@@ -230,6 +212,7 @@ sns.relplot(
     # legend=False,
 )
 # ------------------------------------------------------------------------
+
 
 # %%
 # STEP 3: GET AND FORMAT PROXY DATA
@@ -345,9 +328,15 @@ ferro_facilities_gdf = ferro_subk_info_gdf.merge(
 ferro_facilities_gdf.head()
 # %%
 # quick look at the data.
-sns.lineplot(
-    ferro_facilities_gdf, x="year", y="ch4_kt", hue="facility_name", legend=True
+g = sns.lineplot(
+    ferro_facilities_gdf,
+    x="year",
+    y="ch4_kt",
+    hue="facility_name",
+    legend=True,
 )
+sns.move_legend(g, "upper left", bbox_to_anchor=(1.0, 0.9))
+sns.despine()
 # %%
 # EPA_ghgrp_ferro_inputfile = ghgi_path / "SubpartK_Ferroalloy.csv"
 # ferro_subk_emi_df = (
@@ -378,7 +367,7 @@ fac_locations[fac_locations.is_valid].loc[:, ["geometry"]].to_file(
 
 # some checks of the data
 # how many na values are there
-print('Number of NaN values:')
+print("Number of NaN values:")
 display(ferro_facilities_gdf.isna().sum())
 # how many missing locations are there by year
 print("Number of Facilities with Missing Locations Each Year")
@@ -422,13 +411,13 @@ sns.lineplot(
 
 # %%
 
-# STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO EACH FACILITY
+# STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES
 #         (BY PROXY FRACTION IN EACH GRIDCELL)
 # For this source, state-level emissions are spatially allocated using the
-#   the fraction of facility-level emissions within each grid cell in each state, 
+#   the fraction of facility-level emissions within each grid cell in each state,
 #   for each year
-# EEM: question - for sources where we go from the state down to the grid-level, 
-#      will we still have this calculation step, or will we go straight to the 
+# EEM: question - for sources where we go from the state down to the grid-level,
+#      will we still have this calculation step, or will we go straight to the
 #      rasterize step?
 
 # This does the allocation for us in a function by state and year.
@@ -442,7 +431,7 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 
     # get the target state and year
     state, year = fac_emissions.name
-    # get the total proxy data (e.g., emissions) within that state and year. 
+    # get the total proxy data (e.g., emissions) within that state and year.
     # It will be a single value.
     emi_sum = inventory_df[
         (inventory_df["state"] == state) & (inventory_df["year"] == year)
@@ -576,11 +565,18 @@ for year, raster in ch4_kt_result_rasters.items():
     print()
 
 # %% Write files
-
 # EEM: TODO: add netCDF output
-write_outputs(ch4_kt_result_rasters, ch4_kt_dst_path)
-write_outputs(ch4_flux_result_rasters, ch4_flux_dst_path)
+
+write_tif_output(ch4_kt_result_rasters, ch4_kt_dst_path)
+write_tif_output(ch4_flux_result_rasters, ch4_flux_dst_path)
+write_ncdf_output(
+    ch4_flux_result_rasters,
+    ch4_flux_dst_path.with_suffix(".nc"),
+    netcdf_title,
+    netcdf_description,
+)
 # ------------------------------------------------------------------------
-# %%
-# TODO: write NetCDF files
+
+# %% STEP 7: PLOT THE DATA FOR REFERENCE
 # TODO: write visual outputs for QC check
+# %%

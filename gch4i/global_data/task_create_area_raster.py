@@ -12,7 +12,7 @@ from gch4i.config import global_data_dir_path
 from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
 
 
-@mark.persist
+# @mark.persist
 @task
 def task_create_area_raster(
     output_path: Annotated[Path, Product] = global_data_dir_path / "gridded_area_m2.tif"

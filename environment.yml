@@ -40,7 +40,8 @@ dependencies:
   - pytask
   - rasterio
   - geocube
-  - pyogrio
+  - pyogrio # use 
+  - rioxarray
   - pip
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode

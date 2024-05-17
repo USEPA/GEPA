@@ -1,10 +1,11 @@
 # a collection of functions that do standard gridding
-import osgeo
+from pathlib import Path
 
-import rasterio
-from rasterio.profiles import default_gtiff_profile
+import osgeo  # noqa f401
 import numpy as np
-
+import rasterio
+import xarray as xr
+from rasterio.profiles import default_gtiff_profile
 
 # specs for raster outputs. These are the default specs for which all input and output
 # raster files should match.
@@ -25,7 +26,6 @@ GEPA_PROFILE.update(
     crs=4326,
     dtype=np.float64,
 )
-
 
 # take any input raster file and warp it to match the GEPA_PROFILE
 def warp_to_gepa_grid():
