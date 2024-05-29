@@ -129,11 +129,13 @@ proxy_map_df.query("GHGI_Emi_Group == 'Emi_Petro'").merge(
 # STEP 2: Read In EPA State GHGI Emissions by Year
 
 # read in the ch4_kt values for each state
+# NOTE: Update to the correct sheet name "InvDB" once we have the final data
 EPA_petro_emissions = (
     # read in the data
     pd.read_excel(
         EPA_inputfile,
-        sheet_name="InvDB",
+        # sheet_name="InvDB",
+        sheet_name="InvDB_HL_Edits",
         skiprows=15,
         nrows=457,
         usecols="A:AO",
@@ -240,13 +242,15 @@ petro_facilities_df = (
     .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='last')
-    .reset_index()
     .astype({"year": int})
     # .query("year.between(@min_year, @max_year)")
     .query("year.between(@min_year, 2021)")
+    .reset_index()
+    .drop(columns='index')
+
 )
 
-display(petro_facilities_df)
+petro_facilities_df.head()
 
 petro_facilities_gdf = (
     gpd.GeoDataFrame(
@@ -353,6 +357,11 @@ sns.lineplot(
 
 # This does the allocation for us in a function by state and year.
 
+# NOTE: HACL - This function breaks in the case of states having facilities in Subpart X, 
+# but no emissions reported in the state inventory. Dummy data for these states has been
+# created to allow this to run correctly, but it may need to be reworked to properly
+# handle this case.
+
 
 def state_year_allocation_emissions(fac_emissions, inventory_df):
 
@@ -362,14 +371,12 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 
     # get the target state and year
     state, year = fac_emissions.name
-    print(state)
-    print(year)
+
     # get the total proxy data (e.g., emissions) within that state and year. 
     # It will be a single value.
     emi_sum = inventory_df[
         (inventory_df["state"] == state) & (inventory_df["year"] == year)
     ]["ch4_kt"].iat[0]
-    print(emi_sum)
 
     # allocate the EPA GHGI state emissions to each individual facility based on their
     # proportion emissions (i.e., the fraction of total state-level emissions occuring at each facility)
@@ -378,20 +385,16 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
     )
     return allocated_fac_emissions
 
-# test = petro_facilities_gdf.groupby(
-#     ["state", "year"]
-# )["ch4_kt"].sum()
-# print(test)
-emi_sum = EPA_petro_emissions[(EPA_petro_emissions["state"] == "TX")]
-# print(emi_sum)
-with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-    print(EPA_petro_emissions)
+
 # we create a new column that assigns the allocated summary emissions to each facility
 # based on its proportion of emission to the facility totals for that state and year.
 # so for each state and year in the summary emissions we apply the function.
-# petro_facilities_gdf["allocated_ch4_kt"] = petro_facilities_gdf.groupby(
-#     ["state", "year"]
-# )["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_petro_emissions)
+petro_facilities_gdf["allocated_ch4_kt"] = petro_facilities_gdf.groupby(
+    ["state", "year"]
+)["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_petro_emissions)
+
+petro_facilities_gdf.head()
+
 # %% QA/QC
 # We now check that the sum of facility emissions equals the EPA GHGI emissions by state
 # and year. The resulting sum_check table shows you where the emissions data DO NOT
@@ -409,18 +412,34 @@ sum_check = (
         )
     )
 )
-display(sum_check[~sum_check["check_diff"]])
+
+with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+    display(sum_check[~sum_check["check_diff"]])
 
 # NOTE: For now, facilities data are not final / missing. We don't have facilities in
 # all the state summaries that are reporting, and we may be missing facilities even
 # within states that are represented. If these lists match, we have a good idea of
 # what is missing currently due to the preliminary data.
+
+# NOTE: As of May 2024:
+# States in the inventory with no Subpart X facilities: CO, DE, WY
+# States with Subpart X facilities but are not in the inventory: IL, IA, AL, KS, KY, PA
+# Dummy data was created in the inventory spreadsheet for IL, IA, AL, KS, KY, and PA
+# to allow the allocation code to run and should be updated with the final data.
 print(
     (
         "states with no facilities in them: "
         f"{EPA_petro_emissions[~EPA_petro_emissions['state'].isin(petro_facilities_gdf['state'])]['state'].unique()}"
     )
 )
+
+print(
+    (
+        "states with facilities in them but not accounted in state inventory: "
+        f"{petro_facilities_gdf[~petro_facilities_gdf['state'].isin(EPA_petro_emissions['state'])]['state'].unique()}"
+    )
+)
+
 print(
     (
         "states with unaccounted emissions: "
