@@ -18,6 +18,7 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # )
 GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
+t_to_kt = 1000  # conversion factor, tonnes to kilotonnes
 
 
 def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> float:
