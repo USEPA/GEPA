@@ -86,3 +86,5 @@ code/Global_Functions/Calc_Line*
 
 *.zip
 .env
+.pytask/file_hashes.json
+.pytask/

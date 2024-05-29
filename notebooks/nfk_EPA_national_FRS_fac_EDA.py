@@ -16,6 +16,15 @@ fac_df = duckdb.execute(
 fac_df.head()
 
 # %%
+fac_df = duckdb.execute(
+    (
+        "SELECT primary_name, state_code, latitude83, longitude83 "
+        f"FROM '{frs_path}'"
+    )
+).df().assign(formatted_fac_name=lambda df: name_formatter(df["PRIMARY_NAME"]))
+fac_df.head()
+
+# %%
 fac_df.shape
 # %%
 frs_cols = duckdb.execute(

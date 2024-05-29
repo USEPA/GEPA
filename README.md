@@ -80,3 +80,6 @@ Note: The gridded methane GHGI does not include emissions from the Land Use, Lan
 
 ## Contributing
 To report an error, please open an issue on GitHub
+
+##
+TODO: guidance for setting up environment and using .env file

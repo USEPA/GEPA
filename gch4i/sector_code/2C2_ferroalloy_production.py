@@ -9,7 +9,7 @@
 #      - State_Ferroalloys_1990-2021.xlsx, SubpartK_Ferroalloy_Facilities.csv,
 #           all_ghgi_mappings.csv, all_proxy_mappings.csv
 # Output Files:
-#      - f"{INDUSTRY_NAME}_ch4_kt_per_year.tif, f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
+#      - f"{SECTOR_NAME}_ch4_kt_per_year.tif, f"{SECTOR_NAME}_ch4_emi_flux.tif"
 # Notes:
 # TODO: update to use facility locations from 2024 GHGI state inventory files
 # TODO: include plotting functionaility
@@ -30,12 +30,14 @@ import rasterio
 import rasterio.enums
 import seaborn as sns
 from IPython.display import display
+import duckdb
 
 # from pytask import Product, task
 from rasterio.features import rasterize
 
 from gch4i.config import (
     ghgi_data_dir_path,
+    global_data_dir_path,
     max_year,
     min_year,
     tmp_data_dir_path,
@@ -47,14 +49,12 @@ from gch4i.utils import (
     load_area_matrix,
     write_tif_output,
     write_ncdf_output,
+    tg_to_kt,
+    name_formatter
 )
 
 # %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data
 # Set output paths
-# EEM: add constants (note, we should try to do conversions using variable names, so
-#      that we don't have constants hard coded into the scripts)
-tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
-
 
 # @mark.persist
 # @task
@@ -62,28 +62,37 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 #     pass
 
 # https://www.epa.gov/system/files/documents/2024-02/us-ghg-inventory-2024-main-text.pdf
-INDUSTRY_NAME = "2C2_industry_ferroalloy"
+SECTOR_NAME = "2C2_industry_ferroalloy"
 
-netcdf_title = f"EPA methane emissions from {INDUSTRY_NAME.split('_')[-1]} production"
+netcdf_title = f"EPA methane emissions from {SECTOR_NAME.split('_')[-1]} production"
 netcdf_description = (
-    f"Gridded EPA Inventory - {INDUSTRY_NAME.split('_')[1]} - "
-    f"{INDUSTRY_NAME.split('_')[-1]} - IPCC Source Category {INDUSTRY_NAME.split('_')[0]}"
+    f"Gridded EPA Inventory - {SECTOR_NAME.split('_')[1]} - "
+    f"{SECTOR_NAME.split('_')[-1]} - IPCC Source Category {SECTOR_NAME.split('_')[0]}"
 )
 
 
+# INPUT FILES 
 # NOTE: We expect both the summary emissions and the proxy to come from the same file
 # for this sector.
 EPA_inputfile = Path(ghgi_data_dir_path / "State_Ferroalloys_1990-2021.xlsx")
 
-# NOTE: this file is temporarily used to get the location of facilities. We expect the
-# inventory team to deliver the final workbook with facility locations in it.
-EPA_ghgrp_ferrofacility_inputfile = (
-    ghgi_data_dir_path / "SubpartK_Ferroalloy_Facilities.csv"
+# subpart data are retrieve via the API
+subart_k_api_url = (
+    "https://data.epa.gov/efservice/k_subpart_level_information/"
+    "pub_dim_facility/ghg_name/=/Methane/CSV"
+)
+# FRS data are save as a file in our data directory
+frs_path = Path(
+    (
+        "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/"
+        "Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/global/"
+        "NATIONAL_FACILITY_FILE.CSV"
+    )
 )
 
 # OUTPUT FILES (TODO: include netCDF flux files)
-ch4_kt_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_kt_per_year.tif"
-ch4_flux_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
+ch4_kt_dst_path = tmp_data_dir_path / f"{SECTOR_NAME}_ch4_kt_per_year.tif"
+ch4_flux_dst_path = tmp_data_dir_path / f"{SECTOR_NAME}_ch4_emi_flux.tif"
 
 # NOTE: I think it makes sense to still load the area matrix in here so it persists
 # in memory and we pass it to the flux calculation function when needed.
@@ -178,7 +187,8 @@ EPA_ferro_emissions = (
     # remove that column
     .drop(columns="ghg")
     # set the index to state
-    .set_index("state")
+    .rename(columns={"state": "state_code"})
+    .set_index("state_code")
     # covert "NO" string to numeric (will become np.nan)
     .apply(pd.to_numeric, errors="coerce")
     # drop states that have all nan values
@@ -186,7 +196,7 @@ EPA_ferro_emissions = (
     # reset the index state back to a column
     .reset_index()
     # make the table long by state/year
-    .melt(id_vars="state", var_name="year", value_name="ch4_tg")
+    .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
     .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
     .drop(columns=["ch4_tg"])
     # make the columns types correcet
@@ -198,8 +208,8 @@ EPA_ferro_emissions = (
 EPA_ferro_emissions.head()
 
 # %%
-# QA/QC - check counts of years of state data and plot by state
-display(EPA_ferro_emissions["state"].value_counts())
+# QA/QC - check counts of years of state data and plot by state_code
+display(EPA_ferro_emissions["state_code"].value_counts())
 display(EPA_ferro_emissions["year"].min(), EPA_ferro_emissions["year"].max())
 
 # a quick plot to verify the values
@@ -208,13 +218,15 @@ sns.relplot(
     data=EPA_ferro_emissions,
     x="year",
     y="ch4_kt",
-    hue="state",
+    hue="state_code",
     # legend=False,
 )
 # ------------------------------------------------------------------------
 
 
 # %%
+
+
 # STEP 3: GET AND FORMAT PROXY DATA
 # TODO: explore if it makes sense to write a function / task for every proxy.
 # there are about 65 unique ones.
@@ -222,6 +234,12 @@ sns.relplot(
 def task_map_ferro_proxy():
     pass
 
+
+# Get state codes and names to join with facility information to make merging with
+# the facility location data match.
+state_info_df = pd.read_csv(global_data_dir_path / "national_state2020.csv")
+state_info_df
+# %%
 
 # The facilities have multiple reporting units for each year. This will read in the
 # facilities data and compute the facility level sum of ch4_kt emissions for each
@@ -238,98 +256,26 @@ ferro_facilities_df = (
         usecols="A:AI",
     )
     .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"facility": "facility_name", "state": "fac_state"})
+    .rename(columns={"facility": "facility_name", "state": "state_name"})
     .drop(columns=["year opened"])
-    .melt(id_vars=["facility_name", "fac_state"], var_name="year", value_name="ch4_kt")
+    .melt(id_vars=["facility_name", "state_name"], var_name="year", value_name="ch4_kt")
     .astype({"year": int})
-    .assign(
-        formatted_fac_name=lambda df: df["facility_name"]
-        .str.replace("  ", " ")
-        .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-    )
+    .assign(formatted_fac_name=lambda df: name_formatter(df["facility_name"]))
+    .merge(state_info_df[["state_code", "state_name"]], on="state_name")
     .query("year.between(@min_year, @max_year)")
 )
-
-# all_facilities = (
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="noncbi_k_gasinfo",
-#         skiprows=1,
-#         # nrows=12,
-#         # usecols="A:AI",
-#     )
-#     .rename(columns=lambda x: str(x).lower())
-#     .query("ghgasname == 'Methane'")
-#     .drop(columns=["submission_id", "ghgasname", "otherghgasname"])
-#     .rename(columns={"reporting_year": "year", "ghgasquantity": "ch4_mt"})
-#     # .melt(id_vars=["facility_name", "fac_state"], var_name="year", value_name="ch4_kt")
-#     .astype({"year": int})
-#     .assign(
-#         formatted_fac_name=lambda df: df["facility_name"]
-#         .str.replace("  ", " ")
-#         .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-#     )
-#     .query("year.between(@min_year, @max_year)")
-# )
-
-# # read in the combined USGS / EPA facilities data
-# all_facilities = (
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="GHGRP_USGS_Facilities",
-#         skiprows=2,
-#         # nrows=57,
-#         # usecols="B:AJ",
-#     )
-#     .rename(columns=lambda x: str(x).lower())
-#     .rename(columns={"reporting_year": "year", "ch4 (kt)": "ch4_kt"})
-#     .loc[:, ["facility_id", "facility_name", "year", "ch4_kt"]]
-#     .groupby(["facility_id", "facility_name", "year"])["ch4_kt"]
-#     .sum()
-#     .reset_index()
-#     .assign(
-#         formatted_fac_name=lambda df: df["facility_name"]
-#         .str.replace("  ", " ")
-#         .replace("[^a-zA-Z0-9 -]", "", regex=True)
-#     )
-#     .query("year.between(@min_year, @max_year)")
-# )
-
-# NOTE: again this is temporary to get locations to work with for now. When final
-# workbook is delivered this will be updated to get locations.
-ferro_subk_info_df = pd.read_csv(EPA_ghgrp_ferrofacility_inputfile).rename(
-    columns=lambda x: str(x).split(".")[-1].lower()
+# create a table of unique facility names to match against the facility locations data.
+unique_facilities = (
+    ferro_facilities_df[["formatted_fac_name", "state_code"]]
+    .drop_duplicates()
+    .reset_index(drop=True)
 )
-ferro_subk_info_gdf = (
-    gpd.GeoDataFrame(
-        ferro_subk_info_df,
-        geometry=gpd.points_from_xy(
-            ferro_subk_info_df["longitude"],
-            ferro_subk_info_df["latitude"],
-            crs=4326,
-        ),
-    )
-    .assign(
-        formatted_fac_name=lambda df: df["facility_name"]
-        .str.replace("  ", " ")
-        .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-    )
-    .loc[:, ["formatted_fac_name", "state", "zip", "geometry"]]
-    .drop_duplicates(["formatted_fac_name", "state", "zip"])
-)
-
-# merge the location data with the facility emissions data
-ferro_facilities_gdf = ferro_subk_info_gdf.merge(
-    ferro_facilities_df,
-    on=["formatted_fac_name"],
-    how="right",
-)
-
-ferro_facilities_gdf.head()
+unique_facilities
+ferro_facilities_df
 # %%
-# quick look at the data.
+# quick timeseries look at the data.
 g = sns.lineplot(
-    ferro_facilities_gdf,
+    ferro_facilities_df,
     x="year",
     y="ch4_kt",
     hue="facility_name",
@@ -338,24 +284,123 @@ g = sns.lineplot(
 sns.move_legend(g, "upper left", bbox_to_anchor=(1.0, 0.9))
 sns.despine()
 # %%
-# EPA_ghgrp_ferro_inputfile = ghgi_path / "SubpartK_Ferroalloy.csv"
-# ferro_subk_emi_df = (
-#     pd.read_csv(EPA_ghgrp_ferro_inputfile)
-#     .rename(columns=lambda x: str(x).split(".")[-1].lower())
-#     .rename(columns={"reporting_year": "year"})
-#     .query("ghg_name == 'Methane'")
-#     .drop(columns="ghg_name")
-# )
+# STEP 2.1: Get and format FRS and Subpart K facility locations data
+# this will read in both datasets, format the columns for the facility name, 2 letter
+# state code, latitude and longitude. Then merge the two tables together, and create
+# a formatted facility name that eases matching of our needed facilities to the location
+# data
 
-# v2_facility_info_df = (
-#     ferro_subk_emi_df.set_index(["facility_id", "year"])
-#     .join(ferro_subk_info_df.set_index(["facility_id", "year"]))
-#     .reset_index()
-# )
+frs_raw = duckdb.execute(
+    ("SELECT primary_name, state_code, latitude83, longitude83 " f"FROM '{frs_path}' ")
+).df()
+
+subpart_k_raw = pd.read_csv(subart_k_api_url)
+# %%
+frs_df = (
+    frs_raw.rename(columns=str.lower)
+    .drop_duplicates(subset=["primary_name", "state_code"])
+    .rename(columns={"primary_name": "facility_name"})
+    .rename(columns=lambda x: x.strip("83"))
+    .dropna(subset=["latitude", "longitude"])
+)
+
+subpart_k_df = (
+    subpart_k_raw.drop_duplicates(subset=["facility_name", "state"])
+    .rename(columns={"state": "state_code"})
+    .loc[
+        :,
+        ["facility_name", "state_code", "latitude", "longitude"],
+    ]
+    .dropna(subset=["latitude", "longitude"])
+)
+
+# merge the two datasets together, format the facility name, drop any duplicates.
+facility_locations = (
+    pd.concat([subpart_k_df, frs_df], ignore_index=True)
+    .assign(formatted_fac_name=lambda df: name_formatter(df["facility_name"]))
+    .drop_duplicates(subset=["formatted_fac_name", "state_code"])
+)
+facility_locations
+
+# %%
+# try to match facilities based on the formatted name and state code
+matching_facilities = unique_facilities.merge(
+    facility_locations,
+    on=["formatted_fac_name", "state_code"],
+    # how="left"
+)
+
+display(matching_facilities)
+
+# show if we are missing any facilities
+missing_facilities = unique_facilities[
+    ~unique_facilities["formatted_fac_name"].isin(
+        matching_facilities["formatted_fac_name"]
+    )
+]
+display(missing_facilities)
+# %%
+# NOTE: We are missing 4 facilities. We can take partial name matches on keywords to
+# see if anything comes back for these facility name & state combinations.
+# 1 match
+display(
+    facility_locations[
+        facility_locations["formatted_fac_name"].str.contains("bear metal")
+        & facility_locations["state_code"].eq("PA")
+    ]
+)
+# 1 match
+display(
+    facility_locations[
+        facility_locations["formatted_fac_name"].str.contains("vanadium inc")
+        & facility_locations["state_code"].eq("OH")
+    ]
+)
+# 1 match
+display(
+    facility_locations[
+        facility_locations["formatted_fac_name"].str.contains("stratcor")
+        & facility_locations["state_code"].eq("AR")
+    ]
+)
+# 0 matches
+display(
+    facility_locations[
+        facility_locations["formatted_fac_name"].str.contains("thompson creek")
+        & facility_locations["state_code"].eq("AR")
+    ]
+)
+
+# %%
+# NOTE: As we can see above, thompson creek returns nothing.
+# https://en.wikipedia.org/wiki/Thompson_Creek_Metals.
+# So thompson creek metals co inc was acquired in 2016 by Centerra Gold.
+# A search for Centerra in PA turns up 2 records in the combine subpart K and FRS
+# dataset. But Centerra Co-op is an agricultural firm, not a ferroalloy facility.
+# https://www.centerracoop.com/locations
+display(
+    facility_locations[
+        facility_locations["formatted_fac_name"].str.contains("centerra")
+        & facility_locations["state_code"].eq("PA")
+    ]
+)
 # %% QA/QC
+ferro_facilities_gdf = ferro_facilities_df.merge(
+    matching_facilities.drop(columns="facility_name"),
+    on=["formatted_fac_name", "state_code"],
+    how="left",
+)
+ferro_facilities_gdf = gpd.GeoDataFrame(
+    ferro_facilities_gdf.drop(columns=["latitude", "longitude"]),
+    geometry=gpd.points_from_xy(
+        ferro_facilities_gdf["longitude"], ferro_facilities_gdf["latitude"], crs=4326
+    ),
+)
+
 # make sure the merge gave us the number of results we expected.
 if not (ferro_facilities_gdf.shape[0] == ferro_facilities_df.shape[0]):
     print("WARNING the merge shape does not match the original data")
+ferro_facilities_gdf
 # %% # save a shapefile of the v3 ferro facilities for reference
 fac_locations = ferro_facilities_gdf.dissolve("formatted_fac_name")
 fac_locations[fac_locations.is_valid].loc[:, ["geometry"]].to_file(
@@ -371,11 +416,11 @@ print("Number of NaN values:")
 display(ferro_facilities_gdf.isna().sum())
 # how many missing locations are there by year
 print("Number of Facilities with Missing Locations Each Year")
-display(ferro_facilities_gdf[ferro_facilities_gdf["zip"].isna()]["year"].value_counts())
+display(ferro_facilities_gdf[ferro_facilities_gdf.is_empty]["year"].value_counts())
 # how many missing locations are there by facility name
 print("For Each Facility with Missing Data, How Many Missing Years")
 display(
-    ferro_facilities_gdf[ferro_facilities_gdf["zip"].isna()][
+    ferro_facilities_gdf[ferro_facilities_gdf.is_empty][
         "formatted_fac_name"
     ].value_counts()
 )
@@ -434,7 +479,7 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
     # get the total proxy data (e.g., emissions) within that state and year.
     # It will be a single value.
     emi_sum = inventory_df[
-        (inventory_df["state"] == state) & (inventory_df["year"] == year)
+        (inventory_df["state_code"] == state) & (inventory_df["year"] == year)
     ]["ch4_kt"].iat[0]
 
     # allocate the EPA GHGI state emissions to each individual facility based on their
@@ -449,7 +494,7 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 # based on its proportion of emission to the facility totals for that state and year.
 # so for each state and year in the summary emissions we apply the function.
 ferro_facilities_gdf["allocated_ch4_kt"] = ferro_facilities_gdf.groupby(
-    ["state", "year"]
+    ["state_code", "year"]
 )["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_ferro_emissions)
 # %% QA/QC
 # We now check that the sum of facility emissions equals the EPA GHGI emissions by state
@@ -458,10 +503,10 @@ ferro_facilities_gdf["allocated_ch4_kt"] = ferro_facilities_gdf.groupby(
 # NOTE: currently we are missing facilities in states, so we also check below that the
 # states that are missing emissions are the ones that are missing facilities.
 sum_check = (
-    ferro_facilities_gdf.groupby(["state", "year"])["allocated_ch4_kt"]
+    ferro_facilities_gdf.groupby(["state_code", "year"])["allocated_ch4_kt"]
     .sum()
     .reset_index()
-    .merge(EPA_ferro_emissions, on=["state", "year"], how="outer")
+    .merge(EPA_ferro_emissions, on=["state_code", "year"], how="outer")
     .assign(
         check_diff=lambda df: df.apply(
             lambda x: np.isclose(x["allocated_ch4_kt"], x["ch4_kt"]), axis=1
@@ -477,20 +522,20 @@ display(sum_check[~sum_check["check_diff"]])
 print(
     (
         "states with no facilities in them: "
-        f"{EPA_ferro_emissions[~EPA_ferro_emissions['state'].isin(ferro_facilities_gdf['state'])]['state'].unique()}"
+        f"{EPA_ferro_emissions[~EPA_ferro_emissions['state_code'].isin(ferro_facilities_gdf['state_code'])]['state_code'].unique()}"
     )
 )
 print(
     (
         "states with unaccounted emissions: "
-        f"{sum_check[~sum_check['check_diff']]['state'].unique()}"
+        f"{sum_check[~sum_check['check_diff']]['state_code'].unique()}"
     )
 )
 
 # %%
 
 # STEP 5: RASTERIZE THE CH4 KT AND FLUX
-#         e.g., calculate fluxes and place the facility-level emissions on the CONUS grid
+# e.g., calculate fluxes and place the facility-level emissions on the CONUS grid
 
 # for each year, grid the adjusted emissions data in kt and do conversion for flux.
 ch4_kt_result_rasters = {}
@@ -502,7 +547,7 @@ ch4_flux_result_rasters = {}
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     for year, data in ferro_facilities_gdf.groupby("year"):
-
+        data = data[(data.is_valid) & (~data.is_empty)]
         # same results as summing the month days
         # if calendar.isleap(year):
         #     year_days = 366

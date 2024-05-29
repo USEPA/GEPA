@@ -4,6 +4,7 @@ import osgeo  # noqa f401
 import numpy as np
 import rasterio
 import xarray as xr
+import pandas as pd
 import rioxarray  # noqd f401
 
 from gch4i.config import global_data_dir_path
@@ -17,7 +18,8 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 #    0.001  # Tg conversion factor
 # )
 GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
-tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
+# EEM: add constants (note, we should try to do conversions using variable names, so
+#      that we don't have constants hard coded into the scripts)
 
 
 def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> float:
@@ -104,5 +106,20 @@ def write_ncdf_output(
     data_xr.to_netcdf(dst_path)
     return None
 
+def name_formatter(col: pd.Series):
+    """standard name formatted to allow for matching between datasets
+    
+    casefold
+    replace any repeated spaces with just one
+    remove any non-alphanumeric chars
 
+    input:
+        col = pandas Series
+    returns = pandas series
+    """
+    return (
+        col.str.casefold()
+        .str.replace("\s+", " ", regex=True)
+        .replace("[^a-zA-Z0-9 -]", "", regex=True)
+    )
 # %%
