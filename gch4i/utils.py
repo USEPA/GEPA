@@ -6,8 +6,13 @@ import rasterio
 import xarray as xr
 import pandas as pd
 import rioxarray  # noqd f401
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import numpy.ma as ma
 
-from gch4i.config import global_data_dir_path
+from gch4i.config import global_data_dir_path, figures_data_dir_path
 from gch4i.gridding import GEPA_PROFILE, x, y
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
@@ -123,3 +128,183 @@ def name_formatter(col: pd.Series):
         .replace("[^a-zA-Z0-9 -]", "", regex=True)
     )
 # %%
+def plot_annual_raster_data(ch4_flux_result_rasters):
+    """
+    Function to plot the raster data for each year in the dictionary of rasters that are
+    output at the end of each sector script.
+    """
+    # Plot the raster data for each year in the dictionary of rasters
+    for year in ch4_flux_result_rasters.keys():
+
+        # subset the dict of rasters for each year
+        raster_data = ch4_flux_result_rasters[year]
+
+        # The EPA color map from their V2 plots
+        custom_colormap = colors.LinearSegmentedColormap.from_list(
+            name="custom_colormap",
+            colors=[
+                "#6F4C9B",
+                "#6059A9",
+                "#5568B8",
+                "#4E79C5",
+                "#4D8AC6",
+                "#4E96BC",
+                "#549EB3",
+                "#59A5A9",
+                "#60AB9E",
+                "#69B190",
+                "#77B77D",
+                "#8CBC68",
+                "#A6BE54",
+                "#BEBC48",
+                "#D1B541",
+                "#DDAA3C",
+                "#E49C39",
+                "#E78C35",
+                "#E67932",
+                "#E4632D",
+                "#DF4828",
+                "#DA2222",
+                "#B8221E",
+                "#95211B",
+                "#721E17",
+                "#521A13",
+            ],
+            N=3000,
+        )
+
+        # Mask the raster data where values are 0. This will make the 0 values transparent and not plotted.
+        masked_raster_data = ma.masked_where(raster_data == 0, raster_data)
+
+        # Create a figure and axis with the specified projection
+        fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+
+        # Add features to the map
+        ax.add_feature(cfeature.LAND)
+        ax.add_feature(cfeature.OCEAN)
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.STATES)
+
+        # Create a meshgrid for the x and y coordinates
+        X, Y = np.meshgrid(x, y)
+
+        # Plot the masked raster data using pcolormesh
+        annual_plot = ax.pcolormesh(
+            X,
+            Y,
+            masked_raster_data,
+            transform=ccrs.PlateCarree(),
+            vmin=10**-15,
+            vmax=np.max(raster_data),
+            cmap=custom_colormap,
+            shading="nearest",
+        )
+
+        # Add a colorbar
+        plt.colorbar(
+            annual_plot,
+            ax=ax,
+            orientation="horizontal",
+            label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+        )
+
+        # Set the extent to show the continental US
+        ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
+        ax.tick_params(labelsize=10)
+
+        # Add a title
+        annual_plot_title = f"{year} EPA methane emissions from {SECTOR_NAME.split('_')[-1]} production"
+        plt.title(annual_plot_title, fontsize=14)
+
+        # Show the plot for review
+        plt.show()
+
+        # Save the plot as a PNG file
+        plt.savefig(str(figures_data_dir_path) + f"/{SECTOR_NAME}_ch4_flux_{year}.png")
+
+        # close the plot
+        plt.close()
+
+
+def plot_raster_data_difference(ch4_flux_result_rasters):
+    """
+    Function to plot the difference between the first and last years of the raster data
+    for each sector.
+    """
+    # Generate the plot for the difference between the first and last years.
+
+    # Get the first and last years of the data
+    list_of_data_years = list(ch4_flux_result_rasters.keys())
+    first_year_data = ch4_flux_result_rasters[list_of_data_years[0]]
+    last_year_data = ch4_flux_result_rasters[list_of_data_years[-1]]
+
+    # Calculate the difference between the first and last years
+    difference = last_year_data - first_year_data
+
+    # Mask the raster data where values are 0. This will make the 0 values transparent and not plotted.
+    difference_masked_raster_data = ma.masked_where(difference == 0, difference)
+
+    custom_colormap = colors.LinearSegmentedColormap.from_list(
+        name="custom_colormap",
+        colors=[
+            "#2166AC",
+            "#4393C3",
+            "#92C5DE",
+            "#D1E5F0",
+            "#F7F7F7",
+            "#FDDBC7",
+            "#F4A582",
+            "#D6604D",
+            "#B2182B",
+        ],
+        N=3000,
+    )
+
+    # Create a figure and axis with the specified projection
+    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+
+    # Add features to the map
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.STATES)
+
+    # Create a meshgrid for the x and y coordinates
+    X, Y = np.meshgrid(x, y)
+
+    # Plot the masked raster data using pcolormesh
+    difference_plot = ax.pcolormesh(
+        X,
+        Y,
+        difference_masked_raster_data,
+        transform=ccrs.PlateCarree(),
+        vmin=10**-15,
+        vmax=np.max(difference_masked_raster_data),
+        cmap=custom_colormap,
+        shading="nearest",
+    )
+
+    # Add a colorbar
+    plt.colorbar(
+        difference_plot,
+        ax=ax,
+        orientation="horizontal",
+        label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+    )
+
+    # Set the extent to show the continental US
+    ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
+    ax.tick_params(labelsize=10)
+
+    # Add a title
+    difference_plot_title = f"Difference between {list_of_data_years[0]} and {list_of_data_years[-1]} methane emissions from {SECTOR_NAME.split('_')[-1]} production"
+    plt.title(difference_plot_title, fontsize=14)
+
+    # Show the plot for review
+    plt.show()
+
+    # Save the plot as a PNG file
+    plt.savefig(str(figures_data_dir_path) + f"/{SECTOR_NAME}_ch4_flux_difference.png")
+
+    # close the plot
+    plt.close()
