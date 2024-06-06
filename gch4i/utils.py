@@ -128,7 +128,7 @@ def name_formatter(col: pd.Series):
         .replace("[^a-zA-Z0-9 -]", "", regex=True)
     )
 # %%
-def plot_annual_raster_data(ch4_flux_result_rasters):
+def plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME):
     """
     Function to plot the raster data for each year in the dictionary of rasters that are
     output at the end of each sector script.
@@ -226,7 +226,7 @@ def plot_annual_raster_data(ch4_flux_result_rasters):
         plt.close()
 
 
-def plot_raster_data_difference(ch4_flux_result_rasters):
+def plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME):
     """
     Function to plot the difference between the first and last years of the raster data
     for each sector.

@@ -623,7 +623,7 @@ write_ncdf_output(
 # TODO: write visual outputs for QC check
 # %%
 
-plot_annual_raster_data(ch4_flux_result_rasters)
-plot_raster_data_difference(ch4_flux_result_rasters)
+plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME)
+plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME)
 
 # %%
