@@ -1,4 +1,5 @@
 from pathlib import Path
+import calendar
 
 import osgeo  # noqa f401
 import numpy as np
@@ -11,9 +12,11 @@ import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy.ma as ma
+from IPython.display import display
+from rasterio.features import rasterize
 
 from gch4i.config import global_data_dir_path, figures_data_dir_path
-from gch4i.gridding import GEPA_PROFILE, x, y
+from gch4i.gridding import GEPA_PROFILE, x, y, ARR_SHAPE
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
@@ -22,9 +25,135 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (
 #    0.001  # Tg conversion factor
 # )
-GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
+GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass
+# to CO2e units, from IPPC AR4)
 # EEM: add constants (note, we should try to do conversions using variable names, so
 #      that we don't have constants hard coded into the scripts)
+
+
+def state_year_point_allocate_emis(point_proxy_gdf, emi_df):
+
+    # point_proxy_gdf are the total emissions for the point proxy locations in that
+    # state and year. It can be one or more facilities. emi_df EPA state GHGI summary
+    # emissions table.
+
+    def emi_groupby_transform(data):  # get the target state and year
+        state, year = data.name
+        # get the total proxy data (e.g., emissions) within that state and year.
+        # It will be a single value.
+        emi_sum = emi_df[(emi_df["state_code"] == state) & (emi_df["year"] == year)][
+            "ch4_kt"
+        ].iat[0]
+
+        # allocate the EPA GHGI state emissions to each individual point based on their
+        # proportion emissions (i.e., the fraction of total state-level emissions
+        # occuring at each facility)
+        allocated_point_emis = (
+            (data / data.sum()) * emi_sum
+        ).fillna(0)
+        return allocated_point_emis
+
+    point_proxy_gdf["allocated_ch4_kt"] = point_proxy_gdf.groupby(
+        ["state_code", "year"]
+    )["ch4_kt"].transform(emi_groupby_transform)
+    return point_proxy_gdf
+
+
+def grid_point_emissions(point_gdf):
+
+    area_matrix = load_area_matrix()
+
+    ch4_kt_result_rasters = {}
+    ch4_flux_result_rasters = {}
+    for year, data in point_gdf.groupby("year"):
+        month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
+        year_days = np.sum(month_days)
+
+        ch4_kt_raster = rasterize(
+            shapes=[
+                (shape, value)
+                for shape, value in data[["geometry", "allocated_ch4_kt"]].values
+            ],
+            out_shape=ARR_SHAPE,
+            fill=0,
+            transform=GEPA_PROFILE["transform"],
+            dtype=np.float64,
+            merge_alg=rasterio.enums.MergeAlg.add,
+        )
+
+        conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
+        ch4_flux_raster = ch4_kt_raster * conversion_factor_annual
+
+        ch4_kt_result_rasters[year] = ch4_kt_raster
+        ch4_flux_result_rasters[year] = ch4_flux_raster
+
+    return ch4_kt_result_rasters, ch4_flux_result_rasters
+
+
+def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
+    """take point proxy emi allocations and check against state inventory"""
+    print("checking proxy emission allocation by state / year.")
+    sum_check = (
+        proxy_df.groupby(["state_code", "year"])["allocated_ch4_kt"]
+        .sum()
+        .reset_index()
+        .merge(emi_df, on=["state_code", "year"], how="outer")
+        .assign(
+            isclose=lambda df: df.apply(
+                lambda x: np.isclose(x["allocated_ch4_kt"], x["ch4_kt"]), axis=1
+            )
+        )
+    )
+
+    all_equal = sum_check["isclose"].all()
+    print(f"do all proxy emission by state/year equal (isclose): {all_equal}")
+    if not all_equal:
+        print("states and years with emissions that don't match")
+        display(sum_check[~sum_check["isclose"]])
+
+        print(
+            (
+                "states with no proxy points in them: "
+                f"{emi_df[~emi_df['state_code'].isin(proxy_df['state_code'])]['state_code'].unique()}"
+            )
+        )
+        print(
+            (
+                "states with unaccounted emissions: "
+                f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
+            )
+        )
+    return None
+
+
+def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> None:
+
+    print("checking gridded emissions result by year.")
+    check_sum_dict = {}
+    for year, arr in raster_dict.items():
+        gridded_sum = arr.sum()
+        check_sum_dict[year] = gridded_sum
+
+    gridded_year_sums_df = (
+        pd.DataFrame()
+        .from_dict(check_sum_dict, orient="index")
+        .rename(columns={0: "gridded_sum"})
+    )
+
+    emissions_by_year_check = (
+        emi_df.groupby("year")["ch4_kt"]
+        .sum()
+        .to_frame()
+        .join(gridded_year_sums_df)
+        .assign(isclose=lambda df: np.isclose(df["ch4_kt"], df["gridded_sum"]))
+    )
+    all_equal = emissions_by_year_check["isclose"].all()
+
+    print(f"do all gridded emission by year equal (isclose): {all_equal}")
+    if not all_equal:
+        print("if not, these ones below DO NOT equal")
+        display(emissions_by_year_check[~emissions_by_year_check["isclose"]])
+    return None
 
 
 def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
@@ -51,7 +180,6 @@ def load_area_matrix() -> np.array:
     return arr
 
 
-# %%
 def write_ncdf_output(
     raster_dict: dict,
     dst_path: Path,
@@ -126,7 +254,7 @@ def name_formatter(col: pd.Series):
 
 
 # %%
-def plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME):
+def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
     """
     Function to plot the raster data for each year in the dictionary of rasters that are
     output at the end of each sector script.
@@ -171,11 +299,14 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME):
             N=3000,
         )
 
-        # Mask the raster data where values are 0. This will make the 0 values transparent and not plotted.
+        # Mask the raster data where values are 0. This will make the 0 values
+        # transparent and not plotted.
         masked_raster_data = ma.masked_where(raster_data == 0, raster_data)
 
         # Create a figure and axis with the specified projection
-        fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+        fig, ax = plt.subplots(
+            figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()}
+        )
 
         # Add features to the map
         ax.add_feature(cfeature.LAND)
@@ -211,20 +342,20 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME):
         ax.tick_params(labelsize=10)
 
         # Add a title
-        annual_plot_title = f"{year} EPA methane emissions from {SECTOR_NAME.split('_')[-1]} production"
+        annual_plot_title = f"{year} EPA methane emissions from {SOURCE_NAME}"
         plt.title(annual_plot_title, fontsize=14)
+
+        # Save the plot as a PNG file
+        plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Show the plot for review
         plt.show()
-
-        # Save the plot as a PNG file
-        plt.savefig(str(figures_data_dir_path) + f"/{SECTOR_NAME}_ch4_flux_{year}.png")
 
         # close the plot
         plt.close()
 
 
-def plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME):
+def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     """
     Function to plot the difference between the first and last years of the raster data
     for each sector.
@@ -239,7 +370,8 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME):
     # Calculate the difference between the first and last years
     difference = last_year_data - first_year_data
 
-    # Mask the raster data where values are 0. This will make the 0 values transparent and not plotted.
+    # Mask the raster data where values are 0. This will make the 0 values transparent
+    # and not plotted.
     difference_masked_raster_data = ma.masked_where(difference == 0, difference)
 
     custom_colormap = colors.LinearSegmentedColormap.from_list(
@@ -259,7 +391,9 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME):
     )
 
     # Create a figure and axis with the specified projection
-    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+    fig, ax = plt.subplots(
+        figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()}
+    )
 
     # Add features to the map
     ax.add_feature(cfeature.LAND)
@@ -295,14 +429,14 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME):
     ax.tick_params(labelsize=10)
 
     # Add a title
-    difference_plot_title = f"Difference between {list_of_data_years[0]} and {list_of_data_years[-1]} methane emissions from {SECTOR_NAME.split('_')[-1]} production"
+    difference_plot_title = f"Difference between {list_of_data_years[0]} and {list_of_data_years[-1]} methane emissions from {SOURCE_NAME}"
     plt.title(difference_plot_title, fontsize=14)
+
+    # Save the plot as a PNG file
+    plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_difference.png")
 
     # Show the plot for review
     plt.show()
-
-    # Save the plot as a PNG file
-    plt.savefig(str(figures_data_dir_path) + f"/{SECTOR_NAME}_ch4_flux_difference.png")
 
     # close the plot
     plt.close()

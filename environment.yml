@@ -7,6 +7,7 @@ dependencies:
   - python=3.11
   # - basemap # added by Nathan -- needed for module data_plot_functions (in "Global_Functions")
   - black
+  - cartopy
   # - xlrd # added by Hannah -- needed in Coal
   - invoke
   - jupyter
