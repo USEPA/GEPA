@@ -42,7 +42,8 @@ from gch4i.config import (
     max_year,
     min_year,
     tmp_data_dir_path,
-    data_dir_path,
+    figures_data_dir_path,
+    V3_DATA_PATH
 )
 from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
 from gch4i.utils import (
@@ -51,6 +52,9 @@ from gch4i.utils import (
     write_tif_output,
     write_ncdf_output,
     tg_to_kt,
+    name_formatter,
+    plot_annual_raster_data,
+    plot_raster_data_difference,
     name_formatter,
 )
 
@@ -89,13 +93,7 @@ subart_k_api_url = (
     "pub_dim_facility/ghg_name/=/Methane/CSV"
 )
 # FRS data are save as a file in our data directory
-frs_path = Path(
-    (
-        "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/"
-        "Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/global/"
-        "NATIONAL_FACILITY_FILE.CSV"
-    )
-)
+frs_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
 
 # EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix,
 # in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function
@@ -114,8 +112,8 @@ area_matrix = load_area_matrix()
 # )
 # ghgi_map_path = proxy_mapping_dir / "all_ghgi_mappings.csv"
 # proxy_map_path = proxy_mapping_dir / "all_proxy_mappings.csv"
-ghgi_map_path = data_dir_path / "all_ghgi_mappings.csv"
-proxy_map_path = data_dir_path / "all_proxy_mappings.csv"
+ghgi_map_path = V3_DATA_PATH / "all_ghgi_mappings.csv"
+proxy_map_path = V3_DATA_PATH / "all_proxy_mappings.csv"
 ghgi_map_df = pd.read_csv(ghgi_map_path)
 proxy_map_df = pd.read_csv(proxy_map_path)
 
@@ -609,4 +607,9 @@ write_ncdf_output(
 
 # %% STEP 7: PLOT THE DATA FOR REFERENCE
 # TODO: write visual outputs for QC check
+# %%
+
+plot_annual_raster_data(ch4_flux_result_rasters, SECTOR_NAME)
+plot_raster_data_difference(ch4_flux_result_rasters, SECTOR_NAME)
+
 # %%

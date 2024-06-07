@@ -89,3 +89,4 @@ code/Global_Functions/Calc_Line*
 .pytask/file_hashes.json
 .pytask/
 /testing/
+.DS_Store
