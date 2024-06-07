@@ -22,13 +22,8 @@ GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert
 #      that we don't have constants hard coded into the scripts)
 
 
-def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> float:
-    return (
-        10**9
-        * Avogadro
-        / float(Molarch4 * days_in_year * 24 * 60 * 60)
-        / cell_area_matrix
-    )
+def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
+    return 10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
 
 
 def write_tif_output(in_dict: dict, dst_path: Path) -> None:
@@ -38,7 +33,7 @@ def write_tif_output(in_dict: dict, dst_path: Path) -> None:
     dst_profile = GEPA_PROFILE.copy()
 
     dst_profile.update(count=out_array.shape[0])
-    with rasterio.open(dst_path, "w", **dst_profile) as dst:
+    with rasterio.open(dst_path.with_suffix(".tif"), "w", **dst_profile) as dst:
         dst.write(out_array)
         dst.descriptions = [str(x) for x in in_dict.keys()]
     return None
@@ -55,10 +50,10 @@ def load_area_matrix() -> np.array:
 def write_ncdf_output(
     raster_dict: dict,
     dst_path: Path,
-    title: str,
     description: str,
-    # resolution: float,
+    title: str,
     units: str = "moleccm-2s-1",
+    # resolution: float,
     # month_flag: bool = False,
 ) -> None:
     """take dict of year:array pairs and write to dst_path with attrs"""
@@ -103,12 +98,13 @@ def write_ncdf_output(
         # .rio.write_coordinate_system()
         .rio.write_nodata(0.0, encoded=True)
     )
-    data_xr.to_netcdf(dst_path)
+    data_xr.to_netcdf(dst_path.with_suffix(".nc"))
     return None
+
 
 def name_formatter(col: pd.Series):
     """standard name formatted to allow for matching between datasets
-    
+
     casefold
     replace any repeated spaces with just one
     remove any non-alphanumeric chars
@@ -122,4 +118,6 @@ def name_formatter(col: pd.Series):
         .str.replace("\s+", " ", regex=True)
         .replace("[^a-zA-Z0-9 -]", "", regex=True)
     )
+
+
 # %%

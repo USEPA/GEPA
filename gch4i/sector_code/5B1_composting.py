@@ -33,9 +33,10 @@ import seaborn as sns
 from IPython.display import display
 import fiona
 
+
 # from pytask import Product, task
 from rasterio.features import rasterize
-from shapely import wkb
+from shapely import wkb, Point
 
 # TODO: use dotenv .env file to load local paths
 from gch4i.config import (
@@ -65,20 +66,31 @@ from gch4i.utils import (
 gpd.options.io_engine = "pyogrio"
 
 # %%
+IPCC_ID = "5B1"
+SECTOR_NAME = "waste"
+SOURCE_NAME = "composting"
+FULL_NAME = "_".join([IPCC_ID, SECTOR_NAME, SOURCE_NAME]).replace(" ", "_")
+
+netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
+netcdf_description = (
+    f"Gridded EPA Inventory - {SECTOR_NAME} - "
+    f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
+)
 
 # the NAICS code pulled from the v2 notebook for facilities in the FRS data
 COMPOSTING_FRS_NAICS_CODE = 562219
-SECTOR_NAME = "5B1_waste_composting"
-DUPLICATION_TOLERANCE_M = 500
 
-ch4_kt_dst_path = tmp_data_dir_path / f"{SECTOR_NAME}_ch4_kt_per_year.tif"
-ch4_flux_dst_path = tmp_data_dir_path / f"{SECTOR_NAME}_ch4_emi_flux.tif"
+# the spatial tolerance for removing duplicate facility points
+DUPLICATION_TOLERANCE_M = 250
+
+ch4_kt_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_kt_per_year"
+ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 
 composting_dir = ghgi_data_dir_path / "composting"
 sector_data_dir_path = data_dir_path / "sector"
 
 # inventory workbook path
-state_file_path = composting_dir / "State_Composting_1990-2021.xlsx"
+inventory_workbook_path = composting_dir / "State_Composting_1990-2021.xlsx"
 
 # reference data paths
 state_geo_path = global_data_dir_path / "tl_2020_us_state.zip"
@@ -91,11 +103,7 @@ excess_food_op_path = sector_data_dir_path / "CompostingFacilities.xlsx"
 frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
 frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
 # input 3: biocycle facility locations pulled from v2
-biocycle_path = Path(
-    "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/"
-    "Gridded CH4 Inventory - Task 2/ghgi_v3_working/GEPA_Source_Code/GEPA_Composting/"
-    "InputData/biocycle_locs_clean.csv"
-)
+biocycle_path = sector_data_dir_path / "InputData/biocycle_locs_clean.csv"
 # input 4: ad council data from their kml file
 comp_council_path = sector_data_dir_path / "STA Certified Compost Participants Map.kml"
 
@@ -115,11 +123,11 @@ state_gdf = (
 state_gdf
 
 # %%
-
+# STEP 1: Read In EPA State GHGI Emissions by Year
 # read in emission inventory
 EPA_emissions = (
     pd.read_excel(
-        state_file_path,
+        inventory_workbook_path,
         sheet_name="InvDB",
         skiprows=15,
         nrows=115,
@@ -165,7 +173,7 @@ EPA_emissions = (
 )
 EPA_emissions
 # %%
-# NOTE: there is a state that is significantly higher than the others here. CA?
+
 sns.relplot(
     kind="line",
     data=EPA_emissions,
@@ -176,7 +184,6 @@ sns.relplot(
     legend=False,
 )
 
-# NOTE: Just checking
 display(
     EPA_emissions.groupby("state_code")["ch4_kt"].mean().sort_values().reset_index()
 )
@@ -273,29 +280,54 @@ unique_facility_gdf = (
     .drop(columns="index_right")
     .rename_geometry("geometry")
 )
-display(unique_facility_gdf.shape)
+
 # NOTE: DC has no facilities listed, but has 1 year (2012) with reported emissions.
 # So I proposed assigning the centroid of DC to our facilities list, to account for
 # that one instance of not having data.
+# Erin email note on DC: My understanding is that (industrial) composting in DC has
+# been outsources to MD. Since the inventory is trying to capture the distribution of
+# industrial composting emissions, let’s manually add a single facility location for DC.
+# Let’s use the Fort Totten Waste Transfer Station (lat/lon: 38.947624, -77.001213).
+# We can make a note of this in the data and assumptions document and this assumption
+# can be re-visited in later iterations.
 unique_facility_gdf = pd.concat(
     [
         unique_facility_gdf,
         state_gdf[state_gdf["state_code"] == "DC"][["state_code", "geometry"]].assign(
-            geometry=lambda df: df.centroid
+            geometry=Point(-77.001213, 38.947624)
         ),
     ]
+)
+# %%
+# I left join with the state reference file so that if there are states not represented
+# in the facility table, we will end up with missing values there.
+facility_count_by_state = (
+    state_gdf[["state_code"]]
+    .merge(
+        unique_facility_gdf["state_code"].value_counts().rename("facility_count"),
+        how="left",
+        left_on="state_code",
+        right_index=True,
+    )
+    .sort_values("facility_count")
+)
+display(facility_count_by_state)
+print(f"total number of composting facilities: {unique_facility_gdf.shape[0]:,}")
+print(
+    "do all states have at least 1 facility? "
+    f"{facility_count_by_state['facility_count'].gt(0).all()}"
 )
 # %%
 ax = unique_facility_gdf.plot("state_code", cmap="Set2", figsize=(10, 10))
 state_gdf.boundary.plot(ax=ax, color="xkcd:slate")
 
 # %%
+# STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES
 facility_result_list = []
 for (state, year), data in EPA_emissions.groupby(["state_code", "year"]):
     state_facilities = unique_facility_gdf[
         unique_facility_gdf["state_code"] == state
     ].copy()
-    # print(state, year, state_facilities.shape)
     state_year_emissions = data["ch4_kt"].iat[0]
     if state_year_emissions == 0:
         continue
@@ -309,7 +341,7 @@ for (state, year), data in EPA_emissions.groupby(["state_code", "year"]):
     facility_result_list.append(state_facilities)
 
 proxy_data = pd.concat(facility_result_list).reset_index(drop=True)
-# proxy_data.to_feather(tmp_data_dir_path / "TMP_composting_proxy.feather")
+# proxy_data.to_parquet(tmp_data_dir_path / "TMP_composting_proxy.parquet")
 proxy_data
 # %%
 
@@ -414,10 +446,21 @@ print(f"do all gridded emission by year equal (isclose): {all_equal}")
 if not all_equal:
     print("if not, these ones below DO NOT equal")
     display(emissions_by_year_check[~emissions_by_year_check["isclose"]])
-# %%
+# %% STEP 6: SAVE THE FILES
 write_tif_output(ch4_kt_result_rasters, ch4_kt_dst_path)
 write_tif_output(ch4_flux_result_rasters, ch4_flux_dst_path)
-# %%
-# TODO: write netcdf outputs
+write_ncdf_output(
+    ch4_kt_result_rasters,
+    ch4_kt_dst_path,
+    title="EPA methane emissions from composting",
+    description="EPA methane emissions from composting",
+)
+write_ncdf_output(
+    ch4_flux_result_rasters,
+    ch4_flux_dst_path,
+    title="EPA methane emissions from composting",
+    description="Gridded EPA Inventory - Waste - IPCC Source Category 5B1",
+)
+# %% STEP 7: PLOT THE ARRAYS, SAVE FIGURES TO FILES
 # TODO: create visuals/maps
 # %%

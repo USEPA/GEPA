@@ -10,6 +10,7 @@ data_dir_path = Path(
 global_data_dir_path = data_dir_path / "global"
 ghgi_data_dir_path = data_dir_path / "ghgi"
 tmp_data_dir_path = data_dir_path / "tmp"
+gridded_data_path = data_dir_path / "final_outputs"
 
 
 # this is used by the file task_download_census_geo.py to download specific census

@@ -88,3 +88,4 @@ code/Global_Functions/Calc_Line*
 .env
 .pytask/file_hashes.json
 .pytask/
+/testing/
