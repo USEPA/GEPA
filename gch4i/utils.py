@@ -4,6 +4,7 @@ import calendar
 import osgeo  # noqa f401
 import numpy as np
 import rasterio
+import geopandas as gpd
 import xarray as xr
 import pandas as pd
 import rioxarray  # noqd f401
@@ -14,6 +15,7 @@ import cartopy.feature as cfeature
 import numpy.ma as ma
 from IPython.display import display
 from rasterio.features import rasterize
+import warnings
 
 from gch4i.config import global_data_dir_path, figures_data_dir_path
 from gch4i.gridding import GEPA_PROFILE, x, y, ARR_SHAPE
@@ -31,32 +33,75 @@ GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert
 #      that we don't have constants hard coded into the scripts)
 
 
-def state_year_point_allocate_emis(point_proxy_gdf, emi_df):
+# TODO: write state / year inventory to GRID allocation, probably using geocube
+# EEM: question - for sources where we go from the state down to the grid-level, will
+# we still have this calculation step, or will we go straight to the rasterize step?
 
-    # point_proxy_gdf are the total emissions for the point proxy locations in that
-    # state and year. It can be one or more facilities. emi_df EPA state GHGI summary
-    # emissions table.
 
-    def emi_groupby_transform(data):  # get the target state and year
-        state, year = data.name
-        # get the total proxy data (e.g., emissions) within that state and year.
-        # It will be a single value.
-        emi_sum = emi_df[(emi_df["state_code"] == state) & (emi_df["year"] == year)][
-            "ch4_kt"
-        ].iat[0]
+def state_year_point_allocate_emis(
+    proxy_gdf: gpd.GeoDataFrame,
+    emi_df: pd.DataFrame,
+    proxy_has_year: bool,
+    use_proportional: bool,
+) -> gpd.GeoDataFrame:
+    """
+    Allocation state emissions by year to all proxy points within the state
+    NOTE:               2024-06-10: only tested with ferroalloys and composting so far.
 
-        # allocate the EPA GHGI state emissions to each individual point based on their
-        # proportion emissions (i.e., the fraction of total state-level emissions
-        # occuring at each facility)
-        allocated_point_emis = (
-            (data / data.sum()) * emi_sum
-        ).fillna(0)
-        return allocated_point_emis
+    Inputs:
+    proxy_gdf:    GeoDataFrame: point level proxy data with or without fractional
+                        emissions to be used in allocation from state inventory data
+    emi_df:             The EPA state level emissions per year, typically read in from
+                        the IndDB sheet in the excel workbook
+    proxy_has_year:     If the proxy data have a yearly proportional value to use
+    use_proportional:   Indicate if the proxy has fractional emissions to be used in the
+                        allocation of inventory emissions to the point. For each state /
+                        year, the fractional emissions of all points within the state /
+                        year are used to allocation inventory emissions.
 
-    point_proxy_gdf["allocated_ch4_kt"] = point_proxy_gdf.groupby(
-        ["state_code", "year"]
-    )["ch4_kt"].transform(emi_groupby_transform)
-    return point_proxy_gdf
+    Returns:            point_proxy_gdf with new column "allocated_ch4_kt"
+
+    """
+
+    result_list = []
+    # for each state and year in the inventory data
+    for (state, year), data in emi_df.groupby(["state_code", "year"]):
+        # if the proxy has a year, get the proxies for that state / year
+        if proxy_has_year:
+            state_points = proxy_gdf[
+                (proxy_gdf["state_code"] == state) & (proxy_gdf["year"] == year)
+            ].copy()
+        # else just get the proxy in the state
+        else:
+            state_points = (
+                proxy_gdf[(proxy_gdf["state_code"] == state)].copy().assign(year=year)
+            )
+        # if there are no proxies in that state, print a warning
+        if state_points.shape[0] < 1:
+            Warning(f"there are no proxies in {state} but there are emissions!")
+            continue
+        # get the value of emissions for that state/year
+        state_year_emissions = data["ch4_kt"].iat[0]
+        # if there are no state inventory emissions, assign all points for that
+        # state / year as 0
+        if state_year_emissions == 0:
+            state_points["allocated_ch4_kt"] = 0
+        # else, compute the emission for each proxy record
+        else:
+            # if the proxy has a proportional value, say from subpart data, use it
+            if use_proportional:
+                state_points["allocated_ch4_kt"] = (
+                    (state_points["ch4_kt"] / state_points["ch4_kt"].sum())
+                    * state_year_emissions
+                ).fillna(0)
+            # else allocate emissions equally to all proxies in state
+            else:
+                state_points["allocated_ch4_kt"] = (
+                    state_year_emissions / state_points.shape[0]
+                )
+        result_list.append(state_points)
+    out_proxy_gdf = pd.concat(result_list).reset_index(drop=True)
+    return out_proxy_gdf
 
 
 def grid_point_emissions(point_gdf):
@@ -123,7 +168,7 @@ def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
                 f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
             )
         )
-    return None
+    return sum_check
 
 
 def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> None:
@@ -140,20 +185,20 @@ def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> None:
         .rename(columns={0: "gridded_sum"})
     )
 
-    emissions_by_year_check = (
+    sum_check = (
         emi_df.groupby("year")["ch4_kt"]
         .sum()
         .to_frame()
         .join(gridded_year_sums_df)
         .assign(isclose=lambda df: np.isclose(df["ch4_kt"], df["gridded_sum"]))
     )
-    all_equal = emissions_by_year_check["isclose"].all()
+    all_equal = sum_check["isclose"].all()
 
     print(f"do all gridded emission by year equal (isclose): {all_equal}")
     if not all_equal:
         print("if not, these ones below DO NOT equal")
-        display(emissions_by_year_check[~emissions_by_year_check["isclose"]])
-    return None
+        display(sum_check[~sum_check["isclose"]])
+    return sum_check
 
 
 def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
@@ -173,6 +218,9 @@ def write_tif_output(in_dict: dict, dst_path: Path) -> None:
     return None
 
 
+# EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix,
+# in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function
+# and specify which we're using here?
 def load_area_matrix() -> np.array:
     input_path = global_data_dir_path / "gridded_area_m2.tif"
     with rasterio.open(input_path) as src:
