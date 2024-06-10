@@ -4,6 +4,7 @@ import calendar
 import osgeo  # noqa f401
 import numpy as np
 import rasterio
+from rasterio.plot import show
 import geopandas as gpd
 import xarray as xr
 import pandas as pd
@@ -12,7 +13,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import numpy.ma as ma
 from IPython.display import display
 from rasterio.features import rasterize
 import warnings
@@ -307,6 +307,17 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
     Function to plot the raster data for each year in the dictionary of rasters that are
     output at the end of each sector script.
     """
+
+    # Define the geographic transformation parameters
+    res01 = 0.1  # deg
+    lon_left = -130  # deg
+    lon_right = -60  # deg
+    lat_up = 55  # deg
+    lat_low = 20  # deg
+    transform = rasterio.Affine(
+        res01, 0.0, lon_left, 0.0, -res01, lat_up
+    )  # top-left corner coordinates and pixel size
+
     # Plot the raster data for each year in the dictionary of rasters
     for year in ch4_flux_result_rasters.keys():
 
@@ -347,50 +358,51 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
             N=3000,
         )
 
-        # Mask the raster data where values are 0. This will make the 0 values
-        # transparent and not plotted.
-        masked_raster_data = ma.masked_where(raster_data == 0, raster_data)
+        # Set all raster values == 0 to nan so they are not plotted
+        raster_data[np.where(raster_data == 0)] = np.nan
 
-        # Create a figure and axis with the specified projection
+        # Plot the raster with Cartopy
         fig, ax = plt.subplots(
-            figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()}
+            figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
         )
 
-        # Add features to the map
+        # Set extent to the continental US
+        ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+
+        # This is a "background map" workaround that allows us to add plot features like the colorbar and then use rasterio to plot the raster data on top of the background map.
+        background_map = ax.imshow(
+            raster_data,
+            cmap=custom_colormap,
+        )
+
+        # Add natural earth features
         ax.add_feature(cfeature.LAND)
         ax.add_feature(cfeature.OCEAN)
         ax.add_feature(cfeature.COASTLINE)
         ax.add_feature(cfeature.STATES)
 
-        # Create a meshgrid for the x and y coordinates
-        X, Y = np.meshgrid(x, y)
-
-        # Plot the masked raster data using pcolormesh
-        annual_plot = ax.pcolormesh(
-            X,
-            Y,
-            masked_raster_data,
-            transform=ccrs.PlateCarree(),
-            vmin=10**-15,
-            vmax=np.max(raster_data),
+        # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+        show(
+            raster_data,
+            transform=transform,
+            ax=ax,
             cmap=custom_colormap,
-            shading="nearest",
+            interpolation="none",
         )
 
-        # Add a colorbar
-        plt.colorbar(
-            annual_plot,
-            ax=ax,
+        # Set various plot parameters
+        ax.tick_params(labelsize=10)
+        fig.colorbar(
+            background_map,
             orientation="horizontal",
             label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
         )
 
-        # Set the extent to show the continental US
-        ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
-        ax.tick_params(labelsize=10)
-
         # Add a title
         annual_plot_title = f"{year} EPA methane emissions from {SOURCE_NAME}"
+        annual_plot_title = (
+            f"{year} EPA methane emissions from {SOURCE_NAME.split('_')[-1]}"
+        )
         plt.title(annual_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
@@ -398,6 +410,9 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
 
         # Show the plot for review
         plt.show()
+
+        # Save the plots as PNG files to the figures directory
+        plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # close the plot
         plt.close()
@@ -408,7 +423,15 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     Function to plot the difference between the first and last years of the raster data
     for each sector.
     """
-    # Generate the plot for the difference between the first and last years.
+    # Define the geographic transformation parameters
+    res01 = 0.1  # deg
+    lon_left = -130  # deg
+    lon_right = -60  # deg
+    lat_up = 55  # deg
+    lat_low = 20  # deg
+    transform = rasterio.Affine(
+        res01, 0.0, lon_left, 0.0, -res01, lat_up
+    )  # top-left corner coordinates and pixel size
 
     # Get the first and last years of the data
     list_of_data_years = list(ch4_flux_result_rasters.keys())
@@ -416,11 +439,10 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     last_year_data = ch4_flux_result_rasters[list_of_data_years[-1]]
 
     # Calculate the difference between the first and last years
-    difference = last_year_data - first_year_data
+    difference_raster = last_year_data - first_year_data
 
-    # Mask the raster data where values are 0. This will make the 0 values transparent
-    # and not plotted.
-    difference_masked_raster_data = ma.masked_where(difference == 0, difference)
+    # Set all raster values == 0 to nan so they are not plotted
+    difference_raster[np.where(difference_raster == 0)] = np.nan
 
     custom_colormap = colors.LinearSegmentedColormap.from_list(
         name="custom_colormap",
@@ -440,51 +462,50 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
 
     # Create a figure and axis with the specified projection
     fig, ax = plt.subplots(
-        figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()}
+        figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
     )
 
-    # Add features to the map
+    # Set extent to the continental US
+    ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+
+    # This is a "background map" workaround that allows us to add plot features like the colorbar and then use rasterio to plot the raster data on top of the background map.
+    background_map = ax.imshow(
+        difference_raster,
+        cmap=custom_colormap,
+    )
+
+    # Add natural earth features
     ax.add_feature(cfeature.LAND)
     ax.add_feature(cfeature.OCEAN)
     ax.add_feature(cfeature.COASTLINE)
     ax.add_feature(cfeature.STATES)
 
-    # Create a meshgrid for the x and y coordinates
-    X, Y = np.meshgrid(x, y)
-
-    # Plot the masked raster data using pcolormesh
-    difference_plot = ax.pcolormesh(
-        X,
-        Y,
-        difference_masked_raster_data,
-        transform=ccrs.PlateCarree(),
-        vmin=10**-15,
-        vmax=np.max(difference_masked_raster_data),
+    # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+    show(
+        difference_raster,
+        transform=transform,
+        ax=ax,
         cmap=custom_colormap,
-        shading="nearest",
+        interpolation="none",
     )
 
-    # Add a colorbar
-    plt.colorbar(
-        difference_plot,
-        ax=ax,
+    # Set various plot parameters
+    ax.tick_params(labelsize=10)
+    fig.colorbar(
+        background_map,
         orientation="horizontal",
         label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
     )
-
-    # Set the extent to show the continental US
-    ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
-    ax.tick_params(labelsize=10)
 
     # Add a title
     difference_plot_title = f"Difference between {list_of_data_years[0]} and {list_of_data_years[-1]} methane emissions from {SOURCE_NAME}"
     plt.title(difference_plot_title, fontsize=14)
 
-    # Save the plot as a PNG file
-    plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_difference.png")
-
     # Show the plot for review
     plt.show()
+
+    # Save the plot as a PNG file
+    plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
 
     # close the plot
     plt.close()

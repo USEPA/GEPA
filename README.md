@@ -81,5 +81,36 @@ Note: The gridded methane GHGI does not include emissions from the Land Use, Lan
 ## Contributing
 To report an error, please open an issue on GitHub
 
-##
-TODO: guidance for setting up environment and using .env file
+## Guidance for setting up your local environment and .env file
+
+If you’re starting fresh, I recommend the bare-bones install of conda that by uses the conda-forge channel for downloading packages, called miniforge:
+https://github.com/conda-forge/miniforge
+
+If you want to go even deeper, look at micromamba: https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html
+
+Once you have conda installed, you need to create the environment.
+- open PowerShell or bash.
+- if you have just installed conda, run:
+```conda init```
+
+close and reopen your shell to complete the changes.
+create your environment
+- Navigate to the GEPA folder by running (update your path):
+```cd 'C:\Users\nkruskamp\Research Triangle Institute\EPA Gridded Methane - Task 2\code\GEPA'```
+- you can use the command ls to list the files in that directory and make sure you see environment.yml
+- then create the environment, run:
+```conda env create --file environment.yml```
+
+This will install the conda environment “gch4i” into you conda environments with the packages needed to run the notebooks.
+
+Each user will need to add a .env file to your local version of the repo. In VS Code, right click in the explorer (generally located on the left side of your VS Code window) and select "new file." Name this file ".env". 
+
+Inside your .env file, input this text:
+
+```V3_DATA_PATH = "YOUR_USER_PATH_TO_V3_DATA"```
+
+Replace the text YOUR_USER_PATH_TO_V3_DATA with your actual local path. For example,
+
+```"/Users/username/Library/CloudStorage/OneDrive-SharedLibraries-EnvironmentalProtectionAgency(EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data"```
+
+Save your updated .env file and everything should now point to your personal v3 data path.
