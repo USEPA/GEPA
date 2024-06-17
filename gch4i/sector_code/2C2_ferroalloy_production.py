@@ -64,28 +64,42 @@ def get_ferro_inventory_data(input_path):
             sheet_name="InvDB",
             skiprows=15,
             nrows=115,
-            usecols="A:AO",
+            usecols="A:BA",
         )
         # name column names lower
-        .rename(columns=lambda x: str(x).lower())
         # drop columns we don't need
         .drop(
             columns=[
-                "sector",
-                "source",
-                "subsource",
-                "fuel",
-                "subref",
-                "2nd ref",
-                "exclude",
+                "Data Type",
+                "Sector",
+                "Subsector",
+                "Category",
+                "Subcategory1",
+                "Subcategory2",
+                "Subcategory3",
+                "Subcategory4",
+                "Subcategory5",
+                "Carbon Pool",
+                "Fuel1",
+                "Fuel2",
+                # "GeoRef",
+                "Exclude",
+                "CRT Code",
+                "ID",
+                "Sensitive (Y or N)",
+                "Units",
+                # "GHG",
+                "GWP",
             ]
         )
+        .rename(columns=lambda x: str(x).lower())
         # get just methane emissions
         .query("ghg == 'CH4'")
         # remove that column
         .drop(columns="ghg")
         # set the index to state
-        .rename(columns={"state": "state_code"})
+        .rename(columns={"georef": "state_code"})
+        .query("state_code != 'National'")
         .set_index("state_code")
         # covert "NO" string to numeric (will become np.nan)
         .apply(pd.to_numeric, errors="coerce")
@@ -119,7 +133,7 @@ def get_ferro_proxy_data(EPA_inventory_path, frs_path, subpart_k_url, state_gdf)
             sheet_name="Ferroalloy Calculations",
             skiprows=72,
             nrows=12,
-            usecols="A:AI",
+            usecols="A:AJ",
         )
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"facility": "facility_name", "state": "state_name"})
@@ -307,7 +321,8 @@ ch4_kt_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_kt_per_year"
 ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 
 # INVENTORY INPUT FILE
-inventory_workbook_path = ghgi_data_dir_path / "State_Ferroalloys_1990-2021.xlsx"
+# XXX: prelim 2024 report data.
+inventory_workbook_path = ghgi_data_dir_path / "State_Ferroalloys_1990-2022.xlsx"
 
 # PROXY INPUT FILES
 # state vector refence with state_code
@@ -361,7 +376,7 @@ state_gdf = (
     .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
     .to_crs(4326)
 )
-
+# %%
 EPA_state_emi_df = get_ferro_inventory_data(inventory_workbook_path)
 
 # plot state inventory data
