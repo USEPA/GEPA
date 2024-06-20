@@ -39,14 +39,15 @@ from gch4i.config import (
 from gch4i.utils import (
     QC_emi_raster_sums,
     QC_point_proxy_allocation,
-    grid_point_emissions,
+    grid_allocated_emissions,
     name_formatter,
     plot_annual_raster_data,
     plot_raster_data_difference,
-    state_year_point_allocate_emis,
+    allocate_emissions_to_proxy,
     tg_to_kt,
     write_ncdf_output,
     write_tif_output,
+    calculate_flux
 )
 
 # from pytask import Product, task
@@ -429,8 +430,12 @@ ax = ferro_proxy_gdf.drop_duplicates("formatted_fac_name").plot(
 state_gdf.boundary.plot(ax=ax, color="xkcd:slate", lw=0.2, zorder=1)
 
 # %% STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES ---------------------------
-allocated_emis_gdf = state_year_point_allocate_emis(
-    ferro_proxy_gdf, EPA_state_emi_df, proxy_has_year=True, use_proportional=True
+allocated_emis_gdf = allocate_emissions_to_proxy(
+    ferro_proxy_gdf,
+    EPA_state_emi_df,
+    proxy_has_year=True,
+    use_proportional=True,
+    proportional_col_name="ch4_kt",
 )
 allocated_emis_gdf
 
@@ -459,9 +464,9 @@ sns.relplot(
 proxy_qc_result
 
 # %% STEP 5: RASTERIZE THE CH4 KT AND FLUX ---------------------------------------------
-ch4_kt_result_rasters, ch4_flux_result_rasters = grid_point_emissions(
-    allocated_emis_gdf
-)
+ch4_kt_result_rasters = grid_allocated_emissions(allocated_emis_gdf)
+ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
+
 
 # %% STEP 5.1: QC GRIDDED EMISSIONS BY YEAR --------------------------------------------
 # TODO: report QC metrics for flux values compared to V2: descriptive statistics

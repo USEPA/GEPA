@@ -1,5 +1,8 @@
 from pathlib import Path
 import os
+from dotenv import load_dotenv, find_dotenv
+
+load_dotenv(find_dotenv(usecwd=True))
 
 # Set path to location of input data files (same directory where output files are saved)
 # Define your own path to the data directory in the .env file

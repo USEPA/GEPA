@@ -8,17 +8,18 @@ from rasterio.plot import show
 import geopandas as gpd
 import xarray as xr
 import pandas as pd
-import rioxarray  # noqd f401
+import rioxarray  # noqa f401
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from IPython.display import display
 from rasterio.features import rasterize
-import warnings
+
+# import warnings
 
 from gch4i.config import global_data_dir_path, figures_data_dir_path
-from gch4i.gridding import GEPA_PROFILE, x, y, ARR_SHAPE
+from gch4i.gridding import GEPA_spatial_profile
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
@@ -38,101 +39,128 @@ GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert
 # we still have this calculation step, or will we go straight to the rasterize step?
 
 
-def state_year_point_allocate_emis(
+def allocate_emissions_to_proxy(
     proxy_gdf: gpd.GeoDataFrame,
     emi_df: pd.DataFrame,
-    proxy_has_year: bool,
-    use_proportional: bool,
+    proxy_has_year: bool = False,
+    use_proportional: bool = False,
+    proportional_col_name: str = None,
 ) -> gpd.GeoDataFrame:
     """
-    Allocation state emissions by year to all proxy points within the state
-    NOTE:               2024-06-10: only tested with ferroalloys and composting so far.
+    Allocation state emissions by year to all proxies within the state by year.
+    NOTE: 2024-06-10: only tested with ferroalloys and composting so far.
 
     Inputs:
-    proxy_gdf:    GeoDataFrame: point level proxy data with or without fractional
-                        emissions to be used in allocation from state inventory data
-    emi_df:             The EPA state level emissions per year, typically read in from
-                        the IndDB sheet in the excel workbook
-    proxy_has_year:     If the proxy data have a yearly proportional value to use
-    use_proportional:   Indicate if the proxy has fractional emissions to be used in the
-                        allocation of inventory emissions to the point. For each state /
-                        year, the fractional emissions of all points within the state /
-                        year are used to allocation inventory emissions.
-
-    Returns:            point_proxy_gdf with new column "allocated_ch4_kt"
+        proxy_gdf:
+            -   GeoDataFrame: vector proxy data with or without fractional emissions to
+                be used in allocation from state inventory data
+        emi_df:
+            -   The EPA state level emissions per year, typically read in from
+                the IndDB sheet in the excel workbook
+        proxy_has_year:
+            -   If the proxy data have a yearly proportional value to use
+        use_proportional:
+            -   Indicate if the proxy has fractional emissions to be used in the
+                allocation of inventory emissions to the point. For each state /
+                year, the fractional emissions of all points within the state /
+                year are used to allocation inventory emissions.
+        proportional_col_name:
+            -   the name of the column with proportional emissions.
+    Returns:
+        -   GeoDataFrame with new column "allocated_ch4_kt" added to proxy_gdf
 
     """
+
+    if use_proportional and (proportional_col_name is None):
+        raise ValueError(
+            "must provide 'proportional_col_name' if 'use_proportional' is True."
+        )
+
+    if proxy_has_year and ("year" not in proxy_gdf.columns):
+        raise ValueError(
+            "proxy data must have 'year' column if 'proxy_has_year' is True."
+        )
 
     result_list = []
     # for each state and year in the inventory data
     for (state, year), data in emi_df.groupby(["state_code", "year"]):
         # if the proxy has a year, get the proxies for that state / year
         if proxy_has_year:
-            state_points = proxy_gdf[
+            state_proxy_data = proxy_gdf[
                 (proxy_gdf["state_code"] == state) & (proxy_gdf["year"] == year)
             ].copy()
         # else just get the proxy in the state
         else:
-            state_points = (
+            state_proxy_data = (
                 proxy_gdf[(proxy_gdf["state_code"] == state)].copy().assign(year=year)
             )
         # if there are no proxies in that state, print a warning
-        if state_points.shape[0] < 1:
-            Warning(f"there are no proxies in {state} but there are emissions!")
+        if state_proxy_data.shape[0] < 1:
+            Warning(
+                f"there are no proxies in {state} for {year} but there are emissions!"
+            )
             continue
         # get the value of emissions for that state/year
         state_year_emissions = data["ch4_kt"].iat[0]
-        # if there are no state inventory emissions, assign all points for that
+        # if there are no state inventory emissions, assign all proxy for that
         # state / year as 0
         if state_year_emissions == 0:
-            state_points["allocated_ch4_kt"] = 0
+            Warning(
+                f"there are proxies in {state} for {year} but there are no emissions!"
+            )
+            state_proxy_data["allocated_ch4_kt"] = 0
         # else, compute the emission for each proxy record
         else:
             # if the proxy has a proportional value, say from subpart data, use it
             if use_proportional:
-                state_points["allocated_ch4_kt"] = (
-                    (state_points["ch4_kt"] / state_points["ch4_kt"].sum())
+                state_proxy_data["allocated_ch4_kt"] = (
+                    (
+                        state_proxy_data[proportional_col_name]
+                        / state_proxy_data[proportional_col_name].sum()
+                    )
                     * state_year_emissions
                 ).fillna(0)
             # else allocate emissions equally to all proxies in state
             else:
-                state_points["allocated_ch4_kt"] = (
-                    state_year_emissions / state_points.shape[0]
+                state_proxy_data["allocated_ch4_kt"] = (
+                    state_year_emissions / state_proxy_data.shape[0]
                 )
-        result_list.append(state_points)
+        result_list.append(state_proxy_data)
     out_proxy_gdf = pd.concat(result_list).reset_index(drop=True)
     return out_proxy_gdf
 
 
-def grid_point_emissions(point_gdf):
+def grid_allocated_emissions(point_gdf: gpd.GeoDataFrame):
 
-    area_matrix = load_area_matrix()
-
+    profile = GEPA_spatial_profile()
     ch4_kt_result_rasters = {}
-    ch4_flux_result_rasters = {}
     for year, data in point_gdf.groupby("year"):
-        month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-        year_days = np.sum(month_days)
-
         ch4_kt_raster = rasterize(
             shapes=[
                 (shape, value)
                 for shape, value in data[["geometry", "allocated_ch4_kt"]].values
             ],
-            out_shape=ARR_SHAPE,
+            out_shape=profile.arr_shape,
             fill=0,
-            transform=GEPA_PROFILE["transform"],
+            transform=profile.profile["transform"],
             dtype=np.float64,
             merge_alg=rasterio.enums.MergeAlg.add,
         )
-
-        conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
-        ch4_flux_raster = ch4_kt_raster * conversion_factor_annual
-
         ch4_kt_result_rasters[year] = ch4_kt_raster
-        ch4_flux_result_rasters[year] = ch4_flux_raster
 
-    return ch4_kt_result_rasters, ch4_flux_result_rasters
+    return ch4_kt_result_rasters
+
+
+def calculate_flux(raster_dict: dict[str, np.array]):
+    area_matrix = load_area_matrix()
+    ch4_flux_result_rasters = {}
+    for year, data in raster_dict.items():
+        month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
+        year_days = np.sum(month_days)
+        conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
+        ch4_flux_raster = data * conversion_factor_annual
+        ch4_flux_result_rasters[year] = ch4_flux_raster
+    return ch4_flux_result_rasters
 
 
 def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
@@ -156,12 +184,11 @@ def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
         print("states and years with emissions that don't match")
         display(sum_check[~sum_check["isclose"]])
 
-        print(
-            (
-                "states with no proxy points in them: "
-                f"{emi_df[~emi_df['state_code'].isin(proxy_df['state_code'])]['state_code'].unique()}"
-            )
-        )
+        unique_state_codes = emi_df[~emi_df["state_code"].isin(proxy_df["state_code"])][
+            "state_code"
+        ].unique()
+
+        print(f"states with no proxy points in them: {unique_state_codes}")
         print(
             (
                 "states with unaccounted emissions: "
@@ -205,11 +232,13 @@ def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
     return 10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
 
 
-def write_tif_output(in_dict: dict, dst_path: Path) -> None:
+def write_tif_output(in_dict: dict, dst_path: Path, resolution=0.1) -> None:
     """take an input dictionary with year/array items, write raster to dst_path"""
     out_array = np.stack(list(in_dict.values()))
 
-    dst_profile = GEPA_PROFILE.copy()
+    profile = GEPA_spatial_profile(resolution)
+
+    dst_profile = profile.profile.copy()
 
     dst_profile.update(count=out_array.shape[0])
     with rasterio.open(dst_path.with_suffix(".tif"), "w", **dst_profile) as dst:
@@ -221,8 +250,9 @@ def write_tif_output(in_dict: dict, dst_path: Path) -> None:
 # EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix,
 # in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function
 # and specify which we're using here?
-def load_area_matrix() -> np.array:
-    input_path = global_data_dir_path / "gridded_area_m2.tif"
+def load_area_matrix(resolution=0.1) -> np.array:
+    res_text = str(resolution).replace(".", "")
+    input_path = global_data_dir_path / f"gridded_area_{res_text}_m2.tif"
     with rasterio.open(input_path) as src:
         arr = src.read(1)
     return arr
@@ -234,7 +264,7 @@ def write_ncdf_output(
     description: str,
     title: str,
     units: str = "moleccm-2s-1",
-    # resolution: float,
+    resolution: float = 0.1,
     # month_flag: bool = False,
 ) -> None:
     """take dict of year:array pairs and write to dst_path with attrs"""
@@ -249,13 +279,15 @@ def write_ncdf_output(
     # if resolution:
     #     pass
 
+    profile = GEPA_spatial_profile(resolution)
+
     data_xr = (
         xr.DataArray(
             array_stack,
             coords={
                 "time": year_list,
-                "lat": y,
-                "lon": x,
+                "lat": profile.y,
+                "lon": profile.x,
             },
             dims=[
                 "time",
@@ -271,8 +303,8 @@ def write_ncdf_output(
                 "units": units,
             }
         )
-        .rio.write_crs(GEPA_PROFILE["crs"])
-        .rio.write_transform(GEPA_PROFILE["transform"])
+        .rio.write_crs(profile.profile["crs"])
+        .rio.write_transform(profile.profile["transform"])
         .rio.set_spatial_dims(x_dim="lon", y_dim="lat")
         # I think this only write out the year names in a separate table. Doesn't
         # seem useful.
@@ -295,8 +327,9 @@ def name_formatter(col: pd.Series):
     returns = pandas series
     """
     return (
-        col.str.casefold()
-        .str.replace("\s+", " ", regex=True)
+        col.str.strip()
+        .str.casefold()
+        .str.replace("\s+", " ", regex=True)  # noqa w605
         .replace("[^a-zA-Z0-9 -]", "", regex=True)
     )
 
@@ -308,15 +341,7 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
     output at the end of each sector script.
     """
 
-    # Define the geographic transformation parameters
-    res01 = 0.1  # deg
-    lon_left = -130  # deg
-    lon_right = -60  # deg
-    lat_up = 55  # deg
-    lat_low = 20  # deg
-    transform = rasterio.Affine(
-        res01, 0.0, lon_left, 0.0, -res01, lat_up
-    )  # top-left corner coordinates and pixel size
+    profile = GEPA_spatial_profile()
 
     # Plot the raster data for each year in the dictionary of rasters
     for year in ch4_flux_result_rasters.keys():
@@ -369,7 +394,9 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
         # Set extent to the continental US
         ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
 
-        # This is a "background map" workaround that allows us to add plot features like the colorbar and then use rasterio to plot the raster data on top of the background map.
+        # This is a "background map" workaround that allows us to add plot features like
+        # the colorbar and then use rasterio to plot the raster data on top of the
+        # background map.
         background_map = ax.imshow(
             raster_data,
             cmap=custom_colormap,
@@ -381,10 +408,11 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
         ax.add_feature(cfeature.COASTLINE)
         ax.add_feature(cfeature.STATES)
 
-        # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+        # Plot the raster data using rasterio (this uses matplotlib imshow under the
+        # hood)
         show(
             raster_data,
-            transform=transform,
+            transform=profile.profile["transform"],
             ax=ax,
             cmap=custom_colormap,
             interpolation="none",
@@ -424,14 +452,8 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     for each sector.
     """
     # Define the geographic transformation parameters
-    res01 = 0.1  # deg
-    lon_left = -130  # deg
-    lon_right = -60  # deg
-    lat_up = 55  # deg
-    lat_low = 20  # deg
-    transform = rasterio.Affine(
-        res01, 0.0, lon_left, 0.0, -res01, lat_up
-    )  # top-left corner coordinates and pixel size
+
+    profile = GEPA_spatial_profile()
 
     # Get the first and last years of the data
     list_of_data_years = list(ch4_flux_result_rasters.keys())
@@ -468,7 +490,9 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     # Set extent to the continental US
     ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
 
-    # This is a "background map" workaround that allows us to add plot features like the colorbar and then use rasterio to plot the raster data on top of the background map.
+    # This is a "background map" workaround that allows us to add plot features like
+    # the colorbar and then use rasterio to plot the raster data on top of the
+    # background map.
     background_map = ax.imshow(
         difference_raster,
         cmap=custom_colormap,
@@ -483,7 +507,7 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
     show(
         difference_raster,
-        transform=transform,
+        transform=profile.profile["transform"],
         ax=ax,
         cmap=custom_colormap,
         interpolation="none",
@@ -498,7 +522,10 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME):
     )
 
     # Add a title
-    difference_plot_title = f"Difference between {list_of_data_years[0]} and {list_of_data_years[-1]} methane emissions from {SOURCE_NAME}"
+    difference_plot_title = (
+        f"Difference between {list_of_data_years[0]} and "
+        f"{list_of_data_years[-1]} methane emissions from {SOURCE_NAME}"
+    )
     plt.title(difference_plot_title, fontsize=14)
 
     # Show the plot for review

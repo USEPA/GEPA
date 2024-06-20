@@ -38,11 +38,11 @@ from gch4i.config import (
 from gch4i.utils import (
     QC_emi_raster_sums,
     QC_point_proxy_allocation,
-    grid_point_emissions,
+    grid_allocated_emissions,
     name_formatter,
     plot_annual_raster_data,
     plot_raster_data_difference,
-    state_year_point_allocate_emis,
+    allocate_emissions_to_proxy,
     tg_to_kt,
     write_ncdf_output,
     write_tif_output,
@@ -322,7 +322,7 @@ ax = composting_proxy_gdf.drop_duplicates().plot(
 state_gdf.boundary.plot(ax=ax, color="xkcd:slate", lw=0.2, zorder=1)
 
 # %% STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES ---------------------------
-allocated_emis_gdf = state_year_point_allocate_emis(
+allocated_emis_gdf = allocate_emissions_to_proxy(
     composting_proxy_gdf, EPA_state_emi_df, proxy_has_year=False, use_proportional=False
 )
 allocated_emis_gdf
@@ -352,7 +352,7 @@ sns.relplot(
 proxy_qc_result
 
 # %% STEP 5: RASTERIZE THE CH4 KT AND FLUX ---------------------------------------------
-ch4_kt_result_rasters, ch4_flux_result_rasters = grid_point_emissions(
+ch4_kt_result_rasters, ch4_flux_result_rasters = grid_allocated_emissions(
     allocated_emis_gdf
 )
 
