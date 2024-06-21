@@ -17,6 +17,7 @@ Notes:                  -
 # %autoreload 2
 from zipfile import ZipFile
 import calendar
+import datetime
 
 import osgeo  # noqa
 import duckdb
@@ -37,7 +38,7 @@ from gch4i.config import (
 )
 from gch4i.utils import (
     QC_emi_raster_sums,
-    QC_point_proxy_allocation,
+    QC_proxy_allocation,
     grid_allocated_emissions,
     name_formatter,
     plot_annual_raster_data,
@@ -46,6 +47,8 @@ from gch4i.utils import (
     tg_to_kt,
     write_ncdf_output,
     write_tif_output,
+    calculate_flux,
+    combine_gridded_emissions,
 )
 
 # from pytask import Product, task
@@ -311,6 +314,7 @@ county_gdf
 
 
 # %%
+# TODO: finalize this function after review
 def get_ab_coal_mine_proxy_data():
     pass
 
@@ -354,6 +358,9 @@ msha_cols = [
     "CURRENT_CONTROLLER_BEGIN_DT",
 ]
 
+# get a crosswalk of records that we can't find via the mine DB or county, develop
+# a crosswalk for the 3 records we can't find a match for from these "county" names
+# to actual county names.
 # https://en.wikipedia.org/wiki/West,_West_Virginia
 # https://en.wikipedia.org/wiki/Dickenson_County,_Virginia
 # Finding the county for rosedale is a bit tricky. It's not a formal place?
@@ -376,14 +383,14 @@ ghgi_mine_list = (
     )
     # name column names lower
     .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"active emiss. (mmcfd)": "active_emiss"})
+    .rename(columns={"active emiss. (mmcfd)": "active_emiss", "state": "state_code"})
     .assign(
         MINE_ID=lambda df: pd.to_numeric(df["msha id"], errors="coerce")
         .fillna(0)
         .astype(int),
         formatted_name=lambda df: name_formatter(df["mine name"]),
         formatted_county=lambda df: name_formatter(df["county"]),
-        formatted_state=lambda df: name_formatter(df["state"]),
+        formatted_state=lambda df: name_formatter(df["state_code"]),
         date_abd=lambda df: pd.to_datetime(df["date of aban."]),
     )
     .replace(county_name_fixes)
@@ -461,8 +468,6 @@ matching_results[matching_results["CURRENT_MINE_STATUS"] == "Active"]
 # it appears the new workbooks has a clean version of 'Current Emissions Status' called
 # "simple status" so there is no need to recode that from the broader list found in v2.
 
-# 2B) Clean up recovery status text
-
 ## Step 3 - Add basin number. #CA, IL, NA, BW, WS
 basin_name_recode = {
     "Central Appl.": 0,
@@ -475,7 +480,7 @@ basin_name_recode = {
     "Piceance": 4,
 }
 
-# basin coefficients:
+# basin coefficients pulled from v2:
 basin_coef_dict = {
     "Flooded": [0.672, 0.672, 0.672, 0.672, 0.672],
     "Sealed": [0.000741, 0.000733, 0.000725, 0.000729, 0.000747],
@@ -497,13 +502,12 @@ calc_results = matching_results.assign(
     [
         "MINE_ID",
         "geometry",
-        "state",
+        "state_code",
         "county",
         "basin_nr",
         "recovering",
         "reopen_date",
         "date_abd",
-        "days_closed",
         "simple status",
         "active_emiss",
     ],
@@ -512,16 +516,9 @@ calc_results
 
 
 # %%
-## Step 4. Record the number of days since the mine has closed
-# 2024-06-11: left off here. I think I can calculate the days since closure and then
-# the proxy calculations by year, format into a long table, and then processing would
-# be similar to ferroalloys in cycling through facilities by state / year with a
-# proportional value to allocate emissions
-import datetime
-
-
-# TODO: update this when we get the final workbook. Current workbook is missing some
-# years of this data.
+# TODO: Current workbook is missing some years of this data. update this when we get
+# the final workbook. wrap this up into a single table that we query by year in the
+# loop below.
 ratios_df = (
     pd.read_excel(inventory_workbook_path, sheet_name="2018", skiprows=20, nrows=5)
     .loc[:, ["Sealed %", "Vented %", "Flooded %"]]
@@ -534,6 +531,16 @@ ratios_df = (
 ratios_normed_df = ratios_df / ratios_df.sum().sum()
 ratios_normed_df
 # %%
+# # orig flooded calc
+# abdmines["Active Emiss. (mmcfd) "][imine] * np.exp(-1 * D_flooded[ibasin] * ab_numyrs)
+# # orig venting calc
+# abdmines["Active Emiss. (mmcfd) "][imine] * (
+#     1 + b_medium[ibasin] * D_venting[ibasin] * ab_numyrs
+# ) ** (-1 / float(b_medium[ibasin]))
+# # orig sealed calc
+# abdmines["Active Emiss. (mmcfd) "][imine] * (1 - 0.8) * (
+#     1 + b_medium[ibasin] * D_sealed[ibasin] * ab_numyrs
+# ) ** (-1 / float(b_medium[ibasin]))
 
 
 def flooded_calc(df, basin, bc_df):
@@ -577,9 +584,10 @@ for year in range(min_year, max_year + 1):
 
     # get the year days
     month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-    # this seems odd to me? In a leap year we divide the entire timedelta by leap year,
-    # in regular years regular amount. I wonder if we're 
     year_days = np.sum(month_days)
+
+    # this year date to calc relative emissions
+    calc_date = datetime.datetime(year=year, month=7, day=2)
 
     year_df = (
         calc_results.copy()
@@ -596,11 +604,10 @@ for year in range(min_year, max_year + 1):
             # days closed is 1/2 of the number of days closed relative to our date of 07/02
             # the logic here is: if the mine closed in this year, the number of days closed
             # is equal to 1/2 the days closed relative to 07/02.
-            #
             days_closed=lambda df: np.where(
                 df["date_abd"].dt.year == year,
-                -((datetime.datetime(year=year, month=7, day=2) - df["date_abd"]) / 2),
-                datetime.datetime(year=year, month=7, day=2) - df["date_abd"],
+                -((calc_date - df["date_abd"]) / 2),
+                calc_date - df["date_abd"],
             ),
             years_closed=lambda df: (df["days_closed"].dt.days / year_days),
             emis_mmcfd=0,
@@ -625,117 +632,77 @@ for year in range(min_year, max_year + 1):
     year_df.loc[year_df["recovering"].eq(1), "emis_mmcfd"] = 0
     result_list.append(year_df)
 
-    # calculate the number of days the mine has been closed to this year
-
-    # TODO: check updated workbook to see if the ratios for all our years are in there
-    # get the ratios
-    # norm the ratios
-    # calc how many days in THIS year the mine has been closed
-    # get the year of abandonment
-    # if it has been closed for more than
 result_df = pd.concat(result_list)
 result_df["year"].value_counts().sort_index()
 # %%
-result_df.groupby(["year", "state"])["emis_mmcfd"].plot(kind="line")
-result_df.groupby(["year", "state"])["emis_mmcfd"].sum().describe()
+sns.relplot(data=result_df, y="emis_mmcfd", x="year", hue="state_code", kind="line")
+sns.relplot(data=result_df, y="emis_mmcfd", x="year", kind="line")
+# %%
+result_df.groupby(["year", "state_code"])["emis_mmcfd"].sum()
+# %%
+result_df.groupby("year")["emis_mmcfd"].sum().describe()
 # %%
 # looking at values against the v2 numbers, it's not far off in some cases, but in
 # others it's a drastic difference. This needs more input and review. We're close, but
 # either the estimates have changed or more likely I've messed up somewhere...
 # coefficients by year are wrong here so maybe a factor?
-# Could be worth running against the v2 workbook to see if I get the same answer.
-result_df[result_df.year == 2018].groupby("state")["emis_mmcfd"].sum()
-# %%
-
-
-# TODO: I think we're going to need to add the two sources together eventually
-# that is giong to require a rework of the gridding function probably to separate out
-# the flux calculation to after that:
-# 1: calc first source
-# 2: calc second source
-# 3: math them together
-# 4: calc flux
-# 5: QC / save / plot as normal?
-
-calc_results
-# %%
-# timeseries look at the data.
-g = sns.lineplot(
-    ab_mine_proxy_gdf,
-    x="year",
-    y="ch4_kt",
-    hue="facility_name",
-    legend=True,
-)
-sns.move_legend(g, "upper left", bbox_to_anchor=(1.0, 0.9))
-sns.despine()
-# some checks of the data
-# how many na values are there
-print("Number of NaN values:")
-display(ab_mine_proxy_gdf.isna().sum())
-# how many missing locations are there by year
-print("Number of Facilities with Missing Locations Each Year")
-display(ab_mine_proxy_gdf[ab_mine_proxy_gdf.is_empty]["year"].value_counts())
-# how many missing locations are there by facility name
-print("For Each Facility with Missing Data, How Many Missing Years")
-display(
-    ab_mine_proxy_gdf[ab_mine_proxy_gdf.is_empty]["formatted_fac_name"].value_counts()
-)
-# a plot of the timeseries of emission by facility
-sns.lineplot(
-    data=ab_mine_proxy_gdf, x="year", y="ch4_kt", hue="facility_name", legend=False
-)
-
-# %% MAP PROXY DATA --------------------------------------------------------------------
-ax = ab_mine_proxy_gdf.drop_duplicates("formatted_fac_name").plot(
-    "formatted_fac_name", categorical=True, cmap="Set2", figsize=(10, 10)
-)
-state_gdf.boundary.plot(ax=ax, color="xkcd:slate", lw=0.2, zorder=1)
+# Could be worth running this code against the v2 workbook to see if I get the same
+# answer.
+result_df[result_df.year == 2018].groupby("state_code")["emis_mmcfd"].sum()
+ab_coal_proxy_gdf = gpd.GeoDataFrame(result_df, crs=4326)
+# NOTE: This ends the get proxy function, so once reviewed, clean it up.
 
 # %% STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES ---------------------------
-allocated_emis_gdf = allocate_emissions_to_proxy(
-    ab_mine_proxy_gdf,
+allocated_liberated_emis_gdf = allocate_emissions_to_proxy(
+    ab_coal_proxy_gdf,
     EPA_state_liberated_emi_df,
     proxy_has_year=True,
     use_proportional=True,
+    proportional_col_name="emis_mmcfd",
 )
-allocated_emis_gdf
+
+allocated_randu_emis_gdf = allocate_emissions_to_proxy(
+    ab_coal_proxy_gdf,
+    EPA_state_randu_emi_df,
+    proxy_has_year=True,
+    use_proportional=True,
+    proportional_col_name="emis_mmcfd",
+)
 
 # %% STEP 4.1: QC PROXY ALLOCATED EMISSIONS BY STATE AND YEAR --------------------------
-proxy_qc_result = QC_point_proxy_allocation(
-    allocated_emis_gdf, EPA_state_liberated_emi_df
+proxy_qc_liberated_result = QC_proxy_allocation(
+    allocated_liberated_emis_gdf, EPA_state_liberated_emi_df
 )
+proxy_qc_liberated_result
 
-sns.relplot(
-    kind="line",
-    data=proxy_qc_result,
-    x="year",
-    y="allocated_ch4_kt",
-    hue="state_code",
-    palette="tab20",
-    legend=False,
+# %%
+proxy_qc_randu_result = QC_proxy_allocation(
+    allocated_randu_emis_gdf, EPA_state_randu_emi_df
 )
-
-sns.relplot(
-    kind="line",
-    data=EPA_state_liberated_emi_df,
-    x="year",
-    y="ch4_kt",
-    hue="state_code",
-    palette="tab20",
-    legend=False,
-)
-proxy_qc_result
+proxy_qc_randu_result
 
 # %% STEP 5: RASTERIZE THE CH4 KT AND FLUX ---------------------------------------------
-ch4_kt_result_rasters, ch4_flux_result_rasters = grid_allocated_emissions(
-    allocated_emis_gdf
-)
+ch4_kt_liberated_result_rasters = grid_allocated_emissions(allocated_liberated_emis_gdf)
+
+ch4_kt_randu_result_rasters = grid_allocated_emissions(allocated_randu_emis_gdf)
 
 # %% STEP 5.1: QC GRIDDED EMISSIONS BY YEAR --------------------------------------------
 # TODO: report QC metrics for flux values compared to V2: descriptive statistics
-qc_kt_rasters = QC_emi_raster_sums(ch4_kt_result_rasters, EPA_state_liberated_emi_df)
-qc_kt_rasters
+qc_kt_liberated_rasters = QC_emi_raster_sums(
+    ch4_kt_liberated_result_rasters, EPA_state_liberated_emi_df
+)
+qc_kt_liberated_rasters
+# %%
+qc_kt_randu_rasters = QC_emi_raster_sums(
+    ch4_kt_randu_result_rasters, EPA_state_randu_emi_df
+)
+qc_kt_randu_rasters
+
+# %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER --------------------------------------
+ch4_kt_result_rasters = combine_gridded_emissions(
+    [ch4_kt_liberated_result_rasters, ch4_kt_randu_result_rasters]
+)
+ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
 # %% STEP 6: SAVE THE FILES ------------------------------------------------------------
 write_tif_output(ch4_kt_result_rasters, ch4_kt_dst_path)

@@ -37,7 +37,7 @@ from gch4i.config import (
 )
 from gch4i.utils import (
     QC_emi_raster_sums,
-    QC_point_proxy_allocation,
+    QC_proxy_allocation,
     grid_allocated_emissions,
     name_formatter,
     plot_annual_raster_data,
@@ -328,7 +328,7 @@ allocated_emis_gdf = allocate_emissions_to_proxy(
 allocated_emis_gdf
 
 # %% STEP 4.1: QC PROXY ALLOCATED EMISSIONS BY STATE AND YEAR --------------------------
-proxy_qc_result = QC_point_proxy_allocation(allocated_emis_gdf, EPA_state_emi_df)
+proxy_qc_result = QC_proxy_allocation(allocated_emis_gdf, EPA_state_emi_df)
 
 sns.relplot(
     kind="line",

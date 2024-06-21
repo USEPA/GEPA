@@ -14,7 +14,9 @@ import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from IPython.display import display
-from rasterio.features import rasterize
+from rasterio.features import rasterize, shapes
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # import warnings
 
@@ -130,11 +132,85 @@ def allocate_emissions_to_proxy(
     return out_proxy_gdf
 
 
-def grid_allocated_emissions(point_gdf: gpd.GeoDataFrame):
+def get_cell_gdf():
+    profile = GEPA_spatial_profile()
+    # get the number of cells
+    ncells = np.multiply(*profile.arr_shape)
+    # create an empty array of the right shape, assign each cell a unique value
+    tmp_arr = np.arange(ncells, dtype=np.int32).reshape(profile.arr_shape)
+
+    # get the cells as individual items in a dictionary holding their id and geom
+    results = [
+        {"properties": {"raster_val": v}, "geometry": s}
+        for i, (s, v) in enumerate(
+            shapes(tmp_arr, transform=profile.profile["transform"])
+        )
+    ]
+
+    # turn geom dictionary into a geodataframe
+    cell_gdf = gpd.GeoDataFrame.from_features(results, crs=4326).drop(
+        columns="raster_val"
+    )
+    return cell_gdf
+
+
+def grid_allocated_emissions(proxy_gdf: gpd.GeoDataFrame):
 
     profile = GEPA_spatial_profile()
     ch4_kt_result_rasters = {}
-    for year, data in point_gdf.groupby("year"):
+    # if the proxy data do not nest nicely into rasters cells, we have to do some
+    # disaggregation of the vectors to get the sums to equal during rasterization
+    # so we need the cell geodataframe to do that. Only load the cell_gdf if we need
+    # to do disaggregation. project to equal are for are calculations
+    if not (proxy_gdf.geometry.type == "Points").all():
+        cell_gdf = get_cell_gdf().to_crs("ESRI:102003")
+
+    for year, data in proxy_gdf.groupby("year"):
+        orig_emi_val = data["allocated_ch4_kt"].sum()
+        # if we need to disaggregate non-point data
+        if not (data.geometry.type == "Points").all():
+            # get the point data
+            point_data = data.loc[
+                (data.type == "Point"),
+                ["geometry", "allocated_ch4_kt"],
+            ]
+
+            # get the non-point data
+            not_point_data = (
+                (
+                    data.loc[
+                        (data.type != "Point"),
+                        ["geometry", "allocated_ch4_kt"],
+                    ]
+                    # project to equal area for area calculations
+                    .to_crs("ESRI:102003")
+                    # calculate the original proxy area
+                    .assign(orig_area=lambda df: df.area)
+                )
+                # overlay the proxy with the cells, this results in splitting the
+                # original proxies split across any intersecting cells
+                .overlay(cell_gdf)
+                # calculate the now partial proxy area, then divide the partial proxy
+                # area to the original proxy area and multiply by the original
+                # allocated emissions to the get the partial/disaggregated new emis.
+                .assign(
+                    area=lambda df: df.area,
+                    allocated_ch4_kt=lambda df: (df["area"] / df["orig_area"])
+                    * df["allocated_ch4_kt"],
+                    # make this new shape a point, that fits nicely inside the cell and
+                    # we don't have to worry about boundary/edge issues with polygon /
+                    # cell alignment
+                    geometry=lambda df: df.centroid,
+                )
+                # back to 4326 for rasterization
+                .to_crs(4326)
+            )
+            # concat the data back together
+            data = pd.concat([point_data, not_point_data])
+
+        new_emi_val = data["allocated_ch4_kt"].sum()
+
+        # not rasterize the emissions and sum within cells
         ch4_kt_raster = rasterize(
             shapes=[
                 (shape, value)
@@ -147,6 +223,9 @@ def grid_allocated_emissions(point_gdf: gpd.GeoDataFrame):
             merge_alg=rasterio.enums.MergeAlg.add,
         )
         ch4_kt_result_rasters[year] = ch4_kt_raster
+        # QC print values during gridding.
+        # print(f"orig emi val: {orig_emi_val}, new emi val: {new_emi_val}")
+        # print(f"raster emi val: {ch4_kt_raster.sum()}")
 
     return ch4_kt_result_rasters
 
@@ -163,7 +242,7 @@ def calculate_flux(raster_dict: dict[str, np.array]):
     return ch4_flux_result_rasters
 
 
-def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
+def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> None:
     """take point proxy emi allocations and check against state inventory"""
     print("checking proxy emission allocation by state / year.")
     sum_check = (
@@ -195,6 +274,32 @@ def QC_point_proxy_allocation(proxy_df, emi_df) -> None:
                 f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
             )
         )
+    if plot:
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+
+        fig.suptitle("compare inventory to allocated emissions by state")
+        sns.lineplot(
+            data=sum_check,
+            x="year",
+            y="allocated_ch4_kt",
+            hue="state_code",
+            palette="tab20",
+            legend=False,
+            ax=axs[0],
+        )
+        axs[0].set(title="allocated emissions")
+
+        sns.lineplot(
+            data=sum_check,
+            x="year",
+            y="ch4_kt",
+            hue="state_code",
+            palette="tab20",
+            legend=False,
+            ax=axs[1],
+        )
+        axs[1].set(title="inventory emissions")
+
     return sum_check
 
 
@@ -226,6 +331,18 @@ def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> None:
         print("if not, these ones below DO NOT equal")
         display(sum_check[~sum_check["isclose"]])
     return sum_check
+
+
+def combine_gridded_emissions(input_list: list[dict]):
+    stack_list = []
+    for x in input_list:
+        stack = np.stack(list(x.values()))
+        stack_list.append(stack)
+    out_sum_stack = np.sum(np.stack(stack_list), axis=0)
+    out_dict = {}
+    for i, year in enumerate(input_list[0].keys()):
+        out_dict[year] = out_sum_stack[i, :, :]
+    return out_dict
 
 
 def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
@@ -334,7 +451,6 @@ def name_formatter(col: pd.Series):
     )
 
 
-# %%
 def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME):
     """
     Function to plot the raster data for each year in the dictionary of rasters that are
