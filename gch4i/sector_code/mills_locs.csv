@@ -1,0 +1,335 @@
+,mill id#,state_name,county,city,grades,state_code,ghgrp_match,lat,lon,FRS_match
+0,17,Alabama,Escambia,brewton,2.0,AL,1,31.079517,-87.115274,0
+1,310,Alabama,Colbert,cherokee,1.0,AL,0,34.75942,-87.89004,1
+2,15,Alabama,Russell,cottonton,1.0,AL,0,0.0,0.0,0
+3,9,Alabama,Marengo,demopolis,2.0,AL,0,32.51197,-87.822403,1
+4,5,Alabama,Clarke,jackson,1.0,AL,1,31.492253,-87.898805,0
+5,14,Alabama,Mobile,mobile,1.0,AL,0,30.70621,-88.11391,1
+6,501,Alabama,Mobile,mobile,1.0,AL,0,30.70621,-88.11391,1
+7,503,Alabama,Calhoun,oxford,1.0,AL,0,33.596443,-85.925985,1
+8,8,Alabama,Choctaw,pennington,3.0,AL,1,32.24181,-88.017239,0
+9,2,Alabama,Monroe,perdue hill,1.0,AL,1,31.580112,-87.490073,0
+10,18,Alabama,Wilcox,pine hill,2.0,AL,0,31.96588,-87.47898,1
+11,12,Alabama,Autauga,prattville,1.0,AL,0,32.418731,-86.471209,1
+12,13,Alabama,Dallas,selma,1.0,AL,0,32.42522,-86.871582,1
+13,16,Alabama,Jackson,stevenson,1.0,AL,0,34.86536,-85.8367,1
+14,24,Arkansas,Little River,ashdown,1.0,AR,1,33.64108,-94.11243,0
+15,515,Arkansas,Ashley,crossett,2.0,AR,0,33.12997,-91.9787,1
+16,30,Arkansas,Desha,mcgehee,1.0,AR,0,0.0,0.0,0
+17,28,Arkansas,Conway,morrilton,2.0,AR,1,35.097355,-92.73854,0
+18,25,Arkansas,Jefferson,pine bluff,1.0,AR,0,34.2207,-91.89561,1
+19,29,Arkansas,Jefferson,pine bluff,3.0,AR,0,34.2207,-91.89561,1
+20,22,Arizona,Coconino,flagstaff,1.0,AZ,0,35.19208,-111.63994,1
+21,530,California,Los Angeles,city of industry,1.0,CA,0,34.02405,-117.97153,1
+22,536,California,Los Angeles,los angeles,1.0,CA,0,33.951403,-118.229682,1
+23,FPL134,California,Los Angeles,los angeles,1.0,CA,0,33.951403,-118.229682,1
+24,537,California,San Bernardino,ontario,1.0,CA,0,34.04115,-117.55721,1
+25,539,California,Ventura,oxnard,1.0,CA,0,34.18904,-119.16598,1
+26,545,California,Alameda,san leandro,1.0,CA,0,37.71863,-122.18997,1
+27,546,California,Santa Clara,santa clara,1.0,CA,0,37.36341,-121.94325,1
+28,547,California,Santa Clara,santa clara,1.0,CA,0,37.36341,-121.94325,1
+29,551,California,Los Angeles,vernon,1.0,CA,0,33.99152,-118.23792,1
+30,565,Connecticut,New London,montville,1.0,CT,0,41.4495,-72.1304,1
+31,569,Connecticut,New London,uncasville,1.0,CT,0,0.0,0.0,0
+32,570,Connecticut,New London,versailles,1.0,CT,0,41.599323,-72.044707,1
+33,50,Florida,Escambia,cantonment,2.0,FL,0,30.610992,-87.312755,1
+34,52,Florida,Nassau,fernandina beach,1.0,FL,0,30.693883,-81.455767,1
+35,45,Florida,Miami-Dade,hialeah,1.0,FL,0,25.84787,-80.259772,1
+36,FPL117,Florida,Duval,jacksonville,2.0,FL,0,30.309906,-81.650094,1
+37,49,Florida,Putnam,palatka,4.0,FL,1,29.681083,-81.680217,0
+38,54,Florida,Bay,panama city,2.0,FL,0,30.18402,-85.62633,1
+39,56,Georgia,Richmond,augusta,1.0,GA,0,33.43039,-81.99725,1
+40,62,Georgia,Richmond,augusta,1.0,GA,0,33.43039,-81.99725,1
+41,66,Georgia,Richmond,augusta,1.0,GA,0,33.43039,-81.99725,1
+42,606,Georgia,Cobb,austell,1.0,GA,0,33.810808,-84.646318,1
+43,607,Georgia,Cobb,austell,1.0,GA,0,33.810808,-84.646318,1
+44,606A,Georgia,Cobb,austell,1.0,GA,0,33.810808,-84.646318,1
+45,59,Georgia,Early,cedar springs,2.0,GA,1,31.1694,-85.0941,0
+46,609,Georgia,Rockdale,conyers,2.0,GA,0,33.651388,-84.00816,1
+47,69,Georgia,Laurens,dublin,4.0,GA,0,32.55804,-83.02488,1
+48,68,Georgia,Chatham,macon,1.0,GA,1,32.77259,-83.63014,0
+49,64,Georgia,Liberty,riceboro,1.0,GA,1,31.74221,-81.406519,0
+50,60,Georgia,Effingham,rincon,1.0,GA,1,32.33113,-81.20178,0
+51,61,Georgia,Floyd,rome,1.0,GA,0,34.27535,-85.24654,1
+52,63,Georgia,Chatham,savannah,2.0,GA,0,32.088506,-81.130417,1
+53,65,Georgia,Lowndes,valdosta,1.0,GA,1,30.6949,-83.30442,0
+54,673,Iowa,Linn,cedar rapids,2.0,IA,0,41.87306,-91.67311,1
+55,79,Iowa,Lee,fort madison,1.0,IA,0,40.65753,-91.3185,1
+56,674,Iowa,Tama,tama,1.0,IA,0,41.961006,-92.580083,1
+57,72,Idaho,Nez Perce,lewiston,3.0,ID,1,46.429589,-116.973741,0
+58,74,Illinois,Cook,alsip,2.0,IL,0,41.661504,-87.712128,1
+59,75,Illinois,Cook,alsip,1.0,IL,0,41.661504,-87.712128,1
+60,638,Illinois,Tazewell,pekin,1.0,IL,0,40.55183,-89.6662,1
+61,641,Illinois,Winnebago,rockton,1.0,IL,0,42.450986,-89.07421,1
+62,FPL412A,Indiana,Vermillion,cayuga,3.0,IN,0,39.908167,-87.415361,1
+63,656,Indiana,Delaware,eaton,1.0,IN,0,40.3373,-85.35535,1
+64,659,Indiana,Blackford,hartford city,3.0,IN,0,40.44519,-85.36025,1
+65,76,Indiana,Vigo,terre haute,1.0,IN,0,39.4411,-87.42274,1
+66,662,Indiana,Wabash,wabash,1.0,IN,0,40.79481,-85.82882,1
+67,685,Kansas,Reno,hutchinson,1.0,KS,0,38.06959,-97.88257,1
+68,697,Kentucky,Hancock,hawesville,2.0,KY,1,37.894847,-86.685793,0
+69,698,Kentucky,Henderson,henderson,2.0,KY,0,37.81658,-87.58802,1
+70,700,Kentucky,Mason,maysville,2.0,KY,0,38.69004,-83.80226,1
+71,701,Kentucky,Daviess,owensboro,1.0,KY,0,37.76629,-87.10658,1
+72,81,Kentucky,Ballard,wickliffe,3.0,KY,0,36.944409,-89.07988,1
+73,87,Louisiana,Morehouse,bastrop,1.0,LA,0,32.78301,-91.914145,1
+74,85,Louisiana,Washington,bogalusa,1.0,LA,0,30.77489,-89.85586,1
+75,93,Louisiana,Natchitoches,campti,1.0,LA,0,31.905326,-93.173636,1
+76,83,Louisiana,Beauregard,deridder,2.0,LA,1,30.8627,-93.3751,0
+77,FPL508,Louisiana,Allen,elizabeth,1.0,LA,0,0.0,0.0,0
+78,91,Louisiana,Jackson,hodge,1.0,LA,0,32.281147,-92.732057,1
+79,88,Louisiana,De Soto,mansfield,2.0,LA,0,32.15889,-93.55667,1
+80,89,Louisiana,Rapides,pineville,1.0,LA,0,31.376626,-92.416093,1
+81,92,Louisiana,West Feliciana,saint francisville,3.0,LA,0,30.7677,-91.27633,1
+82,713,Louisiana,Caddo,shreveport,1.0,LA,0,32.3985,-93.749332,1
+83,1218,Louisiana,Caddo,shreveport,2.0,LA,0,32.3985,-93.749332,1
+84,FPL253,Louisiana,Webster,springhill,1.0,LA,0,32.98135,-93.45876,1
+85,90,Louisiana,Ouachita,west monroe,3.0,LA,0,32.48754,-92.14507,1
+86,86,Louisiana,East Baton Rouge,zachary,2.0,LA,1,30.650644,-91.281167,0
+87,111,Massachusetts,Franklin,erving,1.0,MA,0,42.60008,-72.37838,1
+88,113,Massachusetts,Worcester,fitchburg,2.0,MA,0,42.56198,-71.77325,1
+89,763,Massachusetts,Essex,haverhill,1.0,MA,0,42.77089,-71.07003,1
+90,764,Massachusetts,Hampden,holyoke,1.0,MA,0,42.19691,-72.61387,1
+91,765,Massachusetts,Hampden,holyoke,1.0,MA,0,42.19691,-72.61387,1
+92,757A,Massachusetts,Suffolk,hyde park,1.0,MA,0,0.0,0.0,0
+93,114,Massachusetts,Berkshire,lee,1.0,MA,0,42.278795,-73.264413,1
+94,773,Massachusetts,Worcester,otter river,2.0,MA,0,0.0,0.0,0
+95,112,Massachusetts,Franklin,turners falls,1.0,MA,0,42.60867,-72.56059,1
+96,744,Maryland,Carroll,finksburg,1.0,MD,0,39.49962,-76.8832,1
+97,109,Maryland,Allegany,luke,2.0,MD,0,39.47206,-79.057645,1
+98,FPL28,Maine,Cumberland,brunswick,1.0,ME,0,43.91068,-69.96327,1
+99,101,Maine,Hancock,bucksport,4.0,ME,0,44.57147,-68.79255,1
+100,99,Maine,Penobscot,east millinocket,2.0,ME,0,45.62501,-68.57297,1
+101,102,Maine,Franklin,jay,5.0,ME,1,44.5047,-70.2403,0
+102,104,Maine,Androscoggin,lisbon falls,1.0,ME,0,43.99236,-70.052809,1
+103,727,Maine,Aroostook,madawaska,4.0,ME,0,47.358139,-68.330855,1
+104,103,Maine,Somerset,madison,1.0,ME,0,44.798011,-69.88335,1
+105,105,Maine,Oxford,rumford,5.0,ME,0,44.54603,-70.545522,1
+106,FPL629,Maine,Somerset,shawmut,1.0,ME,0,0.0,0.0,0
+107,106,Maine,Somerset,skowhegan,3.0,ME,1,44.703333,-69.648889,0
+108,731,Maine,Kennebec,waterville,1.0,ME,0,44.556,-69.63721,1
+109,107,Maine,Cumberland,westbrook,1.0,ME,0,43.65729,-70.38475,1
+110,121,Michigan,Alpena,alpena,1.0,MI,0,45.064036,-83.424389,1
+111,115,Michigan,Calhoun,battle creek,1.0,MI,0,42.314981,-85.187282,1
+112,796,Michigan,Calhoun,battle creek,1.0,MI,0,42.314981,-85.187282,1
+113,797,Michigan,Calhoun,battle creek,1.0,MI,0,42.314981,-85.187282,1
+114,798,Michigan,Cheboygan,cheboygan,1.0,MI,0,45.638961,-84.481287,1
+115,799,Michigan,Saint Joseph,constantine,1.0,MI,0,41.8404,-85.6517,1
+116,123,Michigan,Delta,escanaba,4.0,MI,0,45.76468,-87.07973,1
+117,125,Michigan,Manistee,filer city,1.0,MI,0,0.0,0.0,0
+118,801,Michigan,Kalamazoo,kalamazoo,1.0,MI,0,42.289513,-85.57385,1
+119,803,Michigan,Baraga,lanse,1.0,MI,0,46.748675,-88.429838,1
+120,122,Michigan,Schoolcraft,manistique,2.0,MI,0,45.961679,-86.256005,1
+121,126,Michigan,Muskegon,muskegon,1.0,MI,0,43.207664,-86.187499,1
+122,808,Michigan,Berrien,niles,1.0,MI,0,41.82079,-86.25908,1
+123,127,Michigan,Ontonagon,ontonagon,1.0,MI,0,46.8711,-89.3271,1
+124,124,Michigan,Allegan,otsego,1.0,MI,0,42.46059,-85.69107,1
+125,120,Michigan,Dickinson,quinnesec,2.0,MI,0,45.803102,-87.963891,1
+126,819,Michigan,Saint Joseph,white pigeon,1.0,MI,0,41.7813,-85.7639,1
+127,829,Minnesota,Sherburne,becker,1.0,MN,0,45.385574,-93.869735,1
+128,132,Minnesota,Beltrami,bemidji,1.0,MN,0,47.44636,-94.86032,1
+129,830,Minnesota,Crow Wing,brainerd,1.0,MN,0,46.395493,-94.10872,1
+130,136,Minnesota,Carlton,cloquet,2.0,MN,1,46.723918,-92.436733,0
+131,131,Minnesota,Saint Louis,duluth,1.0,MN,0,46.75047,-92.14044,1
+132,135,Minnesota,Saint Louis,duluth,1.0,MN,0,46.75047,-92.14044,1
+133,128,Minnesota,Itasca,grand rapids,1.0,MN,0,47.18028,-93.53976,1
+134,129,Minnesota,Koochiching,international falls,2.0,MN,0,48.60375,-93.40597,1
+135,133,Minnesota,Morrison,little falls,1.0,MN,0,45.97194,-94.3713,1
+136,832,Minnesota,Ramsey,saint paul,2.0,MN,0,44.94662,-93.14941,1
+137,134,Minnesota,Stearns,sartell,2.0,MN,1,45.6547463,-94.2376146,0
+138,130,Minnesota,Scott,shakopee,1.0,MN,0,44.7975,-93.47782,1
+139,147,Missouri,Cooper,boonville,1.0,MO,0,38.94423,-92.77691,1
+140,860,Missouri,Clay,north kansas city,1.0,MO,0,39.12693,-94.5793,1
+141,138,Mississippi,Grenada,grenada,1.0,MS,0,33.830858,-89.819186,1
+142,144,Mississippi,Jones,laurel,1.0,MS,0,31.705292,-89.124453,1
+143,139,Mississippi,Lawrence,monticello,1.0,MS,1,31.625853,-90.0839,0
+144,141,Mississippi,Jackson,moss point,1.0,MS,0,30.42,-88.510833,1
+145,142,Mississippi,Adams,natchez,1.0,MS,0,31.514975,-91.424793,1
+146,143,Mississippi,Warren,vicksburg,2.0,MS,0,32.34513,-90.88327,1
+147,148,Montana,Missoula,missoula,1.0,MT,0,46.88933,-114.013038,1
+148,167,North Carolina,Haywood,canton,3.0,NC,0,35.53238,-82.84905,1
+149,170,North Carolina,Northampton,conway,1.0,NC,0,36.42986,-77.2288,1
+150,174,North Carolina,Richmond,cordova,1.0,NC,0,34.918133,-79.828483,1
+151,169,North Carolina,Wayne,dudley,1.0,NC,0,35.265612,-78.037956,1
+152,168,North Carolina,Robeson,lumberton,1.0,NC,0,34.61286,-79.12757,1
+153,178,North Carolina,Chatham,moncure,1.0,NC,0,35.60067,-79.04634,1
+154,176,North Carolina,Transylvania,pisgah forest,1.0,NC,0,35.266689,-82.705588,1
+155,171,North Carolina,Columbus,riegelwood,2.0,NC,0,34.350078,-78.215155,1
+156,172,North Carolina,Halifax,roanoke rapids,2.0,NC,0,36.478611,-77.643056,1
+157,175,North Carolina,Wilkes,roaring river,1.0,NC,0,36.1986,-81.0356,1
+158,177,North Carolina,Richmond,rockingham,1.0,NC,0,34.954075,-79.809005,1
+159,173,North Carolina,Nash,spring hope,1.0,NC,0,35.945396,-78.12133,1
+160,984,North Carolina,Jackson,sylva,1.0,NC,0,35.403709,-83.166601,1
+161,151,New Hampshire,Coos,berlin,1.0,NH,0,44.471944,-71.169444,1
+162,872,New Hampshire,Sullivan,claremont,1.0,NH,0,43.37349,-72.34598,1
+163,874,New Hampshire,Coos,gorham,1.0,NH,0,44.443738,-71.187308,1
+164,149,New Hampshire,Coos,groveton,1.0,NH,0,44.59891,-71.51054,1
+165,150,New Hampshire,Cheshire,hinsdale,1.0,NH,0,42.791831,-72.45712,1
+166,153,New Jersey,Bergen,elmwood park,1.0,NJ,0,40.90998,-74.11315,1
+167,152,New Jersey,Bergen,garfield,1.0,NJ,0,40.8869,-74.11905,1
+168,918,New Mexico,McKinley,prewitt,3.0,NM,0,35.41056,-108.08417,1
+169,162,New York,Lewis,beaver falls,1.0,NY,0,43.883889,-75.431944,1
+170,933,New York,Jefferson,carthage,1.0,NY,0,43.979601,-75.623831,1
+171,937,New York,Albany,cohoes,1.0,NY,0,42.75949,-73.6999,1
+172,163,New York,Saratoga,corinth,2.0,NY,0,43.24026,-73.8042,1
+173,166,New York,Broome,deposit,1.0,NY,0,42.07547,-75.3928,1
+174,161,New York,Warren,glens falls,1.0,NY,0,43.30737,-73.64217,1
+175,FPL21,New York,Washington,greenwich,1.0,NY,0,43.09715,-73.460403,1
+176,FPL101,New York,Washington,greenwich,1.0,NY,0,43.09715,-73.460403,1
+177,165,New York,Lewis,lyons falls,1.0,NY,0,43.6191,-75.31318,1
+178,FPL155,New York,Saratoga,mechanicville,1.0,NY,0,42.88687,-73.68657,1
+179,954,New York,Niagara,niagara falls,1.0,NY,0,43.086977,-79.009367,1
+180,2011GF5,New York,Niagara,niagara falls,1.0,NY,0,43.086977,-79.009367,1
+181,955,New York,Saint Lawrence,norfolk,2.0,NY,0,0.0,0.0,0
+182,FPL634,New York,Saint Lawrence,ogdensburg,1.0,NY,0,0.0,0.0,0
+183,961,New York,Saint Lawrence,potsdam,1.0,NY,0,44.71334,-74.99576,1
+184,160,New York,Saratoga,south glens falls,1.0,NY,0,43.295804,-73.597245,1
+185,952,New York,Richmond,staten island,2.0,NY,0,40.63574,-74.14724,1
+186,967,New York,Onondaga,syracuse,2.0,NY,0,43.07037,-76.10549,1
+187,164,New York,Essex,ticonderoga,1.0,NY,0,43.891973,-73.399275,1
+188,968,New York,Saratoga,waterford,1.0,NY,0,42.808854,-73.666951,1
+189,995,Ohio,Fairfield,baltimore,2.0,OH,0,39.84749,-82.6034,1
+190,187,Ohio,Ross,chillicothe,1.0,OH,0,39.32428,-82.97983,1
+191,997,Ohio,Hamilton,cincinnati,1.0,OH,0,39.308673,-84.468433,1
+192,998,Ohio,Hamilton,cincinnati,1.0,OH,0,39.308673,-84.468433,1
+193,189,Ohio,Pickaway,circleville,1.0,OH,0,39.56249,-82.94497,1
+194,190,Ohio,Coshocton,coshocton,1.0,OH,0,40.279858,-81.863097,1
+195,186,Ohio,Montgomery,dayton,1.0,OH,0,39.7631,-84.17611,1
+196,182,Ohio,Warren,franklin,1.0,OH,0,39.56665,-84.30109,1
+197,1003,Ohio,Butler,hamilton,1.0,OH,0,39.41323,-84.58124,1
+198,1008,Ohio,Stark,massillon,1.0,OH,0,40.80281,-81.54354,1
+199,1009,Ohio,Stark,massillon,1.0,OH,0,40.80281,-81.54354,1
+200,183,Ohio,Butler,middletown,1.0,OH,0,39.48975,-84.379292,1
+201,1012,Ohio,Butler,middletown,1.0,OH,0,39.48975,-84.379292,1
+202,184,Ohio,Erie,milan,1.0,OH,0,41.318276,-82.612503,1
+203,1016,Ohio,Jefferson,toronto,1.0,OH,0,40.462881,-80.601106,1
+204,1223,Oklahoma,Comanche,lawton,1.0,OK,0,34.59459,-98.50129,1
+205,191,Oklahoma,Muskogee,muskogee,1.0,OK,1,35.739778,-95.286917,0
+206,192,Oklahoma,Mayes,pryor,1.0,OK,0,36.23623,-95.27908,1
+207,193,Oklahoma,Mayes,pryor,1.0,OK,0,36.23623,-95.27908,1
+208,1030,Oklahoma,Mayes,pryor,1.0,OK,0,36.23623,-95.27908,1
+209,194,Oklahoma,McCurtain,valliant,2.0,OK,0,33.997523,-95.112446,1
+210,212,Oregon,Linn,albany,2.0,OR,0,44.63145,-123.05306,1
+211,199,Oregon,Columbia,clatskanie,1.0,OR,1,46.157035,-123.407836,0
+212,198,Oregon,Benton,corvallis,1.0,OR,0,44.570754,-123.288892,1
+213,208,Oregon,Washington,forest grove,1.0,OR,0,45.525154,-123.080341,1
+214,203,Oregon,Douglas,gardiner,2.0,OR,0,43.73609,-124.1125,1
+215,200,Oregon,Linn,halsey,2.0,OR,0,44.39309,-123.16334,1
+216,197,Oregon,Klamath,klamath falls,1.0,OR,0,42.18129,-121.75211,1
+217,201,Oregon,Linn,lebanon,1.0,OR,0,44.48511,-122.831,1
+218,206,Oregon,Jackson,medford,1.0,OR,0,42.34231,-122.89365,1
+219,207,Oregon,Yamhill,newberg,1.0,OR,0,0.0,0.0,0
+220,210,Oregon,Coos,north bend,1.0,OR,0,43.437373,-124.263879,1
+221,195,Oregon,Clackamas,oregon city,4.0,OR,0,45.36451,-122.58647,1
+222,204,Oregon,Umatilla,pilot rock,1.0,OR,0,45.477429,-118.835763,1
+223,196,Oregon,Columbia,saint helens,2.0,OR,0,45.859729,-122.796443,1
+224,1224,Oregon,Columbia,saint helens,1.0,OR,0,45.859729,-122.796443,1
+225,211,Oregon,Lane,springfield,1.0,OR,0,44.0653,-122.97395,1
+226,202,Oregon,Lincoln,toledo,2.0,OR,1,44.614453,-123.936832,0
+227,209,Oregon,Clackamas,west linn,1.0,OR,0,45.37052,-122.61568,1
+228,1055,Pennsylvania,Monroe,delaware water gap,1.0,PA,0,40.999327,-75.146544,1
+229,215,Pennsylvania,Erie,erie,1.0,PA,0,42.13833,-80.03946,1
+230,220,Pennsylvania,Elk,johnsonburg,1.0,PA,0,41.49085,-78.67752,1
+231,1068,Pennsylvania,Northumberland,new columbia,1.0,PA,0,41.057024,-76.867564,1
+232,1070,Pennsylvania,Philadelphia,philadelphia,1.0,PA,0,40.00236,-75.12179,1
+233,1071,Pennsylvania,Philadelphia,philadelphia,1.0,PA,0,40.00236,-75.12179,1
+234,1072,Pennsylvania,Lackawanna,ransom,1.0,PA,0,41.390278,-75.821846,1
+235,1075,Pennsylvania,Berks,reading,1.0,PA,0,40.320901,-75.938887,1
+236,213,Pennsylvania,Blair,roaring spring,1.0,PA,0,40.33869,-78.40555,1
+237,219,Pennsylvania,York,spring grove,2.0,PA,0,39.87159,-76.867315,1
+238,214,Pennsylvania,Northumberland,sunbury,1.0,PA,0,40.870919,-76.787187,1
+239,217,Pennsylvania,Bradford,towanda,1.0,PA,1,41.763902,-76.416188,0
+240,1077,Pennsylvania,Blair,tyrone,1.0,PA,0,40.71094,-78.204142,1
+241,230,South Carolina,Marlboro,bennettsville,3.0,SC,0,34.599747,-79.766787,1
+242,221,South Carolina,York,catawba,2.0,SC,0,34.848069,-80.900724,1
+243,222,South Carolina,York,catawba,1.0,SC,0,34.848069,-80.900724,1
+244,FPL40,South Carolina,York,catawba,3.0,SC,0,34.848069,-80.900724,1
+245,1092,South Carolina,Spartanburg,cowpens,2.0,SC,0,35.01576,-81.80162,1
+246,224,South Carolina,Richland,eastover,2.0,SC,0,33.882526,-80.659455,1
+247,227,South Carolina,Florence,florence,1.0,SC,0,34.2124,-79.77794,1
+248,225,South Carolina,Georgetown,georgetown,2.0,SC,0,33.42112,-79.447665,1
+249,228,South Carolina,Darlington,hartsville,2.0,SC,0,34.37712,-80.06598,1
+250,229,South Carolina,Charleston,north charleston,4.0,SC,0,32.898695,-79.97317,1
+251,226,South Carolina,Marion,sellers,1.0,SC,0,0.0,0.0,0
+252,1093,South Carolina,Greenville,taylors,1.0,SC,0,34.9205,-82.27574,1
+253,232,Tennessee,McMinn,calhoun,3.0,TN,0,35.29721,-84.75264,1
+254,1106,Tennessee,Hamilton,chattanooga,1.0,TN,0,35.02046,-85.29272,1
+255,236,Tennessee,Hardin,counce,1.0,TN,0,35.049,-88.267,1
+256,231,Tennessee,Roane,harriman,1.0,TN,0,0.0,0.0,0
+257,240,Tennessee,Sullivan,kingsport,1.0,TN,0,36.54426,-82.58539,1
+258,239,Tennessee,Knox,knoxville,1.0,TN,0,35.97623,-83.96553,1
+259,235,Tennessee,Loudon,loudon,1.0,TN,0,35.77167,-84.33065,1
+260,233,Tennessee,Shelby,memphis,2.0,TN,0,35.04245,-89.92582,1
+261,1109,Tennessee,Shelby,memphis,1.0,TN,0,35.04245,-89.92582,1
+262,234,Tennessee,Humphreys,waverly,1.0,TN,0,36.079272,-87.926354,1
+263,1122,Texas,Dallas,dallas,1.0,TX,0,32.69114,-96.91935,1
+264,246,Texas,Angelina,diboll,1.0,TX,0,31.191713,-94.788946,1
+265,244,Texas,Bowie,domino,1.0,TX,0,0.0,0.0,0
+266,247,Texas,Hardin,evadale,2.0,TX,1,30.3387,-94.06635,0
+267,1123,Texas,Kaufman,forney,2.0,TX,0,32.74107,-96.44188,1
+268,1124,Texas,Harris,galena park,1.0,TX,0,29.72261,-95.24271,1
+269,241,Texas,Harris,houston,2.0,TX,0,30.00752,-95.45236,1
+270,242,Texas,Angelina,lufkin,2.0,TX,0,31.291969,-94.62726,1
+271,243,Texas,Orange,orange,1.0,TX,0,30.091105,-93.742588,1
+272,245,Texas,Harris,pasadena,3.0,TX,0,29.64024,-95.08649,1
+273,252,Virginia,Amherst,amherst,2.0,VA,0,37.5108,-78.9103,1
+274,249,Virginia,Hanover,ashland,1.0,VA,0,37.81362,-77.44176,1
+275,250,Virginia,Bedford,big island,2.0,VA,0,37.532832,-79.355595,1
+276,257,Virginia,Covington City,covington,1.0,VA,0,37.81974,-80.11151,1
+277,254,Virginia,Danville City,danville,1.0,VA,0,36.578037,-79.485599,1
+278,253a,Virginia,Franklin City,franklin,1.0,VA,0,36.68485,-76.91291,1
+279,255,Virginia,Hopewell City,hopewell,1.0,VA,0,37.302012,-77.264354,1
+280,FPL642,Virginia,Hopewell City,hopewell,1.0,VA,0,37.302012,-77.264354,1
+281,251,Virginia,Greensville,jarratt,1.0,VA,0,36.818025,-77.481702,1
+282,1153,Virginia,Lynchburg City,lynchburg,1.0,VA,0,37.397419,-79.221362,1
+283,1155,Virginia,Richmond City,richmond,1.0,VA,0,37.54243,-77.38535,1
+284,256,Virginia,King William,west point,2.0,VA,0,37.57555,-76.84222,1
+285,248,Vermont,Windham,putney,1.0,VT,0,42.97656,-72.52076,1
+286,1140,Vermont,Franklin,sheldon springs,1.0,VT,0,0.0,0.0,0
+287,262,Washington,Clark,camas,2.0,WA,0,45.582929,-122.407758,1
+288,265,Washington,Snohomish,everett,1.0,WA,0,48.026206,-122.182504,1
+289,266,Washington,Cowlitz,longview,5.0,WA,0,46.119434,-122.925961,1
+290,267,Washington,Cowlitz,longview,2.0,WA,0,46.119434,-122.925961,1
+291,275,Washington,Cowlitz,longview,2.0,WA,0,46.119434,-122.925961,1
+292,261,Washington,Clallam,port angeles,1.0,WA,0,48.106079,-123.471534,1
+293,270,Washington,Jefferson,port townsend,4.0,WA,1,48.093793,-122.796806,0
+294,264,Washington,Spokane,spokane,2.0,WA,0,47.67008,-117.43993,1
+295,1167,Washington,Pierce,sumner,1.0,WA,0,47.210116,-122.248832,1
+296,273,Washington,Pierce,tacoma,2.0,WA,0,47.247943,-122.403016,1
+297,1168,Washington,Pierce,tacoma,1.0,WA,0,47.247943,-122.403016,1
+298,268,Washington,Pend Oreille,usk,1.0,WA,0,48.2901,-117.2706,1
+299,260,Washington,Walla Walla,wallula,4.0,WA,1,46.10396,-118.9184,0
+300,1191,Wisconsin,Outagamie,appleton,1.0,WI,0,44.2631,-88.36136,1
+301,1192,Wisconsin,Outagamie,appleton,1.0,WI,0,44.2631,-88.36136,1
+302,1193,Wisconsin,Rock,beloit,1.0,WI,0,42.52773,-89.01966,1
+303,306,Wisconsin,Marathon,brokaw,1.0,WI,0,45.030632,-89.659984,1
+304,278,Wisconsin,Outagamie,combined locks,4.0,WI,0,44.27033,-88.30358,1
+305,289,Wisconsin,Chippewa,cornell,1.0,WI,0,45.16532,-91.15554,1
+306,296,Wisconsin,Eau Claire,eau claire,1.0,WI,0,44.8307,-91.50889,1
+307,286,Wisconsin,Brown,green bay,1.0,WI,0,44.51955,-87.98276,1
+308,1198,Wisconsin,Brown,green bay,2.0,WI,0,44.51955,-87.98276,1
+309,292,Wisconsin,Outagamie,kaukauna,1.0,WI,0,44.30666,-88.2564,1
+310,291,Wisconsin,Outagamie,kimberly,1.0,WI,0,44.26301,-88.35495,1
+311,279,Wisconsin,Rusk,ladysmith,1.0,WI,0,45.46343,-91.08877,1
+312,300,Wisconsin,Winnebago,menasha,1.0,WI,0,44.237145,-88.436061,1
+313,1203,Wisconsin,Winnebago,menasha,2.0,WI,0,44.237145,-88.436061,1
+314,1204,Wisconsin,Milwaukee,milwaukee,1.0,WI,0,43.12273,-87.94739,1
+315,307,Wisconsin,Marathon,mosinee,1.0,WI,0,44.79031,-89.69372,1
+316,294,Wisconsin,Winnebago,neenah,1.0,WI,0,44.17095,-88.47003,1
+317,1206,Wisconsin,Winnebago,neenah,1.0,WI,0,44.17095,-88.47003,1
+318,280,Wisconsin,Wood,nekoosa,1.0,WI,0,44.3143,-89.8962,1
+319,301,Wisconsin,Marinette,niagara,1.0,WI,0,45.77049,-87.9922,1
+320,293,Wisconsin,Oconto,oconto falls,1.0,WI,0,44.88394,-88.14462,1
+321,284,Wisconsin,Price,park falls,1.0,WI,0,45.93657,-90.44776,1
+322,287,Wisconsin,Price,phillips,1.0,WI,0,45.69098,-90.39749,1
+323,281,Wisconsin,Wood,port edwards,1.0,WI,0,44.336667,-89.856111,1
+324,308,Wisconsin,Marathon,rothschild,1.0,WI,0,44.88913,-89.6248,1
+325,302,Wisconsin,Portage,stevens point,1.0,WI,0,44.512137,-89.545215,1
+326,1210,Wisconsin,Portage,stevens point,1.0,WI,0,44.512137,-89.545215,1
+327,288,Wisconsin,Douglas,superior,1.0,WI,0,46.678841,-92.101281,1
+328,277,Wisconsin,Lincoln,tomahawk,1.0,WI,1,45.450849,-89.740303,0
+329,295,Wisconsin,Lincoln,tomahawk,1.0,WI,1,45.450849,-89.740303,0
+330,303,Wisconsin,Wood,wisconsin rapids,1.0,WI,0,44.40557,-89.847805,1
+331,1212,Wisconsin,Wood,wisconsin rapids,2.0,WI,0,44.40557,-89.847805,1
+332,1179,West Virginia,Jefferson,halltown,1.0,WV,0,39.313611,-77.798056,1
+333,FPL577,West Virginia,Brooke,wellsburg,1.0,WV,0,40.28457,-80.60806,1
