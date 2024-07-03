@@ -11,7 +11,6 @@ Output Files:
                     - {FULL_NAME}_ch4_emi_flux.tif
 Notes:
 TODO: get latest inventory data
-TODO: update to use facility locations from 2024 GHGI state inventory files(?)
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -47,7 +46,7 @@ from gch4i.utils import (
     tg_to_kt,
     write_ncdf_output,
     write_tif_output,
-    calculate_flux
+    calculate_flux,
 )
 
 # from pytask import Product, task
@@ -55,9 +54,10 @@ from gch4i.utils import (
 
 gpd.options.io_engine = "pyogrio"
 
-
+# TODO: move to emis file
 def get_ferro_inventory_data(input_path):
-    """read in the ch4_kt values for each state"""
+    """read in the ghgi_ch4_kt values for each state"""
+    
     emi_df = (
         # read in the data
         pd.read_excel(
@@ -110,11 +110,11 @@ def get_ferro_inventory_data(input_path):
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
-        .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
+        .assign(ghgi_ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
         .drop(columns=["ch4_tg"])
         # make the columns types correcet
-        .astype({"year": int, "ch4_kt": float})
-        .fillna({"ch4_kt": 0})
+        .astype({"year": int, "ghgi_ch4_kt": float})
+        .fillna({"ghgi_ch4_kt": 0})
         # get only the years we need
         .query("year.between(@min_year, @max_year)")
     )
@@ -123,7 +123,7 @@ def get_ferro_inventory_data(input_path):
 
 def get_ferro_proxy_data(EPA_inventory_path, frs_path, subpart_k_url, state_gdf):
     # The facilities have multiple reporting units for each year. This will read in the
-    # facilities data and compute the facility level sum of ch4_kt emissions for each
+    # facilities data and compute the facility level sum of emissions for each
     # year. This pulls from the raw table but ends in the same form as the table on sheet
     # "GHGRP_kt_Totals"
 
@@ -142,7 +142,7 @@ def get_ferro_proxy_data(EPA_inventory_path, frs_path, subpart_k_url, state_gdf)
         .melt(
             id_vars=["facility_name", "state_name"],
             var_name="year",
-            value_name="ch4_kt",
+            value_name="est_ch4",
         )
         .astype({"year": int})
         .assign(formatted_fac_name=lambda df: name_formatter(df["facility_name"]))
@@ -309,10 +309,12 @@ SECTOR_NAME = "industry"
 SOURCE_NAME = "ferroalloy production"
 FULL_NAME = "_".join([IPCC_ID, SECTOR_NAME, SOURCE_NAME]).replace(" ", "_")
 
+VERSION = "draft"
+
 netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
 netcdf_description = (
     f"Gridded EPA Inventory - {SECTOR_NAME} - "
-    f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
+    f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID} - {VERSION}"
 )
 
 # PATHS
@@ -385,7 +387,7 @@ sns.relplot(
     kind="line",
     data=EPA_state_emi_df,
     x="year",
-    y="ch4_kt",
+    y="ghgi_ch4_kt",
     hue="state_code",
     palette="tab20",
     legend=False,
@@ -402,7 +404,7 @@ ferro_proxy_gdf = get_ferro_proxy_data(
 g = sns.lineplot(
     ferro_proxy_gdf,
     x="year",
-    y="ch4_kt",
+    y="est_ch4",
     hue="facility_name",
     legend=True,
 )
@@ -420,7 +422,7 @@ print("For Each Facility with Missing Data, How Many Missing Years")
 display(ferro_proxy_gdf[ferro_proxy_gdf.is_empty]["formatted_fac_name"].value_counts())
 # a plot of the timeseries of emission by facility
 sns.lineplot(
-    data=ferro_proxy_gdf, x="year", y="ch4_kt", hue="facility_name", legend=False
+    data=ferro_proxy_gdf, x="year", y="est_ch4", hue="facility_name", legend=False
 )
 
 # %% MAP PROXY DATA --------------------------------------------------------------------
@@ -435,32 +437,12 @@ allocated_emis_gdf = allocate_emissions_to_proxy(
     EPA_state_emi_df,
     proxy_has_year=True,
     use_proportional=True,
-    proportional_col_name="ch4_kt",
+    proportional_col_name="est_ch4",
 )
 allocated_emis_gdf
 
 # %% STEP 4.1: QC PROXY ALLOCATED EMISSIONS BY STATE AND YEAR --------------------------
 proxy_qc_result = QC_proxy_allocation(allocated_emis_gdf, EPA_state_emi_df)
-
-sns.relplot(
-    kind="line",
-    data=proxy_qc_result,
-    x="year",
-    y="allocated_ch4_kt",
-    hue="state_code",
-    palette="tab20",
-    legend=False,
-)
-
-sns.relplot(
-    kind="line",
-    data=EPA_state_emi_df,
-    x="year",
-    y="ch4_kt",
-    hue="state_code",
-    palette="tab20",
-    legend=False,
-)
 proxy_qc_result
 
 # %% STEP 5: RASTERIZE THE CH4 KT AND FLUX ---------------------------------------------

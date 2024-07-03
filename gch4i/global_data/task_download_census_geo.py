@@ -6,7 +6,7 @@ from typing import Annotated
 import requests
 from pytask import Product, mark, task
 
-from gch4i.config import census_reference_geometry_list, global_data_dir_path
+from gch4i.config import global_data_dir_path
 
 
 def create_kwargs(geometry_list):
@@ -24,7 +24,7 @@ def create_kwargs(geometry_list):
     return id_to_kwargs
 
 
-_ID_TO_KWARGS = create_kwargs(census_reference_geometry_list)
+_ID_TO_KWARGS = create_kwargs(["county", "state"])
 
 for _id, kwargs in _ID_TO_KWARGS.items():
 

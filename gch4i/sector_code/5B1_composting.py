@@ -34,6 +34,7 @@ from gch4i.config import (
     max_year,
     min_year,
     tmp_data_dir_path,
+    emi_data_dir_path,
 )
 from gch4i.utils import (
     QC_emi_raster_sums,
@@ -53,8 +54,8 @@ from gch4i.utils import (
 
 gpd.options.io_engine = "pyogrio"
 
-
-def get_composting_inventory_data(input_path):
+# TODO: move to emis file
+def get_composting_inventory_data(input_path, output_path):
     emi_df = (
         pd.read_excel(
             input_path,
@@ -92,15 +93,16 @@ def get_composting_inventory_data(input_path):
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
-        .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
+        .assign(ghgi_ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
         .drop(columns=["ch4_tg"])
         # make the columns types correcet
-        .astype({"year": int, "ch4_kt": float})
-        .fillna({"ch4_kt": 0})
+        .astype({"year": int, "ghgi_ch4_kt": float})
+        .fillna({"ghgi_ch4_kt": 0})
         # get only the years we need
         .query("year.between(@min_year, @max_year)")
         .query("state_code.isin(@state_gdf['state_code'])")
     )
+    emi_df.to_csv(output_path)
     return emi_df
 
 
@@ -282,7 +284,7 @@ sns.relplot(
     kind="line",
     data=EPA_state_emi_df,
     x="year",
-    y="ch4_kt",
+    y="ghgi_ch4_kt",
     hue="state_code",
     palette="tab20",
     legend=False,
@@ -344,7 +346,7 @@ sns.relplot(
     kind="line",
     data=EPA_state_emi_df,
     x="year",
-    y="ch4_kt",
+    y="ghgi_ch4_kt",
     hue="state_code",
     palette="tab20",
     legend=False,
