@@ -37,12 +37,12 @@ from gch4i.config import (ghgi_data_dir_path, max_year, min_year,
                           tmp_data_dir_path, data_dir_path)
 from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
 from gch4i.utils import calc_conversion_factor, load_area_matrix, write_tif_output
-
 # %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data
 # Set output paths
 # EEM: add constants (note, we should try to do conversions using variable names, so 
 #      that we don't have constants hard coded into the scripts)
-tg_to_kt = 1000                     # conversion factor, teragrams to kilotonnes
+tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
+t_to_kt = 0.001  # conversion factor, tonnes to kilotonnes
 
 
 # @mark.persist
@@ -57,11 +57,9 @@ INDUSTRY_NAME = "2B8_industry_petrochemical"
 # for this sector.
 EPA_inputfile = Path(ghgi_data_dir_path / "State_Petrochemicals_1990-2021.xlsx")
 
-# NOTE: this file is temporarily used to get the location of facilities. We expect the
-# inventory team to deliver the final workbook with facility locations in it.
-EPA_ghgrp_petrochemical_inputfile = (
-    ghgi_data_dir_path / "SubpartX_Petrochemical_Facilities.csv"
-)
+# NOTE: this file uses the Envirofacts GHG Query Builder to retrieve
+# Supart X facility-level emissions and locations (latitude, longitude).
+EPA_ghgrp_petrochemical_inputfile = "https://data.epa.gov/efservice/x_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV"
 
 # OUTPUT FILES (TODO: include netCDF flux files)
 ch4_kt_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_kt_per_year.tif"
@@ -73,7 +71,7 @@ ch4_flux_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
 # in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function 
 # and specify which we're using here?
 area_matrix = load_area_matrix()
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 # %% STEP 1. Load GHGI-Proxy Mapping Files
 
@@ -90,18 +88,17 @@ proxy_map_df.query("GHGI_Emi_Group == 'Emi_Petro'").merge(
     ghgi_map_df.query("GHGI_Emi_Group == 'Emi_Petro'"), on="GHGI_Emi_Group"
 )
 
-
 # HACL: The next few lines of code developing the petro_map_data_dict needs to be updated
 # for how data is handled in the petrochemicals workbook. There is no single tab called
 # Petrochemical Calculations that reports facility-level emissions. Instead, state-level
 # CH4 and CO2 emissions are reported on State Summary.
-petro_map_data_dict = {}
-petro_map_data_dict["Emi_Petro"] = {
-    "Map_Petro": {
-        "facility_data_file": EPA_inputfile,
-        "sheet_name": "Petrochemical Calculations",
-    }
-}
+# petro_map_data_dict = {}
+# petro_map_data_dict["Emi_Petro"] = {
+#     "Map_Petro": {
+#         "facility_data_file": EPA_inputfile,
+#         "sheet_name": "Petrochemical Calculations",
+#     }
+# }
 # #load GHGI Mapping Groups
 # names = pd.read_excel(Ind_Mapping_inputfile, sheet_name = "GHGI Map - Ind", usecols = "A:B",skiprows = 1, header = 0)
 # colnames = names.columns.values
@@ -128,51 +125,17 @@ petro_map_data_dict["Emi_Petro"] = {
 
 # -----------------------------------------------------------------------
 
-# %%
-
-
-# state_gdf = gpd.read_file(
-#     "https://www2.census.gov/geo/tiger/GENZ2022/shp/cb_2022_us_state_20m.zip"
-# )
-
-
 # %% 
 # STEP 2: Read In EPA State GHGI Emissions by Year
 
 # read in the ch4_kt values for each state
-# This pulls from the full table, but ends up the same as the CH4 kt table found on
-# sheet "Ferroallow_State_Disagg_calcs"
-# EPA_ferro_emissions = (
-#     # read in the data
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="State Summary",
-#         skiprows=124,
-#         nrows=57,
-#         usecols="B:AJ",
-#     )
-#     # name column names lower
-#     .rename(columns=lambda x: str(x).lower())
-#     # drop columns we don't need
-#     .drop(columns=["source", "ghg"])
-#     # remove the national total column
-#     .query("state != 'National'")
-#     # set the index as the state
-#     .set_index("state")
-#     # drop states that are all na / have no data
-#     .dropna(how="all")
-#     # reset the index
-#     .reset_index()
-#     # make the table long
-#     .melt(id_vars="state", var_name="year", value_name="ch4_kt")
-#     .astype({"year": int})
-#     .query("year.between(@min_year, @max_year)")
-# )
+# NOTE: Update to the correct sheet name "InvDB" once we have the final data
 EPA_petro_emissions = (
     # read in the data
     pd.read_excel(
         EPA_inputfile,
-        sheet_name="InvDB",
+        # sheet_name="InvDB",
+        sheet_name="InvDB_HL_Edits",
         skiprows=15,
         nrows=457,
         usecols="A:AO",
@@ -203,6 +166,10 @@ EPA_petro_emissions = (
     .dropna(how="all")
     # reset the index state back to a column
     .reset_index()
+    # sum the subreference emissions for one emission per state/year combo
+    .groupby('state').sum()
+    # reset the index state back to a column
+    .reset_index()
     # make the table long by state/year
     .melt(id_vars="state", var_name="year", value_name="ch4_tg")
     .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
@@ -210,8 +177,9 @@ EPA_petro_emissions = (
     # make the columns types correcet
     .astype({"year": int, "ch4_kt": float})
     .fillna({"ch4_kt": 0})
-    # get only the years we need
-    .query("year.between(@min_year, @max_year)")
+    # # get only the years we need
+    .query("year.between(@min_year, 2021)")
+    # .query("year.between(@min_year, @max_year)")
 )
 EPA_petro_emissions.head()
 
@@ -242,111 +210,67 @@ def task_map_petro_proxy():
 
 # The facilities have multiple reporting units for each year. This will read in the
 # facilities data and compute the facility level sum of ch4_kt emissions for each
-# year. This pulls from the raw table but ends in the same form as the table on sheet
-# "GHGRP_kt_Totals"
+# year.
+
+subpart_x_df = pd.read_csv(EPA_ghgrp_petrochemical_inputfile, 
+                           usecols=(
+                               "facility_name", 
+                               "facility_id", 
+                               "reporting_year", 
+                               "ghg_quantity", 
+                               "latitude", 
+                               "longitude", 
+                               "state", 
+                               "zip"))
+subpart_x_df
 
 # read in the SUMMARY facilities emissions data
 petro_facilities_df = (
-    pd.read_excel(
-        EPA_inputfile,
-        sheet_name="Petrochemical Calculations",
-        skiprows=72,
-        nrows=12,
-        usecols="A:AI",
-    )
+    pd.read_csv(
+        EPA_ghgrp_petrochemical_inputfile,
+        # 13: facility name, 0: facility_id
+        usecols=("facility_name",
+                 "facility_id",
+                 "reporting_year",
+                 "ghg_quantity",
+                 "latitude",
+                 "longitude",
+                 "state",
+                 "zip"))
     .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"facility": "facility_name", "state": "fac_state"})
-    .drop(columns=["year opened"])
-    .melt(id_vars=["facility_name", "fac_state"], var_name="year", value_name="ch4_kt")
+    .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
+    .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
+    .drop(columns=["ch4_t"])
+    .drop_duplicates(subset=['facility_id', 'year'], keep='last')
     .astype({"year": int})
-    .assign(
-        formatted_fac_name=lambda df: df["facility_name"]
-        .str.replace("  ", " ")
-        .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-    )
-    .query("year.between(@min_year, @max_year)")
+    # .query("year.between(@min_year, @max_year)")
+    .query("year.between(@min_year, 2021)")
+    .reset_index()
+    .drop(columns='index')
+
 )
 
-# all_facilities = (
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="noncbi_k_gasinfo",
-#         skiprows=1,
-#         # nrows=12,
-#         # usecols="A:AI",
-#     )
-#     .rename(columns=lambda x: str(x).lower())
-#     .query("ghgasname == 'Methane'")
-#     .drop(columns=["submission_id", "ghgasname", "otherghgasname"])
-#     .rename(columns={"reporting_year": "year", "ghgasquantity": "ch4_mt"})
-#     # .melt(id_vars=["facility_name", "fac_state"], var_name="year", value_name="ch4_kt")
-#     .astype({"year": int})
-#     .assign(
-#         formatted_fac_name=lambda df: df["facility_name"]
-#         .str.replace("  ", " ")
-#         .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-#     )
-#     .query("year.between(@min_year, @max_year)")
-# )
+petro_facilities_df.head()
 
-# # read in the combined USGS / EPA facilities data
-# all_facilities = (
-#     pd.read_excel(
-#         EPA_inputfile,
-#         sheet_name="GHGRP_USGS_Facilities",
-#         skiprows=2,
-#         # nrows=57,
-#         # usecols="B:AJ",
-#     )
-#     .rename(columns=lambda x: str(x).lower())
-#     .rename(columns={"reporting_year": "year", "ch4 (kt)": "ch4_kt"})
-#     .loc[:, ["facility_id", "facility_name", "year", "ch4_kt"]]
-#     .groupby(["facility_id", "facility_name", "year"])["ch4_kt"]
-#     .sum()
-#     .reset_index()
-#     .assign(
-#         formatted_fac_name=lambda df: df["facility_name"]
-#         .str.replace("  ", " ")
-#         .replace("[^a-zA-Z0-9 -]", "", regex=True)
-#     )
-#     .query("year.between(@min_year, @max_year)")
-# )
-
-# NOTE: again this is temporary to get locations to work with for now. When final
-# workbook is delivered this will be updated to get locations.
-petro_subx_info_df = pd.read_csv(EPA_ghgrp_petrochemical_inputfile).rename(
-    columns=lambda x: str(x).split(".")[-1].lower()
-)
-petro_subx_info_gdf = (
+petro_facilities_gdf = (
     gpd.GeoDataFrame(
-        petro_subx_info_df,
+        petro_facilities_df,
         geometry=gpd.points_from_xy(
-            petro_subx_info_df["longitude"],
-            petro_subx_info_df["latitude"],
+            petro_facilities_df["longitude"],
+            petro_facilities_df["latitude"],
             crs=4326,
         ),
     )
-    .assign(
-        formatted_fac_name=lambda df: df["facility_name"]
-        .str.replace("  ", " ")
-        .replace("[^a-zA-Z0-9 -]", "", regex=True)  # .str.casefold()
-    )
-    .loc[:, ["formatted_fac_name", "state", "zip", "geometry"]]
-    .drop_duplicates(["formatted_fac_name", "state", "zip"])
+    .drop(columns=["latitude", "longitude"])
+    .loc[:, ["facility_id", "facility_name", "state", "zip", "geometry", "year", "ch4_kt"]]
 )
-
-# merge the location data with the facility emissions data
-petro_facilities_gdf = petro_subx_info_gdf.merge(
-    petro_facilities_df,
-    on=["formatted_fac_name"],
-    how="right",
-)
-
 petro_facilities_gdf.head()
+
+
 # %%
 # quick look at the data.
 sns.lineplot(
-    petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_name", legend=True
+    petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_id", legend=False
 )
 # %%
 # EPA_ghgrp_ferro_inputfile = ghgi_path / "SubpartK_Ferroalloy.csv"
@@ -368,7 +292,7 @@ sns.lineplot(
 if not (petro_facilities_gdf.shape[0] == petro_facilities_df.shape[0]):
     print("WARNING the merge shape does not match the original data")
 # %% # save a shapefile of the v3 ferro facilities for reference
-fac_locations = petro_facilities_gdf.dissolve("formatted_fac_name")
+fac_locations = petro_facilities_gdf.dissolve("facility_id")
 fac_locations[fac_locations.is_valid].loc[:, ["geometry"]].to_file(
     tmp_data_dir_path / "v3_petro_facilities.shp.zip", driver="ESRI Shapefile"
 )
@@ -387,12 +311,12 @@ display(petro_facilities_gdf[petro_facilities_gdf["zip"].isna()]["year"].value_c
 print("For Each Facility with Missing Data, How Many Missing Years")
 display(
     petro_facilities_gdf[petro_facilities_gdf["zip"].isna()][
-        "formatted_fac_name"
+        "facility_id"
     ].value_counts()
 )
 # a plot of the timeseries of emission by facility
 sns.lineplot(
-    data=petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_name", legend=False
+    data=petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_id", legend=False
 )
 
 # %%
@@ -433,6 +357,11 @@ sns.lineplot(
 
 # This does the allocation for us in a function by state and year.
 
+# NOTE: HACL - This function breaks in the case of states having facilities in Subpart X, 
+# but no emissions reported in the state inventory. Dummy data for these states has been
+# created to allow this to run correctly, but it may need to be reworked to properly
+# handle this case.
+
 
 def state_year_allocation_emissions(fac_emissions, inventory_df):
 
@@ -442,6 +371,7 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 
     # get the target state and year
     state, year = fac_emissions.name
+
     # get the total proxy data (e.g., emissions) within that state and year. 
     # It will be a single value.
     emi_sum = inventory_df[
@@ -462,6 +392,9 @@ def state_year_allocation_emissions(fac_emissions, inventory_df):
 petro_facilities_gdf["allocated_ch4_kt"] = petro_facilities_gdf.groupby(
     ["state", "year"]
 )["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_petro_emissions)
+
+petro_facilities_gdf.head()
+
 # %% QA/QC
 # We now check that the sum of facility emissions equals the EPA GHGI emissions by state
 # and year. The resulting sum_check table shows you where the emissions data DO NOT
@@ -479,18 +412,34 @@ sum_check = (
         )
     )
 )
-display(sum_check[~sum_check["check_diff"]])
+
+with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+    display(sum_check[~sum_check["check_diff"]])
 
 # NOTE: For now, facilities data are not final / missing. We don't have facilities in
 # all the state summaries that are reporting, and we may be missing facilities even
 # within states that are represented. If these lists match, we have a good idea of
 # what is missing currently due to the preliminary data.
+
+# NOTE: As of May 2024:
+# States in the inventory with no Subpart X facilities: CO, DE, WY
+# States with Subpart X facilities but are not in the inventory: IL, IA, AL, KS, KY, PA
+# Dummy data was created in the inventory spreadsheet for IL, IA, AL, KS, KY, and PA
+# to allow the allocation code to run and should be updated with the final data.
 print(
     (
         "states with no facilities in them: "
         f"{EPA_petro_emissions[~EPA_petro_emissions['state'].isin(petro_facilities_gdf['state'])]['state'].unique()}"
     )
 )
+
+print(
+    (
+        "states with facilities in them but not accounted in state inventory: "
+        f"{petro_facilities_gdf[~petro_facilities_gdf['state'].isin(EPA_petro_emissions['state'])]['state'].unique()}"
+    )
+)
+
 print(
     (
         "states with unaccounted emissions: "

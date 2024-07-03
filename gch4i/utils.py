@@ -29,6 +29,18 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (
 #    0.001  # Tg conversion factor
 # )
+GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
+tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
+t_to_kt = 1000  # conversion factor, tonnes to kilotonnes
+
+
+def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> float:
+    return (
+        10**9
+        * Avogadro
+        / float(Molarch4 * days_in_year * 24 * 60 * 60)
+        / cell_area_matrix
+    )
 GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass
 # to CO2e units, from IPPC AR4)
 # EEM: add constants (note, we should try to do conversions using variable names, so
