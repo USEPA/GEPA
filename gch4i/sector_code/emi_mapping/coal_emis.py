@@ -4,7 +4,7 @@ Date Last Modified:     2024-07-02
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 Input Files:            - Coal_90-22_FRv1-InvDBcorrection.xlsx
-Output Files:           - TBD
+Output Files:           - Do not use output. This is a single function script.
 Notes:                  - This version of emi mapping is draft for mapping .py files
 """
 
