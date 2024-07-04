@@ -1,10 +1,10 @@
 """
 Name:                   coal_emis.py
-Date Last Modified:     2024-07-02
+Date Last Modified:     2024-07-03
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 Input Files:            - Coal_90-22_FRv1-InvDBcorrection.xlsx
-Output Files:           - TBD
+Output Files:           - coal_post_surf_emi.csv, coal_post_under_emi.csv, coal_surf_emi.csv, coal_under_emi.csv
 Notes:                  - This version of emi mapping is draft for mapping .py files
 """
 
