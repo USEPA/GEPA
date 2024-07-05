@@ -86,7 +86,7 @@ proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="proxy_emi_mapping").q
 proxy_mapping
 
 
-# %% STEP 2: Read In EPA State GHGI Emissions by Year ----------------------------------
+# %% READ IN EPA DATA, ALLOCATE, GRID, AND QC ----------------------------------
 
 
 emi_dict = {}
@@ -95,12 +95,19 @@ for mapping_row in proxy_mapping.itertuples():
     emi_name = mapping_row.emi
     proxy_name = mapping_row.proxy
 
+    # STEP 2: Read In EPA State GHGI Emissions by Year
+    # EEM: question -- can we create a script that we can run separately to run all the 
+    #  get_emi and get_proxy functions? Then we can include a comment in this
+    # script that states that those functions need to be run first
+    # Also see comments on the emissions script. The emission values need to be corrected
     emi_dict[emi_name] = {}
     emi_path = list(emi_data_dir_path.glob(f"{emi_name}*"))[0]
     emi_dict[emi_name]["emi"] = pd.read_csv(emi_path)
+    
     # STEP 3: GET AND FORMAT PROXY DATA ---------------------------------------------
     proxy_path = list(proxy_data_dir_path.glob(f"{proxy_name}*.parquet"))[0]
     emi_dict[emi_name]["proxy"] = gpd.read_parquet(proxy_path)
+    
     # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES -----------------------
     emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
         emi_dict[emi_name]["proxy"],
@@ -130,6 +137,8 @@ ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
 
 # %% STEP 5.2: QC FLUX AGAINST V2 ------------------------------------------------------
+## EEM: comment - do we need to import these functions if there were already imported 
+## in the untils.py script? 
 import osgeo
 import rioxarray
 import rasterio

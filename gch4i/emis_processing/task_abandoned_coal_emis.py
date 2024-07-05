@@ -31,7 +31,10 @@ def task_get_abd_coal_inv_data(
         .rename(columns=lambda x: str(x).lower())
         # drop columns we don't need
         # # get just methane emissions
-        .query("(ghg == 'CH4') & (subcategory1.str.contains('Liberated'))")
+        ## EEM: TODO - need to take the sum of liberated and recovered and used
+        ##  in otherwords, the net methane emissions is the methane
+        ## liberated minus the amount of methane recovered and used. 
+        .query("(ghg == 'CH4')")
         .drop(
             columns=[
                 "sector",
