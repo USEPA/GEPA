@@ -1,16 +1,16 @@
+
 """
-Name:                   coal_emis.py
+Name:                   coal_emis_inclusive.py
 Date Last Modified:     2024-07-03
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 Input Files:            - Coal_90-22_FRv1-InvDBcorrection.xlsx
-Output Files:           - coal_post_surf_emi.csv, coal_post_under_emi.csv, coal_surf_emi.csv, coal_under_emi.csv
+Output Files:           - coal_post_surf_emi.csv, coal_post_under_emi.csv,
+                        coal_surf_emi.csv, coal_under_emi.csv
 Notes:                  - This version of emi mapping is draft for mapping .py files
 """
-
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 import pandas as pd
-
 from gch4i.config import (
     V3_DATA_PATH,
     ghgi_data_dir_path,
@@ -18,11 +18,11 @@ from gch4i.config import (
     min_year,
     tmp_data_dir_path,
 )
-
 from gch4i.utils import tg_to_kt
 
-
 # %% STEP 1. Create Emi Mapping Functions
+
+
 def get_coal_inv_data(input_path, output_path, subcategory):
     """read in the ch4_kt values for each state
     User is required to specify the subcategory of interest:
@@ -39,7 +39,8 @@ def get_coal_inv_data(input_path, output_path, subcategory):
     }
     subcategory_string = subcategory_strings.get(subcategory)
     if subcategory_string is None:
-        raise ValueError("Invalid subcategory. Please choose from coal_post_surf, coal_post_under, coal_surf, coal_under.")
+        raise ValueError("""Invalid subcategory. Please choose from coal_post_surf,
+                        coal_post_under, coal_surf, coal_under.""")
     emi_df = (
         # read in the data
         pd.read_excel(
@@ -78,29 +79,38 @@ def get_coal_inv_data(input_path, output_path, subcategory):
     )
     emi_df.to_csv(output_path, index=False)
 
-
 # %% STEP 2. Set Input/Output Paths
 
 # INPUT PATHS
 inventory_workbook_path = ghgi_data_dir_path / "coal/Coal_90-22_FRv1-InvDBcorrection.xlsx"
-
 
 # OUTPUT PATHS
 output_path_coal_post_surf = V3_DATA_PATH / "emis/coal_post_surf_emi.csv"
 output_path_coal_post_under = V3_DATA_PATH / "emis/coal_post_under_emi.csv"
 output_path_coal_surf = V3_DATA_PATH / "emis/coal_surf_emi.csv"
 output_path_coal_under = V3_DATA_PATH / "emis/coal_under_emi.csv"
-
 # %% STEP 3. Function Calls
-
 # Post-Mining (Surface)
-get_coal_inv_data(inventory_workbook_path, output_path_coal_post_surf, "coal_post_surf")
-
+get_coal_inv_data(
+    inventory_workbook_path,
+    output_path_coal_post_surf,
+    "coal_post_surf"
+    )
 # Post-Mining (Underground)
-get_coal_inv_data(inventory_workbook_path, output_path_coal_post_under, "coal_post_under")
-
+get_coal_inv_data(
+    inventory_workbook_path,
+    output_path_coal_post_under,
+    "coal_post_under"
+    )
 # Surface Mining
-get_coal_inv_data(inventory_workbook_path, output_path_coal_surf, "coal_surf")
-
+get_coal_inv_data(
+    inventory_workbook_path,
+    output_path_coal_surf,
+    "coal_surf"
+    )
 # Liberated | Recovered & Used
-get_coal_inv_data(inventory_workbook_path, output_path_coal_under, "coal_under")
+get_coal_inv_data(
+    inventory_workbook_path,
+    output_path_coal_under,
+    "coal_under"
+    )
