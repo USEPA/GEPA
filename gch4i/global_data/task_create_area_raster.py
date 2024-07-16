@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Annotated
 
-import osgeo
 import geopandas as gpd
 import numpy as np
 import rasterio
