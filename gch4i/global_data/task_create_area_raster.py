@@ -3,6 +3,7 @@ from typing import Annotated
 
 import geopandas as gpd
 import numpy as np
+import osgeo  # noqa: F401
 import rasterio
 from pytask import Product, mark, task
 from rasterio.features import shapes

@@ -1,7 +1,7 @@
 import numpy as np
 from gch4i.gridding import GEPA_PROFILE
 from gch4i.config import global_data_dir_path
-import osgeo
+import osgeo  # noqa: F401
 import rasterio
 from pathlib import Path
 
@@ -12,12 +12,15 @@ Res01 = 0.1  # degrees
 tg_scale = (
     0.001  # Tg scale number [New file allows for the exclusion of the territories]
 )
-GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units)
+# global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units)
+GWP_CH4 = 25
+
 
 # TODO finish this and move to utils
 def calc_conversion_factor(days_in_year, cell_area_matrix):
-     return (
-            10**9 * Avogadro / float(Molarch4 * days_in_year * 24 * 60 * 60) / cell_area_matrix
+    return (
+            10**9 * Avogadro / float(Molarch4 * days_in_year * 24 * 60 * 60) /
+            cell_area_matrix
         )
 
 

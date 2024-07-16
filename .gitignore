@@ -63,6 +63,7 @@ target/
 
 # exclude data from source control by default
 /data/
+/v*_data/
 
 # ipynb checkpoints
 .ipynb_checkpoints
@@ -84,5 +85,13 @@ code/Final_Gridded_Data/Extension/v2_input_data/*
 code/Final_Gridded_Data/Extension/v2_ext_final/*
 code/Global_Functions/Calc_Line*
 
+# Map project files
+*.aprx
+*.qgz
+*.ppkx
+
 *.zip
 .env
+
+# IntelliJ related files (PyCharm)
+.idea/*

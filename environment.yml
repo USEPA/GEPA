@@ -34,7 +34,12 @@ dependencies:
   - openpyxl
   # - tabula-py
   - pyarrow
+  - pyogrio  # added by Chandler for gridding & global data
+  # - pygeos  # added by Chandler for gridding & global data
   - geopandas
+  # - dask=2024.2.1  # added by Chandler for gridding & global data
+  - dask  # added by Chandler for gridding & global data
+  - dask-geopandas  # added by Chandler for gridding & global data
   # - pyodbc
   # - geopy
   # - PyPDF2

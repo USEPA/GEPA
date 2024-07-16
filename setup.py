@@ -2,6 +2,7 @@ import os
 
 from setuptools import setup, find_packages
 
+
 def readme() -> str:
     """Utility function to read the README.md.
 
@@ -16,6 +17,7 @@ def readme() -> str:
         String of readed README.md file.
     """
     return open(os.path.join(os.path.dirname(__file__), 'README.md')).read()
+
 
 setup(
     name='gch4i',
