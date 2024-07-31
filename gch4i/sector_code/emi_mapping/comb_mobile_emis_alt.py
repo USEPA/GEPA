@@ -1,6 +1,6 @@
 
 """
-Name:                   comb_mobile_emis.py
+Name:                   comb_mobile_emis_alt.py
 Date Last Modified:     2024-07-10
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of combustion - mobile emissions to State, Year,
@@ -42,21 +42,12 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
     - comb_mob_gas_hwy_emi
     """
     subcategory_strings = {
-        "comb_mob_aircraft_emi": "Aircraft",
-        "comb_mob_alt_fuel_emi": "Alternative Fuel Vehicles$",
-        "comb_mob_buses_emi": "Buses",
-        "comb_mob_con_equip_emi": "Construction Equipment",
-        "comb_mob_diesel_emi": "Diesel Highway$",
-        "comb_mob_farm_equip_emi": "Farm Equipment",
-        "comb_mob_ldt_emi": "Light-Duty Trucks",
-        "comb_mob_loco_emi": "Locomotives",
-        "comb_mob_mcycle_emi": "Motorcycles",
-        "comb_mob_other_emi": "Other",
-        "comb_mob_pass_emi": "Passenger Cars",
-        "comb_mob_vehicles_emi": "Vehicles",
-        "comb_mob_waterways_emi": "Boats",
-        "comb_mob_non_hwy_emi": "Non-Highway$",
-        "comb_mob_gas_hwy_emi": "Gasoline Highway$"
+        "comb_mob_roads_emis": "Buses|Vehicles|Trucks|Motorcycles|Passenger Cars",
+        "comb_mob_pop_emis": ["Aircraft", "Other"],
+        "comb_mob_mines_emis": ["Construction Equipment"],
+        "comb_mob_farm_emis": ["Farm Equipment"],
+        "comb_mob_railroads_emis": ["Locomotives"],
+        "comb_mob_waterways_emis": ["Boats"]
         }
     subcategory_string = subcategory_strings.get(
         subcategory
@@ -82,7 +73,8 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .drop(columns=["state"])
         .rename(columns={'unnamed: 0': 'state_code'})
         # Remove CO2 from sector and get emissions for specific subcategory
-        .query('sector.str.contains("CH4") == True' and f'sector.str.contains("{subcategory_string}", regex={"False" if subcategory_string in ["comb_mob_alt_fuel_emi", "comb_mob_diesel_emi", "comb_mob_non_hwy_emi", "comb_mob_gas_hwy_emi"] else "True"})', engine='python')
+        #.query('sector.str.contains("CH4") == True and sector.str.contains("|".join(subcategory_string), regex=True)', engine='python')
+        .query('sector.str.contains("CH4") == True and sector.str.contains("|".join(map(subcategory_string)), regex=True)')
         # change sector inputs to unified subcategory
         .drop(columns=["sector"])
         # Drop rows with 0 across all years
@@ -105,13 +97,15 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .query("year.between(@min_year, @max_year)")
         .sort_values("year")
     )
-    emi_df2.to_csv(output_path, index=False)
+    return emi_df2
+    # emi_df2.to_csv(output_path, index=False)
 
 
 # %% STEP 2. Set Input/Output Paths
 # INPUT PATHS
 inventory_workbook_path = ghgi_data_dir_path / "SIT Mobile Dataframe 5.24.2023.xlsx"
 # outpath = tmp_data_dir_path / "comb_mobile_emis_test.csv"
+
 
 # OUTPUT PATHS
 output_path_comb_mob_aircraft_emi = V3_DATA_PATH / "emis/comb_mob_aircraft_emi.csv"
@@ -220,3 +214,53 @@ get_comb_mobile_inv_data(
     output_path_comb_mob_gas_hwy_emi,
     "comb_mob_gas_hwy_emi"
     )
+
+# %% TESTING
+
+emi_df = (
+        # read in the data
+        pd.read_excel(
+            inventory_workbook_path,
+            sheet_name="Table",
+            nrows=3112,
+            usecols="A:AI",
+            index_col=None
+        )
+    )
+
+emi_df2 = (emi_df.rename(columns=lambda x: str(x).lower())
+    .drop(columns=["state"])
+    .rename(columns={'unnamed: 0': 'state_code'})
+    # Remove CO2 from sector and get emissions for specific subcategory
+    .query('sector.str.contains("CH4") == True and sector.str.contains("|".join(subcategory_string), regex=True)', engine='python')
+    )
+
+# change sector inputs to unified subcategory
+    .drop(columns=["sector"])
+    # Drop rows with 0 across all years
+    .replace(0, pd.NA)
+    .set_index("state_code")
+    .dropna(how="all")
+    .fillna(0)
+    # reset the index state back to a column
+    .reset_index()
+    # make table long by state/year
+    .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
+    .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
+    .drop(columns=["ch4_tg"])
+    # correct column types
+    .astype({"year": int, "ch4_kt": float})
+    .fillna({"ch4_kt": 0})
+    # group by state and year and sum the ch4_tg column
+    .groupby(["state_code", "year"]).sum().reset_index()
+    # filter to required years
+    .query("year.between(@min_year, @max_year)")
+    .sort_values("year")
+    )
+
+
+get_comb_mobile_inv_data(
+    inventory_workbook_path,
+    output_path_comb_mob_aircraft_emi,
+    "comb_mob_roads_emis"
+)

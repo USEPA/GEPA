@@ -87,11 +87,10 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .drop(columns=["sector"])
         # Drop rows with 0 across all years
         .replace(0, pd.NA)
-        .set_index("state_code")
-        .dropna(how="all")
+        .dropna(subset=emi_df.columns[emi_df.columns.get_loc('1990'):], how='all')
         .fillna(0)
         # reset the index state back to a column
-        .reset_index()
+        .reset_index(drop=True)
         # make table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
         .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
@@ -106,7 +105,7 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .sort_values("year")
     )
     emi_df2.to_csv(output_path, index=False)
-
+    # return emi_df2
 
 # %% STEP 2. Set Input/Output Paths
 # INPUT PATHS
@@ -220,3 +219,38 @@ get_comb_mobile_inv_data(
     output_path_comb_mob_gas_hwy_emi,
     "comb_mob_gas_hwy_emi"
     )
+
+# %% STEP TEST. Test Function Calls
+testing = get_comb_mobile_inv_data(
+    inventory_workbook_path,
+    output_path_comb_mob_vehicles_emi,
+    "comb_mob_vehicles_emi"
+    )
+
+# %% TEST FOR YEAR PULL
+
+inventory_workbook_path = ghgi_data_dir_path / "SIT Mobile Dataframe 5.24.2023.xlsx"
+
+
+emi_df = (
+    # read in the data
+    pd.read_excel(
+        inventory_workbook_path,
+        sheet_name="Table",
+        nrows=3112,
+        # usecols="A:AI",
+        index_col=None
+    )
+    )
+
+first_row = emi_df.columns
+year_columns = [col for col in first_row if str(col).isdigit()]
+years = [int(col) for col in year_columns]
+
+df_filtered = emi_df.loc[:, emi_df.columns.astype(str) <= str(max_year)]
+
+columns_to_keep = [col for col in emi_df.columns if not str(col).isdigit() or int(col) <= max_year]
+emi_df = emi_df[columns_to_keep]
+
+
+# %%
