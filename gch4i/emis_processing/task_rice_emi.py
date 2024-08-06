@@ -2,19 +2,17 @@ from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
-from pytask import Product, task, mark
+from pytask import Product, mark, task
 
-from gch4i.config import (emi_data_dir_path, ghgi_data_dir_path, max_year,
-                          min_year)
+from gch4i.config import emi_data_dir_path, ghgi_data_dir_path, max_year, min_year
 from gch4i.utils import tg_to_kt
 
 
 @mark.persist
 @task(id="ab_coal_emi")
 def task_get_abd_coal_inv_data(
-    input_path: Path = ghgi_data_dir_path
-    / "abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx",
-    output_path: Annotated[Path, Product] = emi_data_dir_path / "abd_coal_emi.csv",
+    input_path: Path = (ghgi_data_dir_path / "rice_cultivation/Rice_90-22_State.xlsx"),
+    output_path: Annotated[Path, Product] = emi_data_dir_path / "rice_cult_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
@@ -24,8 +22,8 @@ def task_get_abd_coal_inv_data(
             input_path,
             sheet_name="InvDB",
             skiprows=15,
-            nrows=115,
-            usecols="A:BA",
+            # nrows=115,
+            # usecols="A:BA",
         )
         # name column names lower
         .rename(columns=lambda x: str(x).lower())
@@ -33,7 +31,7 @@ def task_get_abd_coal_inv_data(
         # # get just methane emissions
         ## EEM: TODO - need to take the sum of liberated and recovered and used
         ##  in otherwords, the net methane emissions is the methane
-        ## liberated minus the amount of methane recovered and used. 
+        ## liberated minus the amount of methane recovered and used.
         .query("(ghg == 'CH4')")
         .drop(
             columns=[
@@ -78,4 +76,3 @@ def task_get_abd_coal_inv_data(
         .query("year.between(@min_year, @max_year)")
     )
     emi_df.to_csv(output_path, index=False)
-

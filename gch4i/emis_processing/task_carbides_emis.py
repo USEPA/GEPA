@@ -2,19 +2,23 @@ from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
-from pytask import Product, task, mark
+from pytask import Product, mark, task
 
-from gch4i.config import (emi_data_dir_path, ghgi_data_dir_path, max_year,
-                          min_year)
+from gch4i.config import (
+    emi_data_dir_path,
+    ghgi_data_dir_path,
+    max_year,
+    min_year,
+    proxy_data_dir_path,
+)
 from gch4i.utils import tg_to_kt
 
 
 @mark.persist
-@task(id="ab_coal_emi")
-def task_get_abd_coal_inv_data(
-    input_path: Path = ghgi_data_dir_path
-    / "abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx",
-    output_path: Annotated[Path, Product] = emi_data_dir_path / "abd_coal_emi.csv",
+@task(id="carbides_emi")
+def task_carbides_emi_(
+    input_path: Path = ghgi_data_dir_path / "industry/State_Carbides_1990-2022.xlsx",
+    output_path: Annotated[Path, Product] = emi_data_dir_path / "carbides_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
@@ -24,8 +28,8 @@ def task_get_abd_coal_inv_data(
             input_path,
             sheet_name="InvDB",
             skiprows=15,
-            nrows=115,
-            usecols="A:BA",
+            # nrows=115,
+            # usecols="A:BA",
         )
         # name column names lower
         .rename(columns=lambda x: str(x).lower())
@@ -33,7 +37,7 @@ def task_get_abd_coal_inv_data(
         # # get just methane emissions
         ## EEM: TODO - need to take the sum of liberated and recovered and used
         ##  in otherwords, the net methane emissions is the methane
-        ## liberated minus the amount of methane recovered and used. 
+        ## liberated minus the amount of methane recovered and used.
         .query("(ghg == 'CH4')")
         .drop(
             columns=[
@@ -79,3 +83,17 @@ def task_get_abd_coal_inv_data(
     )
     emi_df.to_csv(output_path, index=False)
 
+
+@mark.persist
+@task(id="carbides_proxy")
+def task_carbided_proxy(
+    input_path: Path = "",
+    output_path: Path = "",
+) -> None:
+    pass
+
+
+@mark.persist
+@task(id="carbides_gridding")
+def task_carbides_gridding() -> None:
+    pass
