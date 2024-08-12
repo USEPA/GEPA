@@ -64,15 +64,15 @@ for _id, kwargs in _ID_TO_KWARGS.items():
             gpd.GeoDataFrame.from_features(results, crs=4326)
             .to_crs("ESRI:102003")
             .assign(
-                cell_area_sq_m=lambda df: df.area,
+                cell_area_sq_cm=lambda df: df.area * 10000,
                 # cell_area_sq_mi=lambda df: df["cell_area_sq_m"] / 2.59e6,
             )
         )
 
         # We have to resort the dataframe on the id value to get it in the right order
         # for turning into a matrix
-        area_matrix = area_gdf.sort_values("raster_val", ascending=False)[
-            "cell_area_sq_m"
+        area_matrix = area_gdf.sort_values("raster_val", ascending=True)[
+            "cell_area_sq_cm"
         ].values.reshape(profile.arr_shape)
 
         # get the GEPA profile, make the count 1
@@ -81,5 +81,6 @@ for _id, kwargs in _ID_TO_KWARGS.items():
         # save the file for all other tasks to use
         with rasterio.open(output_path, "w", **profile.profile) as dst:
             dst.write(area_matrix, 1)
+
 
 # %%

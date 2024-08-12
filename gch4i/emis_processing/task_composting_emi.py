@@ -5,19 +5,14 @@ from typing import Annotated
 import pandas as pd
 from pytask import Product, mark, task
 
-from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
-    max_year,
-    min_year,
-)
+from gch4i.config import (V3_DATA_PATH, emi_data_dir_path, ghgi_data_dir_path,
+                          max_year, min_year)
 from gch4i.utils import tg_to_kt
 
 # %%
 # comes from the spreadsheet
 
-source_name = "abandoned_coal"
+source_name = "composting"
 
 proxy_path = Path(
     (
@@ -30,11 +25,8 @@ proxy_path = Path(
 proxy_data = pd.read_excel(proxy_path, sheet_name="testing").query(
     f"gch4i_name == '{source_name}'"
 )
-proxy_data
 
-# %%
 emi_parameters_dict = {}
-
 for emi_name, data in proxy_data.groupby("emi"):
     emi_parameters_dict[emi_name] = {
         "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
@@ -44,15 +36,18 @@ for emi_name, data in proxy_data.groupby("emi"):
 
 emi_parameters_dict
 
+# input_path, source_list, output_path = emi_parameters_dict['composting_emi'].values()
+# input_path.exists()
+
+
 # %%
 for _id, _kwargs in emi_parameters_dict.items():
 
     @mark.persist
     @task(id=_id, kwargs=_kwargs)
-    def task_abandoned_coal_emis(
+    def task_composting_emi(
         input_path: Path, source_list: list, output_path: Annotated[Path, Product]
     ) -> None:
-
         source_list = [x.strip().casefold() for x in source_list]
         year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
@@ -69,7 +64,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             .rename(columns=lambda x: str(x).lower())
             # format the names of the emission source group strings
             .assign(
-                ghgi_source=lambda df: df["subcategory1"]
+                ghgi_source=lambda df: df["category"]
                 .astype(str)
                 .str.strip()
                 .str.casefold()
@@ -110,6 +105,3 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         emi_df
         emi_df.to_csv(output_path, index=False)
-
-
-# %%

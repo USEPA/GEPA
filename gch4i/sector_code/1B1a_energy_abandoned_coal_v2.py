@@ -19,6 +19,7 @@ from zipfile import ZipFile
 import calendar
 import datetime
 
+from pyarrow import parquet
 import osgeo  # noqa
 import duckdb
 import geopandas as gpd
@@ -80,8 +81,10 @@ ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 # %% STEP 1. Load GHGI-Proxy Mapping Files
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="proxy_emi_mapping").query(
-    f"Category == '{SOURCE_NAME}'"
+proxy_mapping = (
+    pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping")
+    .query(f"Category == '{SOURCE_NAME}'")
+    .drop_duplicates(subset=["emi", "proxy"])
 )
 proxy_mapping
 
@@ -96,18 +99,18 @@ for mapping_row in proxy_mapping.itertuples():
     proxy_name = mapping_row.proxy
 
     # STEP 2: Read In EPA State GHGI Emissions by Year
-    # EEM: question -- can we create a script that we can run separately to run all the 
+    # EEM: question -- can we create a script that we can run separately to run all the
     #  get_emi and get_proxy functions? Then we can include a comment in this
     # script that states that those functions need to be run first
     # Also see comments on the emissions script. The emission values need to be corrected
     emi_dict[emi_name] = {}
     emi_path = list(emi_data_dir_path.glob(f"{emi_name}*"))[0]
     emi_dict[emi_name]["emi"] = pd.read_csv(emi_path)
-    
+
     # STEP 3: GET AND FORMAT PROXY DATA ---------------------------------------------
     proxy_path = list(proxy_data_dir_path.glob(f"{proxy_name}*.parquet"))[0]
     emi_dict[emi_name]["proxy"] = gpd.read_parquet(proxy_path)
-    
+
     # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES -----------------------
     emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
         emi_dict[emi_name]["proxy"],
@@ -120,14 +123,14 @@ for mapping_row in proxy_mapping.itertuples():
     emi_dict[emi_name]["allocation_qc"] = QC_proxy_allocation(
         emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi"]
     )
-    # STEP X: GRID EMISSIONS --------------------------------------------------------
-    emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
-        emi_dict[emi_name]["allocated"]
-    )
-    # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
-    emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
-        emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi"]
-    )
+    # # STEP X: GRID EMISSIONS --------------------------------------------------------
+    # emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
+    #     emi_dict[emi_name]["allocated"]
+    # )
+    # # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
+    # emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
+    #     emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi"]
+    # )
 
 
 # %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER --------------------------------------
@@ -137,8 +140,8 @@ ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
 
 # %% STEP 5.2: QC FLUX AGAINST V2 ------------------------------------------------------
-## EEM: comment - do we need to import these functions if there were already imported 
-## in the untils.py script? 
+## EEM: comment - do we need to import these functions if there were already imported
+## in the untils.py script?
 import osgeo
 import rioxarray
 import rasterio
@@ -157,6 +160,9 @@ def qc_flux_emis(data: dict, v2_name: str):
         v2_data = np.where(v2_data == 0, np.nan, v2_data)
         v2_data_dict[v2_year] = v2_data
 
+    # descriptive statistics
+    # plot of flux distributions / histograms
+    # map of differences
     result_list = []
     for year in data.keys():
         if year in v2_data_dict.keys():
@@ -209,5 +215,4 @@ np.nanmax(v3_data)
 np.nanmax(v2_data)
 
 # %%
-proxy_path
-# %%
+
