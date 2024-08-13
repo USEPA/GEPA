@@ -1,27 +1,27 @@
 # %%
-import calendar
-import datetime
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
+import calendar
+import datetime
 
+from pyarrow import parquet
+import pandas as pd
+import osgeo
 import geopandas as gpd
 import numpy as np
-import osgeo
-
-# from pyarrow import parquet
-import pandas as pd
 import seaborn as sns
-from pytask import Product, mark, task
+from pytask import Product, task, mark
 
 from gch4i.config import (
     V3_DATA_PATH,
-    ghgi_data_dir_path,
+    proxy_data_dir_path,
     global_data_dir_path,
+    ghgi_data_dir_path,
     max_year,
     min_year,
-    proxy_data_dir_path,
 )
+
 from gch4i.utils import name_formatter
 
 # %%
@@ -31,7 +31,7 @@ from gch4i.utils import name_formatter
 @task(id="abd_coal_proxy")
 def task_get_abd_coal_proxy_data(
     inventory_workbook_path: Path = ghgi_data_dir_path
-    / "abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx",
+    / "coal/AbandonedCoalMines1990-2022_FRv1.xlsx",
     msha_path: Path = V3_DATA_PATH / "sector/abandoned_mines/Mines.zip",
     county_path: str = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",

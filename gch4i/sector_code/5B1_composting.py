@@ -54,6 +54,57 @@ from gch4i.utils import (
 
 gpd.options.io_engine = "pyogrio"
 
+# TODO: move to emis file
+def get_composting_inventory_data(input_path, output_path):
+    emi_df = (
+        pd.read_excel(
+            input_path,
+            sheet_name="InvDB",
+            skiprows=15,
+            nrows=115,
+            usecols="A:AO",
+        )
+        # name column names lower
+        .rename(columns=lambda x: str(x).lower())
+        # drop columns we don't need
+        .drop(
+            columns=[
+                "sector",
+                "source",
+                "subsource",
+                "fuel",
+                "subref",
+                "2nd ref",
+                "exclude",
+            ]
+        )
+        # get just methane emissions
+        .query("ghg == 'CH4'")
+        # remove that column
+        .drop(columns="ghg")
+        # set the index to state
+        .rename(columns={"state": "state_code"})
+        .set_index("state_code")
+        # covert "NO" string to numeric (will become np.nan)
+        .apply(pd.to_numeric, errors="coerce")
+        # drop states that have all nan values
+        .dropna(how="all")
+        # reset the index state back to a column
+        .reset_index()
+        # make the table long by state/year
+        .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
+        .assign(ghgi_ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
+        .drop(columns=["ch4_tg"])
+        # make the columns types correcet
+        .astype({"year": int, "ghgi_ch4_kt": float})
+        .fillna({"ghgi_ch4_kt": 0})
+        # get only the years we need
+        .query("year.between(@min_year, @max_year)")
+        .query("state_code.isin(@state_gdf['state_code'])")
+    )
+    emi_df.to_csv(output_path)
+    return emi_df
+
 
 def get_composting_proxy_data(
     excess_food_op_path,
