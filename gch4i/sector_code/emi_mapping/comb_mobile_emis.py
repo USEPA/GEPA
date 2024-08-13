@@ -87,11 +87,10 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .drop(columns=["sector"])
         # Drop rows with 0 across all years
         .replace(0, pd.NA)
-        .set_index("state_code")
-        .dropna(how="all")
+        .dropna(subset=emi_df.columns[emi_df.columns.get_loc('1990'):], how='all')
         .fillna(0)
         # reset the index state back to a column
-        .reset_index()
+        .reset_index(drop=True)
         # make table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
         .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
@@ -106,7 +105,7 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .sort_values("year")
     )
     emi_df2.to_csv(output_path, index=False)
-
+    # return emi_df2
 
 # %% STEP 2. Set Input/Output Paths
 # INPUT PATHS
@@ -219,4 +218,11 @@ get_comb_mobile_inv_data(
     inventory_workbook_path,
     output_path_comb_mob_gas_hwy_emi,
     "comb_mob_gas_hwy_emi"
+    )
+
+# %% STEP TEST. Test Function Calls
+testing = get_comb_mobile_inv_data(
+    inventory_workbook_path,
+    output_path_comb_mob_vehicles_emi,
+    "comb_mob_vehicles_emi"
     )
