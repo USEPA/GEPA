@@ -1,9 +1,8 @@
 """
-Name:                   ww_emis.py
-Date Last Modified:     2024-07-19
+Name:                   a_excel_dict_ww.py
+Date Last Modified:     2024-08-8
 Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of wastewater emis - mobile emissions to State, Year,
-                        emissions format
+Purpose:                Testing excel dictionary read-in method on wastewater emissions
 Input Files:            - WW_State-level Estimates_90-22_27June2024.xlsx
 Output Files:           - Emissions by State, Year for each subcategory
 Notes:                  - This version of emi mapping is draft for mapping .py files
@@ -20,6 +19,8 @@ from gch4i.config import (
     tmp_data_dir_path,
 )
 from gch4i.utils import tg_to_kt
+from a_excel_dict import (read_excel_dict, read_excel_dict2, file_path)
+
 
 # %% STEP 1. Create Emi Mapping Functions
 
@@ -39,22 +40,17 @@ def get_ww_inv_data(input_path, output_path, subcategory):
     - ww_pp_emi
     """
 
-    # Table Dimensions
-    # pp B16 - AI72
-    # mp D84 - AL139
-    # fv E138 - AL194
-    # petrref B19 - AI75
-    # ethanol B13 - AI69
-    # brew B17 - AI73
+    # Assign subcategory strings
+    subcategory_strings = read_excel_dict2(file_path, sheet="Wastewater")
 
-    subcategory_strings = {
-        "ww_brew_emi": ["Breweries Emissions", 16, 56, "B:AI"],
-        "ww_ethanol_emi": ["Ethanol Emissions", 12, 56, "B:AI"],
-        "ww_petrref_emi": ["Petroleum Emissions", 18, 56, "B:AI"],
-        "ww_fv_emi": ["F_V_J Emissions", 137, 56, "E:AL"],
-        "ww_mp_emi": ["M_P Emissions", 82, 56, "D:AL"],  # No column Headers
-        "ww_pp_emi": ["Pulp and Paper Emissions", 15, 56, "B:AI"]
-    }
+#    subcategory_strings = {
+#        "ww_brew_emi": ["Breweries Emissions", 16, 56, "B:AI"],
+#        "ww_ethanol_emi": ["Ethanol Emissions", 12, 56, "B:AI"],
+#        "ww_petrref_emi": ["Petroleum Emissions", 18, 56, "B:AI"],
+#        "ww_fv_emi": ["F_V_J Emissions", 137, 56, "E:AL"],
+#        "ww_mp_emi": ["M_P Emissions", 82, 56, "D:AL"],  # No column Headers
+#        "ww_pp_emi": ["Pulp and Paper Emissions", 15, 56, "B:AI"]
+#    }
     subcategory_string = subcategory_strings.get(subcategory)
     if subcategory_string is None:
         raise ValueError("""Invalid subcategory. Please choose from ww_ad_emi,
@@ -81,22 +77,20 @@ def get_ww_inv_data(input_path, output_path, subcategory):
 
     state_list = emi_df["State"].unique()
     # Remove non-continental states
-    state_list = [state for state in state_list if state not in ["AS", "GU", "MP", "PR", "VI", "AL", "HI", "National"]] # Add National (state code)
+    state_list = [state for state in state_list if state not in ["AS", "GU", "MP", "PR", "VI", "AL", "HI"]]
 
     emi_df = emi_df.rename(columns=lambda x: str(x).lower()) \
-                   .query("`state` in @state_list") \
-                   .set_index("state") \
-                   .apply(pd.to_numeric, errors="coerce") \
-                   .dropna(how="all") \
-                   .replace(0, pd.NA) \
-                   .dropna(how="all") \
-                   .reset_index() \
-                   .melt(id_vars="state", var_name="year", value_name="ch4_tg") \
-                   .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt) \
-                   .drop(columns=["ch4_tg"]) \
-                   .astype({"year": int, "ch4_kt": float}) \
-                   .fillna({"ch4_kt": 0}) \
-                   .query("year.between(@min_year, @max_year)")
+                .query("`state` in @state_list") \
+                .set_index("state") \
+                .apply(pd.to_numeric, errors="coerce") \
+                .dropna(how="all") \
+                .reset_index() \
+                .melt(id_vars="state", var_name="year", value_name="ch4_kg") \
+                .assign(ch4_kt=lambda df: df["ch4_kg"] / 1000000) \
+                .drop(columns=["ch4_kg"]) \
+                .astype({"year": int, "ch4_kt": float}) \
+                .fillna({"ch4_kt": 0}) \
+                .query("year.between(@min_year, @max_year)")
     # emi_df.to_csv(output_path, index=False)
     return emi_df
 
@@ -104,7 +98,7 @@ def get_ww_inv_data(input_path, output_path, subcategory):
 # %% STEP 2. Set Input/Output Paths
 
 # INPUT PATHS
-inventory_workbook_path = ghgi_data_dir_path / "WW_State-level Estimates_90-22_27June2024.xlsx"
+inventory_workbook_path = ghgi_data_dir_path / "wasterwater/WW_State-level Estimates_90-22_27June2024.xlsx"
 
 # OUTPUT PATHS
 output_path_ww_ad_emi = emi_data_dir_path / "ww_ad_emi.csv"
@@ -155,7 +149,7 @@ get_ww_inv_data(
     output_path_ww_fv_emi,
     "ww_fv_emi"
 )
-testing = get_ww_inv_data(
+get_ww_inv_data(
     inventory_workbook_path,
     output_path_ww_mp_emi,
     "ww_mp_emi"
@@ -171,42 +165,10 @@ get_ww_inv_data(
     "ww_pp_emi"
 )
 
-# %% YEAR TESTING
+# %% TESTING
 
-inventory_workbook_path = ghgi_data_dir_path / "WW_State-level Estimates_90-22_27June2024.xlsx"
-
-
-emi_df = (
-    # read in the data
-    pd.read_excel(
-        inventory_workbook_path,
-        sheet_name="M_P Emissions",
-        skiprows=82,
-        nrows=56,
-        # usecols="D:AL",
-        index_col=None
-    )
-    )
-
-emi_df = emi_df.dropna(how="all", axis=1)
-
-emi_df.columns.values[0] = "State"
-emi_df.columns.values[1] = "Metric"
-emi_df.columns.values[2:] = list(range(1990, 2023))
-emi_df = emi_df.drop(columns="Metric")
-
-
-columns_to_keep = [col for col in emi_df.columns if not str(col).isdigit() or int(col) <= max_year]
-emi_df = emi_df[columns_to_keep]
-
-# An alternative option may be to NOT use "usecols" arg, dropna(how="all", axis=1), and then filter for the columns you need up front (after lowercasing column names)
-
-
-
-emi_df = emi_df.rename(columns=lambda x: str(x).lower()) \
-    .set_index("state") \
-    .apply(pd.to_numeric, errors="coerce") \
-    .dropna(how="all") \
-    .replace(0, pd.NA) \
-    .dropna(how="all")
-
+testing = get_ww_inv_data(
+    inventory_workbook_path,
+    output_path_ww_brew_emi,
+    "ww_brew_emi"
+)

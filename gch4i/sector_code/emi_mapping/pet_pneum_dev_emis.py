@@ -66,7 +66,7 @@ def get_pet_pneum_dev_inv_data(input_path, output_path):
 inventory_workbook_path = ghgi_data_dir_path / "Petroleum and Natural Gas/PneumaticControllers_StateEstimates_2024.xlsx"
 
 # OUTPUT PATHS
-output_path = tmp_data_dir_path / "pet_pneum_dev_emi.csv"
+output_path = tmp_data_dir_path / "oilwellprod_emi.csv"
 
 # %% STEP 3. Function Calls
 

@@ -104,8 +104,9 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
         .query("year.between(@min_year, @max_year)")
         .sort_values("year")
     )
-    emi_df2.to_csv(output_path, index=False)
-    # return emi_df2
+    # emi_df2.to_csv(output_path, index=False)
+    return emi_df2
+
 
 # %% STEP 2. Set Input/Output Paths
 # INPUT PATHS
@@ -218,11 +219,4 @@ get_comb_mobile_inv_data(
     inventory_workbook_path,
     output_path_comb_mob_gas_hwy_emi,
     "comb_mob_gas_hwy_emi"
-    )
-
-# %% STEP TEST. Test Function Calls
-testing = get_comb_mobile_inv_data(
-    inventory_workbook_path,
-    output_path_comb_mob_vehicles_emi,
-    "comb_mob_vehicles_emi"
     )
