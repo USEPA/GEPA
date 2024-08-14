@@ -24,7 +24,7 @@ post_meter_dir_path = ghgi_data_dir_path / "post_meter"
 
 
 @mark.persist
-@task(id="ab_coal_emi")
+@task(id="post_meter_emi")
 def task_get_stationary_combustion_inv_data(
     #INPUT
     comm_customers_input_path: Path = post_meter_dir_path / "Emi_CommCustomers.xlsx",
