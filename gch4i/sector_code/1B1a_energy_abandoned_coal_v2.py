@@ -80,9 +80,9 @@ ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 # %% STEP 1. Load GHGI-Proxy Mapping Files
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="proxy_emi_mapping").query(
+proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"Category == '{SOURCE_NAME}'"
-)
+).drop_duplicates(subset=["emi", "proxy"])
 proxy_mapping
 
 
