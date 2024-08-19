@@ -26,7 +26,7 @@ from gch4i.config import (
     tmp_data_dir_path,
 )
 from gch4i.utils import tg_to_kt
-from a_excel_dict import (read_excel_dict, read_excel_dict2, read_excel_dict_cell, file_path)
+from gch4i.sector_code.emi_mapping.a_excel_dict import (read_excel_dict_cell, file_path)
 
 
 # %% STEP 1. Create Emi Mapping Functions
@@ -237,7 +237,7 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
 # %% STEP 2. Set Input/Output Paths
 # INPUT PATHS
 inventory_workbook_path = ghgi_data_dir_path / "combustion_mobile/Mobile non-CO2 InvDB State Breakout_2022.xlsx"
-inventory_workbook_path2 = ghgi_data_dir_path / "SIT Mobile Dataframe 5.24.2023.xlsx"
+inventory_workbook_path2 = ghgi_data_dir_path / "combustion_mobile/SIT Mobile Dataframe 5.24.2023.xlsx"
 
 
 
@@ -312,7 +312,7 @@ get_comb_mobile_inv_data(
 testing = get_comb_mobile_inv_data(
     inventory_workbook_path,
     output_path_emi_other,
-    "Emi_Other"
+    "Emi_Light"
 )
 
 # %% AGAIN

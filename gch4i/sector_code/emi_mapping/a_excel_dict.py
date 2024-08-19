@@ -19,7 +19,7 @@ emi_data_dir_path = V3_DATA_PATH / "emis"
 proxy_data_dir_path = V3_DATA_PATH / "proxy"
 
 # INPUT PATHS
-file_path = ghgi_data_dir_path / "wasterwater/Dictionary_Mapping_Test.xlsx"
+file_path = ghgi_data_dir_path / "wastewater/Dictionary_Mapping_Test.xlsx"
 
 
 def read_excel_dict(file_path, sheet):
@@ -64,5 +64,29 @@ def read_excel_dict_cell(file_path, emission, sheet='Single_Cell'):
     # Assign to object
     # result = ast.literal_eval(df['Dictionary'][0])
     result = ast.literal_eval(df.iloc[0, 0])
+
+    return result
+
+
+def read_excel_params(file_path, subsector, emission, sheet='testing'):
+    """
+    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    """
+    # Read in Excel File
+    df = (pd.read_excel(file_path, sheet_name=sheet)
+            .assign(
+                ghgi_group=lambda x: x['ghgi_group'].str.strip().str.casefold()
+            ))
+
+    # Edit emission
+    # emission = emission.strip().casefold()
+
+    # Filter for Emissions Dictionary
+    df = df.loc[df['gch4i_name'] == subsector]
+
+    df = df.loc[df['ghgi_group'] == emission, 'add_params']
+
+    # Convert to dictionary
+    result = ast.literal_eval(df.iloc[0])
 
     return result

@@ -9,7 +9,7 @@ Input Files:            - Mobile non-CO2 InvDB State Breakout_2022.xlsx
 Output Files:           - Emissions by State, Year for each subcategory
 Notes:                  - This version of emi mapping is draft for mapping .py files
                         - Relative proportions from "SIT Mobile",
-                        Emissions numbers from "Mobile non-CO2 InvDB".
+                        - Emissions numbers from "Mobile non-CO2 InvDB".
 """
 
 # Change return emi_df3 in all 3 spaces, not just at the end
@@ -306,8 +306,12 @@ get_comb_mobile_inv_data(
     "Emi_Other"
 )
 
+# %% Testing
+
 testing = get_comb_mobile_inv_data(
     inventory_workbook_path,
     output_path_emi_other,
     "Emi_Passenger"
 )
+
+# %%
