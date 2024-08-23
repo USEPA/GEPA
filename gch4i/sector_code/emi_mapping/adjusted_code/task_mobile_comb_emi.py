@@ -1,6 +1,6 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2024-08-16
+Date Last Modified:     2024-08-21
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 Input Files:            - Mobile non-CO2 InvDB State Breakout_2022.xlsx
@@ -21,13 +21,14 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
+    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
 )
 
 from gch4i.utils import tg_to_kt
-from gch4i.sector_code.emi_mapping.a_excel_dict import read_excel_params
+from gch4i.sector_code.emi_mapping.a_excel_dict import read_excel_params2
 
 # %% STEP 1. Create Emi Mapping Functions
 
@@ -74,8 +75,8 @@ def get_comb_mobile_inv_data(in_path, src, params):
 
     # Overwrite parameters if Emi group is made up of mutliple srcs
     if src in (['motorcycles', 'passenger cars',
-                'medium- and heavy-duty trucks and buses', 'diesel highway']):
-        params = read_excel_params(proxy_file_path, source_name, src, sheet='testing')  # CHECK HERE IF ERROR. Changed function to include source_name
+                'heavy-duty vehicles', 'diesel highway']):
+        params = read_excel_params2(proxy_file_path, source_name, src, sheet='emi_proxy_mapping')  # CHECK HERE IF ERROR. Changed function to include source_name
     else:
         params = params
 
@@ -118,9 +119,9 @@ def get_comb_mobile_inv_data(in_path, src, params):
     # End Here if subcategory is in list
     if src in (["alternative fuel highway", "farm equipment",
                 "construction equipment", "other", "diesel highway"]):
-        
+
         emi_df = emi_df.rename(columns={"ch4_kt": "ghgi_ch4_kt"})
-        
+
         return emi_df
 
     ################################################################################
@@ -172,21 +173,23 @@ def get_comb_mobile_inv_data(in_path, src, params):
 ################################################################################
 
 # %% STEP 2. Initialize Parameters
-source_name = "combustion_mobile"
+
+source_name = "1A_mobile_combustion"
+source_path = "combustion_mobile"
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="testing").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
 # Edited for multiple filenames
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     filenames = data.file_name.iloc[0].split(",")
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_name / x for x in filenames],
-        "source_list": [x.strip().casefold() for x in data.ghgi_group.to_list()],
+        "input_paths": [ghgi_data_dir_path / source_path / x for x in filenames],
+        "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
         "output_path": emi_data_dir_path / f"{emi_name}.csv"
     }
@@ -226,11 +229,11 @@ for _id, _kwargs in emi_parameters_dict.items():
 
 # # %% Testing
 
-# testing = get_comb_mobile_inv_data(
-#     in_path=emi_parameters_dict["Emi_Aircraft"]["input_paths"],
-#     src=emi_parameters_dict["Emi_Aircraft"]["source_list"][0],
-#     params=emi_parameters_dict["Emi_Aircraft"]["parameters"]
-# )
+testing = get_comb_mobile_inv_data(
+    in_path=emi_parameters_dict["Emi_Aircraft"]["input_paths"],
+    src=emi_parameters_dict["Emi_Aircraft"]["source_list"][0],
+    params=emi_parameters_dict["Emi_Aircraft"]["parameters"]
+)
 
 # print(emi_parameters_dict["Emi_Aircraft"]["source_list"][0])
 
@@ -320,3 +323,5 @@ for _id, _kwargs in emi_parameters_dict.items():
 # emi_df3 = emi_df3.drop(columns=["proportion", emi_df3.columns[2]])
 
 # emi_df3.head()
+
+# %%

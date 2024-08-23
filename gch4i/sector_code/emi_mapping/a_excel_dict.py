@@ -68,14 +68,62 @@ def read_excel_dict_cell(file_path, emission, sheet='Single_Cell'):
     return result
 
 
-def read_excel_params(file_path, subsector, emission, sheet='testing'):
+def read_excel_params1(file_path, subsector, emission, sheet='emi_proxy_mapping'):
     """
     Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
     """
     # Read in Excel File
     df = (pd.read_excel(file_path, sheet_name=sheet)
             .assign(
-                ghgi_group=lambda x: x['ghgi_group'].str.strip().str.casefold()
+                ghgi_group=lambda x: x['Subcategory1'].str.strip().str.casefold()
+            ))
+
+    # Edit emission
+    # emission = emission.strip().casefold()
+
+    # Filter for Emissions Dictionary
+    df = df.loc[df['gch4i_name'] == subsector]
+
+    df = df.loc[df['ghgi_group'] == emission, 'add_params']
+
+    # Convert to dictionary
+    result = ast.literal_eval(df.iloc[0])
+
+    return result
+
+
+def read_excel_params2(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+    """
+    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    """
+    # Read in Excel File
+    df = (pd.read_excel(file_path, sheet_name=sheet)
+            .assign(
+                ghgi_group=lambda x: x['Subcategory2'].str.strip().str.casefold()
+            ))
+
+    # Edit emission
+    # emission = emission.strip().casefold()
+
+    # Filter for Emissions Dictionary
+    df = df.loc[df['gch4i_name'] == subsector]
+
+    df = df.loc[df['ghgi_group'] == emission, 'add_params']
+
+    # Convert to dictionary
+    result = ast.literal_eval(df.iloc[0])
+
+    return result
+
+
+def read_excel_params3(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+    """
+    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    """
+    # Read in Excel File
+    df = (pd.read_excel(file_path, sheet_name=sheet)
+            .assign(
+                ghgi_group=lambda x: x['Subcategory3'].str.strip().str.casefold()
             ))
 
     # Edit emission
