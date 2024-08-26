@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 # import warnings
 
-from gch4i.config import global_data_dir_path, figures_data_dir_path
+from gch4i.config import global_data_dir_path, figures_data_dir_path, V3_DATA_PATH
 from gch4i.gridding import GEPA_spatial_profile
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
@@ -739,3 +739,113 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
 
     # close the plot
     plt.close()
+
+
+def qc_flux_emis(data: dict, v2_name: str, SOURCE_NAME):
+    """
+    Function to compare and plot the difference between v2 and v3 for each year of the raster data
+    for each sector.
+    """
+
+    profile = GEPA_spatial_profile()
+
+    v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
+    v2_data_dict = {}
+    for in_path in v2_data_paths:
+        v2_year = int(in_path.stem.split("_")[-1])
+        v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
+            v2_name
+        ].values.squeeze(axis=0)
+        v2_data = np.where(v2_data == 0, np.nan, v2_data)
+        v2_data_dict[v2_year] = v2_data
+
+    result_list = []
+    for year in data.keys():
+        if year in v2_data_dict.keys():
+            v3_data = np.where(data[year] == 0, np.nan, data[year])
+            yearly_dif = data[year] - v2_data_dict[year]
+            v2_sum = np.nansum(v2_data)
+            v3_sum = np.nansum(v3_data)
+            print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
+            result_list.append(
+                pd.DataFrame(yearly_dif.ravel())
+                .dropna(how="all", axis=1)
+                .describe()
+                .rename(columns={0: year})
+            )
+
+            # Set all raster values == 0 to nan so they are not plotted
+            yearly_dif[np.where(yearly_dif == 0)] = np.nan
+
+            custom_colormap = colors.LinearSegmentedColormap.from_list(
+                name="custom_colormap",
+                colors=[
+                    "#2166AC",
+                    "#4393C3",
+                    "#92C5DE",
+                    "#D1E5F0",
+                    "#F7F7F7",
+                    "#FDDBC7",
+                    "#F4A582",
+                    "#D6604D",
+                    "#B2182B",
+                ],
+                N=3000,
+            )
+
+            # Create a figure and axis with the specified projection
+            fig, ax = plt.subplots(
+                figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+            )
+
+            # Set extent to the continental US
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+
+            # This is a "background map" workaround that allows us to add plot features like
+            # the colorbar and then use rasterio to plot the raster data on top of the
+            # background map.
+            background_map = ax.imshow(
+                yearly_dif,
+                cmap=custom_colormap,
+            )
+
+            # Add natural earth features
+            ax.add_feature(cfeature.LAND)
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
+            ax.add_feature(cfeature.STATES)
+
+            # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+            show(
+                yearly_dif,
+                transform=profile.profile["transform"],
+                ax=ax,
+                cmap=custom_colormap,
+                interpolation="none",
+            )
+
+            # Set various plot parameters
+            ax.tick_params(labelsize=10)
+            fig.colorbar(
+                background_map,
+                orientation="horizontal",
+                label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            )
+
+            # Add a title
+            difference_plot_title = (
+                f"{year} Difference between v2 and v3 methane emissions from {SOURCE_NAME}"
+            )
+            plt.title(difference_plot_title, fontsize=14)
+
+            # Show the plot for review
+            plt.show()
+
+            # Save the plot as a PNG file
+            plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
+
+            # close the plot
+            plt.close()
+
+    result_df = pd.concat(result_list, axis=1)
+    return result_df
