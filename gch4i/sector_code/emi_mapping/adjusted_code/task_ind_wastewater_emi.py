@@ -1,6 +1,6 @@
 """
 Name:                   task_ind_wastewater_emi.py
-Date Last Modified:     2024-08-21
+Date Last Modified:     2024-08-27
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 Input Files:            - WW_State-level Estimates_90-22_27June2024.xlsx
@@ -19,7 +19,6 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year

@@ -1,6 +1,6 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2024-08-21
+Date Last Modified:     2024-08-27
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 Input Files:            - Mobile non-CO2 InvDB State Breakout_2022.xlsx
@@ -21,7 +21,6 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
@@ -48,35 +47,13 @@ def get_comb_mobile_inv_data(in_path, src, params):
     - Emi_Other
     """
 
-    # subcategory_strings = read_excel_dict2(file_path, sheet="Mobile_Combustion")
-
-    # subcategory_strings = {
-    #    "Emi_Passenger": ["Gasoline", "Gasoline", "Cars|Motorcycles"],
-    #    "Emi_Light": ["Gasoline Highway", "Gasoline Highway", "Light-Duty"],
-    #    "Emi_Heavy": ["Gasoline|Diesel", "Gasoline Highway", "Heavy-Duty"],  # ifelse
-    #    "Emi_AllRoads": ["Alternative"],  # Stop at emi_df
-    #    "Emi_Waterways": ["Non-Highway$", "Non-Highway", "Boats"],
-    #    "Emi_Railroads": ["Non-Highway$", "Non-Highway", "Locomotives"],
-    #    "Emi_Aircraft": ["Non-Highway$", "Non-Highway", "Aircraft"],
-    #    "Emi_Farm": ["Farm Equipment"],  # Stop at emi_df
-    #    "Emi_Equip": ["Construction"],  # Stop at emi_df
-    #    "Emi_Other": ["Mobile Non-Highway Other"]  # Stop at emi_df
-    #    }
-
-    # subcategory_string = subcategory_strings.get(
-    #     subcategory
-    # )
-    # if subcategory_string is None:
-    #     raise ValueError("""Invalid arg. Please use one of the following arguments:
-    #             Emi_Passenger, Emi_Light, Emi_Heavy, Emi_AllRoads, Emi_Waterways,
-    #             Emi_Railroads, Emi_Aircraft, Emi_Farm, Emi_Equip, Emi_Other""")
-
 ################################################################################
 
     # Overwrite parameters if Emi group is made up of mutliple srcs
     if src in (['motorcycles', 'passenger cars',
                 'heavy-duty vehicles', 'diesel highway']):
-        params = read_excel_params2(proxy_file_path, source_name, src, sheet='emi_proxy_mapping')  # CHECK HERE IF ERROR. Changed function to include source_name
+        params = read_excel_params2(proxy_file_path, source_name, src,
+                                    sheet='emi_proxy_mapping')
     else:
         params = params
 
@@ -98,7 +75,8 @@ def get_comb_mobile_inv_data(in_path, src, params):
         emi_df.rename(columns=lambda x: str(x).lower())
         .rename(columns={"georef": "state_code"})
         .query('ghg == "CH4"')
-        .query(f'subcategory1.str.contains("{params["substrings"][0]}", regex=True)', engine='python')  # param
+        .query(f'subcategory1.str.contains("{params["substrings"][0]}", regex=True)',
+               engine='python')  # param
         .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
         .replace(0, pd.NA)
@@ -143,10 +121,14 @@ def get_comb_mobile_inv_data(in_path, src, params):
         # Remove CO2 from sector and get emissions for specific subcategory
         .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')  # param
         .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")') # param
-        .melt(id_vars=["state_code", "sector"], var_name="year", value_name="ch4_metric")
+        .melt(id_vars=["state_code", "sector"],
+              var_name="year",
+              value_name="ch4_metric")
         .astype({"year": int})
         .query("year.between(@min_year, @max_year)")
-        .pivot_table(index=["state_code", "year"], columns="sector", values="ch4_metric")
+        .pivot_table(index=["state_code", "year"],
+                     columns="sector",
+                     values="ch4_metric")
     )
 
     emi_df2 = (
@@ -214,7 +196,9 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         emi_df_list = []
         for ghgi_group in source_list:
-            individual_emi_df = get_comb_mobile_inv_data(input_paths, ghgi_group, parameters)
+            individual_emi_df = get_comb_mobile_inv_data(input_paths,
+                                                         ghgi_group,
+                                                         parameters)
             emi_df_list.append(individual_emi_df)
 
         emission_group_df = (
@@ -225,103 +209,3 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         emission_group_df.head()
         emission_group_df.to_csv(output_path)
-
-
-# # %% Testing
-
-testing = get_comb_mobile_inv_data(
-    in_path=emi_parameters_dict["Emi_Aircraft"]["input_paths"],
-    src=emi_parameters_dict["Emi_Aircraft"]["source_list"][0],
-    params=emi_parameters_dict["Emi_Aircraft"]["parameters"]
-)
-
-# print(emi_parameters_dict["Emi_Aircraft"]["source_list"][0])
-
-
-# ################################################################################
-# # %% BIG TESTING
-
-# emi_df = (
-#     # read in the data
-#     pd.read_excel(
-#         emi_parameters_dict["Emi_Passenger"]["input_paths"][0],
-#         sheet_name=emi_parameters_dict["Emi_Passenger"]["parameters"]["arguments"][0],  # param
-#         skiprows=emi_parameters_dict["Emi_Passenger"]["parameters"]["arguments"][1],    # param
-#         index_col=None
-#     )
-# )
-# # Initialize years
-# year_list = [str(x) for x in list(range(min_year, max_year + 1))]
-
-# emi_df = (
-#     emi_df.rename(columns=lambda x: str(x).lower())
-#     .rename(columns={"georef": "state_code"})
-#     .query('ghg == "CH4"')
-#     .query(f'subcategory1.str.contains("{emi_parameters_dict["Emi_Passenger"]["parameters"]["substrings"][0]}", regex=True)', engine='python')  # param
-#     .filter(items=["state_code"] + year_list, axis=1)
-#     .set_index("state_code")
-#     .replace(0, pd.NA)
-#     .apply(pd.to_numeric, errors="coerce")
-#     .dropna(how="all")
-#     .fillna(0)
-#     .reset_index()
-#     .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
-#     .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
-#     .drop(columns=["ch4_tg"])
-#     .astype({"year": int, "ch4_kt": float})
-#     .fillna({"ch4_kt": 0})
-#     .groupby(["state_code", "year"]).sum().reset_index()
-#     .query("year.between(@min_year, @max_year-1)")  # Missing 2022
-#     #.pivot(index=["state_code", "year"], columns="subcategory1", values="ch4_kt").reset_index()
-#     .sort_values(["state_code", "year"])
-# )
-# ################################################################################
-# # End Here if subcategory is in list
-# if src in (["alternative fuel highway", "farm equipment",
-#             "construction equipment", "other"]):
-#     return emi_df
-
-# ################################################################################
-
-# # Read in input_data[1]
-# emi_df2 = (
-#     # read in the data
-#     pd.read_excel(
-#         emi_parameters_dict["Emi_Passenger"]["input_paths"][1],
-#         sheet_name=emi_parameters_dict["Emi_Passenger"]["parameters"]["arguments"][2],  # param
-#         index_col=None
-#     )
-# )
-
-# emi_df2 = (
-#     emi_df2.rename(columns=lambda x: str(x).lower())
-#     .drop(columns=["state"])
-#     .rename(columns={'unnamed: 0': 'state_code'})
-#     # Remove CO2 from sector and get emissions for specific subcategory
-#     .query(f'sector.str.contains("CH4") and sector.str.contains("{emi_parameters_dict["Emi_Passenger"]["parameters"]["substrings"][1]}", regex=True)', engine='python')  # param
-#     .query(f'sector.str.contains("{emi_parameters_dict["Emi_Passenger"]["parameters"]["substrings"][2]}", regex=True) or sector.str.endswith("{emi_parameters_dict["Emi_Passenger"]["parameters"]["substrings"][1]}")'))  # param
-#     .melt(id_vars=["state_code", "sector"], var_name="year", value_name="ch4_metric")
-#     .astype({"year": int})
-#     .query("year.between(@min_year, @max_year)")
-#     .pivot_table(index=["state_code", "year"], columns="sector", values="ch4_metric")
-# )
-
-# emi_df2 = (
-#     emi_df2.div(emi_df2.iloc[:, 0], axis=0)
-#     .drop(columns=emi_df2.columns[0])
-#     .assign(proportion=lambda df: df.sum(axis=1))
-#     .iloc[:, -1]
-#     .reset_index()
-# )
-
-# ################################################################################
-
-# emi_df3 = (
-#     pd.merge(emi_df, emi_df2, on=["state_code", "year"], how="left")
-#     .assign(ghgi_ch4_kt=lambda df: df.iloc[:, 2] * df["proportion"])
-# )
-# emi_df3 = emi_df3.drop(columns=["proportion", emi_df3.columns[2]])
-
-# emi_df3.head()
-
-# %%

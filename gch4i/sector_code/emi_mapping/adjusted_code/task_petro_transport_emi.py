@@ -1,6 +1,6 @@
 """
 Name:                   task_petro_transport_emi.py
-Date Last Modified:     2024-08-22
+Date Last Modified:     2024-08-27
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of petroleum systems emissions
                         to State, Year, emissions format
@@ -20,7 +20,6 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
@@ -192,7 +191,9 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         emi_df_list = []
         for input_path, ghgi_group in zip(input_paths, source_list):
-            individual_emi_df = get_petro_transport_inv_data(input_path, ghgi_group, parameters)
+            individual_emi_df = get_petro_transport_inv_data(input_path,
+                                                             ghgi_group,
+                                                             parameters)
             emi_df_list.append(individual_emi_df)
 
         emission_group_df = (
@@ -203,38 +204,3 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         emission_group_df.head()
         emission_group_df.to_csv(output_path)
-
-# %% TESTING
-
-# testing = get_petro_production_inv_data(
-#     in_path = emi_parameters_dict["oil_well_drilled_prod_emi"]["input_paths"][0],
-#     src = emi_parameters_dict["oil_well_drilled_prod_emi"]["source_list"][0],
-#     params = emi_parameters_dict["oil_well_drilled_prod_emi"]["parameters"]
-# )
-
-# test_path = "/Users/aburnette/Library/CloudStorage/OneDrive-SharedLibraries-EnvironmentalProtectionAgency(EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/ghgi/Petroleum and Natural Gas/Tanks_StateEstimates.xlsx"
-# test = pd.read_excel(
-#     io = test_path,
-#     sheet_name = "Petro_State_CH4_MT",
-#     nrows = 56,
-# )
-
-
-# test = read_excel_params(proxy_file_path, subsector=source_name, emission="pneumatic devices", sheet='testing')
-
-# ["chemical injection pumps", "pneumatic devices"]
-
-# df = (pd.read_excel(proxy_file_path, sheet_name="testing")
-#         .assign(
-#             ghgi_group=lambda x: x['ghgi_group'].str.strip().str.casefold()
-#             ))
-
-# df = df.loc[df['gch4i_name'] == "petroleum systems"]
-
-# df = df.loc[df['ghgi_group'] == "pneumatic devices", 'add_params']
-
-# # Error is occuring because ghgi_group is not unique. Some share the same name.
-
-# read_excel_params
-
-# %%

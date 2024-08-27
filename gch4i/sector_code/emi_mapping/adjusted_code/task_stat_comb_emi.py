@@ -1,6 +1,6 @@
 """
 Name:                   task_stat_comb_emi.py
-Date Last Modified:     2024-08-22
+Date Last Modified:     2024-08-27
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 Input Files:            - Stationary non-CO2 InvDB State Breakout_2022.xlsx
@@ -19,14 +19,12 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
 )
 
 from gch4i.utils import tg_to_kt
-# from gch4i.sector_code.emi_mapping.a_excel_dict import read_excel_params2
 
 
 def get_comb_stat_inv_data(in_path, src, params):
@@ -104,7 +102,8 @@ for emi_name, data in proxy_data.groupby("emi_id"):
     filenames = data.file_name.iloc[0].split(",")
     emi_parameters_dict[emi_name] = {
         "input_paths": [ghgi_data_dir_path / source_path / x for x in filenames],
-        "source_list": [x.strip().casefold() for x in (data.Category +"_"+ data.Fuel1).to_list()],
+        "source_list": [x.strip().casefold() for x in (data.Category + "_" + data.Fuel1)
+                        .to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
         "output_path": emi_data_dir_path / f"{emi_name}.csv"
     }
@@ -126,7 +125,9 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         emi_df_list = []
         for ghgi_group in source_list:
-            individual_emi_df = get_comb_stat_inv_data(input_paths, ghgi_group, parameters)
+            individual_emi_df = get_comb_stat_inv_data(input_paths,
+                                                       ghgi_group,
+                                                       parameters)
             emi_df_list.append(individual_emi_df)
 
         emission_group_df = (

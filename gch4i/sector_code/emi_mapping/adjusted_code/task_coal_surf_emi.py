@@ -1,6 +1,6 @@
 """
 Name:                   task_coal_surf_emi.py
-Date Last Modified:     2024-08-21
+Date Last Modified:     2024-08-27
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 Input Files:            - Coal_90-22_FRv1-InvDBcorrection.xlsx
@@ -19,7 +19,6 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
@@ -114,7 +113,9 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         emi_df_list = []
         for input_path, ghgi_group in zip(input_paths, source_list):
-            individual_emi_df = get_coal_surf_inv_data(input_path, ghgi_group, parameters)
+            individual_emi_df = get_coal_surf_inv_data(input_path,
+                                                       ghgi_group,
+                                                       parameters)
             emi_df_list.append(individual_emi_df)
 
         emission_group_df = (
@@ -125,5 +126,3 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         emission_group_df.head()
         emission_group_df.to_csv(output_path)
-
-# %%
