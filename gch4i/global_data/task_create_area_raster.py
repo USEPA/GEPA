@@ -19,7 +19,7 @@ def _create_params(resolution_list):
         res_text = str(resolution).replace(".", "")
         _id_to_kwargs[res_text] = {
             "resolution": resolution,
-            "output_path": global_data_dir_path / f"gridded_area_{res_text}_m2.tif",
+            "output_path": global_data_dir_path / f"gridded_area_{res_text}_cm2.tif",
         }
     return _id_to_kwargs
 
@@ -64,15 +64,14 @@ for _id, kwargs in _ID_TO_KWARGS.items():
             gpd.GeoDataFrame.from_features(results, crs=4326)
             .to_crs("ESRI:102003")
             .assign(
-                cell_area_sq_m=lambda df: df.area,
-                # cell_area_sq_mi=lambda df: df["cell_area_sq_m"] / 2.59e6,
+                cell_area_sq_cm=lambda df: df.area * 1_000,
             )
         )
 
         # We have to resort the dataframe on the id value to get it in the right order
         # for turning into a matrix
         area_matrix = area_gdf.sort_values("raster_val", ascending=False)[
-            "cell_area_sq_m"
+            "cell_area_sq_cm"
         ].values.reshape(profile.arr_shape)
 
         # get the GEPA profile, make the count 1
@@ -81,5 +80,6 @@ for _id, kwargs in _ID_TO_KWARGS.items():
         # save the file for all other tasks to use
         with rasterio.open(output_path, "w", **profile.profile) as dst:
             dst.write(area_matrix, 1)
+
 
 # %%
