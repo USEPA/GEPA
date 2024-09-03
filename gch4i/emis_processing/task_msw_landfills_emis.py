@@ -19,6 +19,7 @@ def task_get_msw_landfills_inv_data(
     nonreporting_emi_output_path: Annotated[Path, Product] = emi_data_dir_path / "msw_landfills_nonreporting_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
+    reporting_emi_df = emi_df.copy()
     nonreporting_emi_df = pd.DataFrame()
     emi_df = (
         # read in the data
@@ -76,7 +77,6 @@ def task_get_msw_landfills_inv_data(
         # get only the years we need
         .query("year.between(@min_year, @max_year)")
     )
-    emi_df.to_csv(reporting_emi_output_path, index=False)
 
     # Get non-reporting emissions by scaling reporting emissions.
     # Assume emissions are 9% of reporting emissions for 2016 and earlier.
@@ -86,3 +86,8 @@ def task_get_msw_landfills_inv_data(
     nonreporting_emi_df = pd.concat([nonreporting_emi_df, emi_09, emi_11], axis=0)
 
     nonreporting_emi_df.to_csv(nonreporting_emi_output_path, index=False)
+
+    reporting_emi_df["ghgi_ch4_kt"] = emi_df["ghgi_ch4_kt"] - nonreporting_emi_df["ghgi_ch4_kt"]
+    reporting_emi_df.to_csv(reporting_emi_output_path, index=False)
+
+# %%

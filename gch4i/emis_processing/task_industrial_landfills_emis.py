@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
@@ -34,7 +35,7 @@ year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
 num_years = len(year_range)
 
-
+# %%
 @mark.persist
 @task(id="industrial_landfills_emi")
 def task_get_industrial_landfills_pulp_paper_inv_data(
