@@ -768,7 +768,8 @@ def QC_flux_emis(data, SOURCE_NAME, v2_name) -> None:
             v2_sum = np.nansum(v2_data)
             # v3_sum = np.nansum(v3_data)
             v3_sum = np.nansum(data[year])
-            print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
+            percent_dif = (v3_sum - v2_sum)/((v3_sum + v2_sum)/2)*100
+            print(f"year: {year}, v2 sum: {v2_sum}, v3 sum: {v3_sum}, percent difference: {percent_dif}")
             result_list.append(
                 pd.DataFrame(yearly_dif.ravel())
                 .dropna(how="all", axis=1)
