@@ -637,13 +637,13 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
         plt.title(annual_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
-        plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
-
-        # Show the plot for review
-        plt.show()
+        # plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Save the plots as PNG files to the figures directory
         plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
+
+        # Show the plot for review
+        plt.show()
 
         # close the plot
         plt.close()
@@ -731,17 +731,17 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     )
     plt.title(difference_plot_title, fontsize=14)
 
-    # Show the plot for review
-    plt.show()
-
     # Save the plot as a PNG file
     plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
+
+    # Show the plot for review
+    plt.show()
 
     # close the plot
     plt.close()
 
 
-def qc_flux_emis(data: dict, v2_name: str, SOURCE_NAME):
+def QC_flux_emis(data, SOURCE_NAME, v2_name) -> None:
     """
     Function to compare and plot the difference between v2 and v3 for each year of the raster data
     for each sector.
@@ -756,16 +756,18 @@ def qc_flux_emis(data: dict, v2_name: str, SOURCE_NAME):
         v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
             v2_name
         ].values.squeeze(axis=0)
-        v2_data = np.where(v2_data == 0, np.nan, v2_data)
+        # v2_data = np.where(v2_data == 0, np.nan, v2_data)
         v2_data_dict[v2_year] = v2_data
 
     result_list = []
     for year in data.keys():
         if year in v2_data_dict.keys():
-            v3_data = np.where(data[year] == 0, np.nan, data[year])
+            # v3_data = np.where(data[year] == 0, np.nan, data[year])
+            # yearly_dif = v3_data - v2_data_dict[year]
             yearly_dif = data[year] - v2_data_dict[year]
             v2_sum = np.nansum(v2_data)
-            v3_sum = np.nansum(v3_data)
+            # v3_sum = np.nansum(v3_data)
+            v3_sum = np.nansum(data[year])
             print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
             result_list.append(
                 pd.DataFrame(yearly_dif.ravel())
@@ -838,11 +840,11 @@ def qc_flux_emis(data: dict, v2_name: str, SOURCE_NAME):
             )
             plt.title(difference_plot_title, fontsize=14)
 
-            # Show the plot for review
-            plt.show()
-
             # Save the plot as a PNG file
             plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
+
+            # Show the plot for review
+            plt.show()
 
             # close the plot
             plt.close()
