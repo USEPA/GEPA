@@ -51,6 +51,7 @@ from gch4i.utils import (
     write_tif_output,
     calculate_flux,
     combine_gridded_emissions,
+    QC_flux_emis
 )
 
 # from pytask import Product, task
@@ -80,7 +81,7 @@ ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 # %% STEP 1. Load GHGI-Proxy Mapping Files
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="proxy_emi_mapping").query(
+proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"Category == '{SOURCE_NAME}'"
 )
 proxy_mapping
@@ -92,8 +93,8 @@ proxy_mapping
 emi_dict = {}
 for mapping_row in proxy_mapping.itertuples():
     mapping_row
-    emi_name = mapping_row.emi
-    proxy_name = mapping_row.proxy
+    emi_name = mapping_row.emi_id
+    proxy_name = mapping_row.proxy_id
 
     # STEP 2: Read In EPA State GHGI Emissions by Year
     # EEM: question -- can we create a script that we can run separately to run all the 
@@ -102,23 +103,23 @@ for mapping_row in proxy_mapping.itertuples():
     # Also see comments on the emissions script. The emission values need to be corrected
     emi_dict[emi_name] = {}
     emi_path = list(emi_data_dir_path.glob(f"{emi_name}*"))[0]
-    emi_dict[emi_name]["emi"] = pd.read_csv(emi_path)
+    emi_dict[emi_name]["emi_id"] = pd.read_csv(emi_path)
     
     # STEP 3: GET AND FORMAT PROXY DATA ---------------------------------------------
     proxy_path = list(proxy_data_dir_path.glob(f"{proxy_name}*.parquet"))[0]
-    emi_dict[emi_name]["proxy"] = gpd.read_parquet(proxy_path)
+    emi_dict[emi_name]["proxy_id"] = gpd.read_parquet(proxy_path)
     
     # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES -----------------------
     emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
-        emi_dict[emi_name]["proxy"],
-        emi_dict[emi_name]["emi"],
+        emi_dict[emi_name]["proxy_id"],
+        emi_dict[emi_name]["emi_id"],
         proxy_has_year=True,
         use_proportional=True,
         proportional_col_name="emis_mmcfd",
     )
     # STEP X: QC ALLOCATION ---------------------------------------------------------
     emi_dict[emi_name]["allocation_qc"] = QC_proxy_allocation(
-        emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi"]
+        emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi_id"]
     )
     # STEP X: GRID EMISSIONS --------------------------------------------------------
     emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
@@ -126,7 +127,7 @@ for mapping_row in proxy_mapping.itertuples():
     )
     # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
     emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
-        emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi"]
+        emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi_id"]
     )
 
 
@@ -137,50 +138,9 @@ ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
 
 # %% STEP 5.2: QC FLUX AGAINST V2 ------------------------------------------------------
-## EEM: comment - do we need to import these functions if there were already imported 
-## in the untils.py script? 
-import osgeo
-import rioxarray
-import rasterio
-import xarray as xr
 
-
-def qc_flux_emis(data: dict, v2_name: str):
-
-    v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
-    v2_data_dict = {}
-    for in_path in v2_data_paths:
-        v2_year = int(in_path.stem.split("_")[-1])
-        v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
-            v2_name
-        ].values.squeeze(axis=0)
-        v2_data = np.where(v2_data == 0, np.nan, v2_data)
-        v2_data_dict[v2_year] = v2_data
-
-    result_list = []
-    for year in data.keys():
-        if year in v2_data_dict.keys():
-            v3_data = np.where(data[year] == 0, np.nan, data[year])
-            yearly_dif = data[year] - v2_data_dict[year]
-            v2_sum = np.nansum(v2_data)
-            v3_sum = np.nansum(v3_data)
-            print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
-            result_list.append(
-                pd.DataFrame(yearly_dif.ravel())
-                .dropna(how="all", axis=1)
-                .describe()
-                .rename(columns={0: year})
-            )
-
-        # TODO: save out a map if differences
-        # compare sums of arrays by year
-
-    result_df = pd.concat(result_list, axis=1)
-    return result_df
-
-
-flux_emi_qc_df = qc_flux_emis(
-    ch4_flux_result_rasters, v2_name="emi_ch4_1B1a_Abandoned_Coal"
+flux_emi_qc_df = QC_flux_emis(
+    ch4_flux_result_rasters, SOURCE_NAME, v2_name="emi_ch4_1B1a_Abandoned_Coal"
 )
 flux_emi_qc_df
 # %% STEP 6: SAVE THE FILES ------------------------------------------------------------
