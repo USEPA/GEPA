@@ -64,7 +64,7 @@ for _id, kwargs in _ID_TO_KWARGS.items():
             gpd.GeoDataFrame.from_features(results, crs=4326)
             .to_crs("ESRI:102003")
             .assign(
-                cell_area_sq_cm=lambda df: df.area * 1_000,
+                cell_area_sq_cm=lambda df: df.area * 10_000,
             )
         )
 

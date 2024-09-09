@@ -456,7 +456,7 @@ def write_tif_output(in_dict: dict, dst_path: Path, resolution=0.1) -> None:
 def load_area_matrix(resolution=0.1) -> np.array:
     """load the raster array of grid cell area in square meters"""
     res_text = str(resolution).replace(".", "")
-    input_path = global_data_dir_path / f"gridded_area_{res_text}_m2.tif"
+    input_path = global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
     with rasterio.open(input_path) as src:
         arr = src.read(1)
     return arr
