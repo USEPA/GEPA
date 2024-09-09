@@ -39,7 +39,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "industrial_landfills_reporting_pulp_paper_proxy.parquet",
+    / "ind_landfills_pp_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -111,7 +111,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
             mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
             nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "industrial_landfills_nonreporting_pulp_paper_proxy.parquet",
+            / "ind_landfills_pp_nr_proxy.parquet",
 ):
     """
     The Mills OnLine database of facilities is compared against the Subpart HH 
@@ -279,7 +279,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "industrial_landfills_reporting_food_beverage_proxy.parquet",
+    / "ind_landfills_fb_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -352,7 +352,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
             frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
             food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
             nonreporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "industrial_landfills_nonreporting_food_beverage_proxy.parquet",
+            / "ind_landfills_fb_nr_proxy.parquet",
 ):
     """
 

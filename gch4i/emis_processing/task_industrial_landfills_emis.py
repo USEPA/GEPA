@@ -42,8 +42,8 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-    reporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_pulp_paper_reporting_emi.csv",
-    nonreporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_pulp_paper_nonreporting_emi.csv",
+    reporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
+    nonreporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
@@ -166,8 +166,8 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-    reporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_food_beverage_reporting_emi.csv",
-    nonreporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_food_beverage_nonreporting_emi.csv",
+    reporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_r_emi.csv",
+    nonreporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 

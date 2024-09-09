@@ -38,7 +38,7 @@ def task_get_reporting_msw_landfills_proxy_data(
     subpart_hh_path = "https://data.epa.gov/efservice/hh_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_reporting_proxy.parquet",
+    / "msw_landfills_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -104,7 +104,7 @@ def get_nonreporting_msw_landfills_proxy_data(
     MSW_FRS_NAICS_CODE = 562219,
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     nonreporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_nonreporting_proxy.parquet",
+    / "msw_landfills_nr_proxy.parquet",
     ):
 
     # Non-reporting facilities from LMOP and WBJ
