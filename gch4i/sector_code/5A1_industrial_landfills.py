@@ -127,8 +127,7 @@ for mapping_row in proxy_mapping.itertuples():
         emi_dict[emi_name]["emi_id"],
         proxy_has_year=yearly_flag,
         use_proportional=proxy_use_prop,
-        proportional_col_name=prop_col_name
-        #proportional_col_name="capacity_kt",
+        proportional_col_name=prop_col_name,
     )
 
     # STEP X: QC ALLOCATION ---------------------------------------------------------
@@ -136,13 +135,13 @@ for mapping_row in proxy_mapping.itertuples():
         emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi_id"]
     )
     # STEP X: GRID EMISSIONS --------------------------------------------------------
-    # emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
-    #     emi_dict[emi_name]["allocated"]
-    # )
+    emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
+        emi_dict[emi_name]["allocated"]
+    )
     # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
-    # emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
-    #     emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi_id"]
-    # )
+    emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
+        emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi_id"]
+    )
 
 
 # %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER --------------------------------------

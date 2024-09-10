@@ -146,16 +146,23 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
                                    .rename(columns={"ghgi_ch4_kt": "rep_ghgi_ch4_kt", "ch4_kt_y": "tot_ghgi_ch4_kt"})
                                    .fillna(0)
                                    .assign(nonrep_ghgi_ch4_kt=lambda df: df['tot_ghgi_ch4_kt']-df['rep_ghgi_ch4_kt'])
-                                   .drop(columns=["ch4_kt_x"])                                   
+                                   .drop(columns=["ch4_kt_x"])
+                                   .replace(0, np.nan)                                   
                                    )
     
     reporting_pulp_paper_emi_df = (corrected_pulp_paper_emi_df
                                    .drop(columns=["tot_ghgi_ch4_kt", "nonrep_ghgi_ch4_kt"])
-                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
 
     nonreporting_pulp_paper_emi_df = (corrected_pulp_paper_emi_df
                                    .drop(columns=["tot_ghgi_ch4_kt", "rep_ghgi_ch4_kt"])
-                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
 
     reporting_pulp_paper_emi_df.to_csv(reporting_pulp_paper_emis_output_path, index=False)
     nonreporting_pulp_paper_emi_df.to_csv(nonreporting_pulp_paper_emis_output_path, index=False)
@@ -271,15 +278,20 @@ def task_get_industrial_landfills_food_beverage_inv_data(
                                    .fillna(0.0)
                                    .assign(nonrep_ghgi_ch4_kt=lambda df: df['tot_ghgi_ch4_kt']-df['rep_ghgi_ch4_kt'])
                                    .drop(columns=["ch4_kt_x"])
+                                   .replace(0, np.nan)
                                    )
     
     reporting_food_beverage_emi_df = (corrected_food_beverage_emi_df
                                    .drop(columns=["tot_ghgi_ch4_kt", "nonrep_ghgi_ch4_kt"])
-                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True))
 
     nonreporting_food_beverage_emi_df = (corrected_food_beverage_emi_df
                                    .drop(columns=["tot_ghgi_ch4_kt", "rep_ghgi_ch4_kt"])
-                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True))
 
     reporting_food_beverage_emi_df.to_csv(reporting_food_beverage_emis_output_path, index=False)
     nonreporting_food_beverage_emi_df.to_csv(nonreporting_food_beverage_emis_output_path, index=False)
