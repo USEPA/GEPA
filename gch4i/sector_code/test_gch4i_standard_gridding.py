@@ -1,10 +1,15 @@
 """
-Name:                   1B1a_energy_abandoned_coal.py
+Name:                   test_gch4i_standard_gridding.py
 Date Last Modified:     2024-06-07
 Authors Name:           N. Kruskamp, H. Lohman (RTI International), Erin McDuffie
                         (EPA/OAP)
-Purpose:                Spatially allocates methane emissions for source category 1B1a,
-                        sector energy, source Abandoned Underground Coal Mines.
+Purpose:                This is a template framework for a gridder that applies
+                        to every gch4i source that uses a one-to-one emissions to proxy
+                        allocation and does not include things like monthly emissions,
+                        intermediate proxies, etc. The user were specify the list of
+                        gch4i gridding sources and the gridder would be applied to each
+                        one of them, pairing the emission and proxies and other
+                        argumentes needed from the proxy mapping spreadsheet.
 Input Files:            - 
 Output Files:           - 
 Notes:                  - 
@@ -12,33 +17,24 @@ Notes:                  -
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 
-import calendar
-import datetime
 from pathlib import Path
 from typing import Annotated
 
 # for testing/development
 # %load_ext autoreload
 # %autoreload 2
-from zipfile import ZipFile
 
-import duckdb
+import osgeo  # noqa
 import geopandas as gpd
 import numpy as np
-import osgeo  # noqa
 import pandas as pd
-import seaborn as sns
-from geopy.geocoders import Nominatim
-from IPython.display import display
+
+
 from pytask import Product, mark, task
 
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    ghgi_data_dir_path,
-    global_data_dir_path,
-    max_year,
-    min_year,
     proxy_data_dir_path,
     tmp_data_dir_path,
 )
@@ -49,15 +45,10 @@ from gch4i.utils import (
     calculate_flux,
     combine_gridded_emissions,
     grid_allocated_emissions,
-    name_formatter,
     plot_annual_raster_data,
     plot_raster_data_difference,
-    tg_to_kt,
     write_ncdf_output,
     write_tif_output,
-    calculate_flux,
-    combine_gridded_emissions,
-    QC_flux_emis
 )
 
 # from pytask import Product, task
@@ -76,10 +67,52 @@ import rioxarray
 import xarray as xr
 
 
-# %% STEP 1. Load GHGI-Proxy Mapping Files
-# GCH4I_NAME = "1B1a_abandoned_coal"
+def qc_flux_emis(data: dict, v2_name: str):
 
-# V2_NAME = "emi_ch4_1B1a_Abandoned_Coal"
+    v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
+    v2_data_dict = {}
+    for in_path in v2_data_paths:
+        v2_year = int(in_path.stem.split("_")[-1])
+        v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
+            v2_name
+        ].values.squeeze(axis=0)
+        v2_data = np.where(v2_data == 0, np.nan, v2_data)
+        v2_data_dict[v2_year] = v2_data
+
+    result_list = []
+    for year in data.keys():
+        if year in v2_data_dict.keys():
+            v3_data = np.where(data[year] == 0, np.nan, data[year])
+            yearly_dif = data[year] - v2_data_dict[year]
+            v2_sum = np.nansum(v2_data)
+            v3_sum = np.nansum(v3_data)
+            print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
+            result_list.append(
+                pd.DataFrame(yearly_dif.ravel())
+                .dropna(how="all", axis=1)
+                .describe()
+                .rename(columns={0: year})
+            )
+
+        # TODO: save out a map if differences
+        # compare sums of arrays by year
+
+        fig, (ax1, ax2) = plt.subplots(2)
+        fig.tight_layout()
+        ax1.hist(v2_data.ravel(), bins=100)
+        ax2.hist(v3_data.ravel() / 1000, bins=100)
+        plt.show()
+
+        np.nanmax(v3_data)
+
+        np.nanmax(v2_data)
+
+    result_df = pd.concat(result_list, axis=1)
+    return result_df
+
+
+# %% STEP 1. Load GHGI-Proxy Mapping Files
+
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
@@ -103,7 +136,7 @@ things we need to stick in the spreadsheet:
 # %%
 # this would be a list of all the gridding souces that this process could be applied to.
 # these would be those that follow the standard process
-gridding_list = list[str]
+# NOTE: these are just example names listed for testing / demo.
 gridding_list = ["1B1a_abandoned_coal", "3F4_fbar", "1B1a_coal_mining_underground"]
 
 gridding_params = {}
@@ -158,24 +191,26 @@ for _id, kwargs in gridding_params.items():
         nc_flux_output_path: Annotated[Path, Product],
         nc_kt_output_path: Annotated[Path, Product],
     ) -> None:
-        pass
 
         emi_dict = {}
         for emi_input_path, proxy_input_path in zip(emi_inputs, proxy_inputs):
             emi_name = emi_input_path.stem
 
             # STEP 2: Read In EPA State GHGI Emissions by Year
-            # EEM: question -- can we create a script that we can run separately to run all the
-            #  get_emi and get_proxy functions? Then we can include a comment in this
-            # script that states that those functions need to be run first
-            # Also see comments on the emissions script. The emission values need to be corrected
+            # EEM: question -- can we create a script that we can run separately to run
+            # all the get_emi and get_proxy functions? Then we can include a comment in
+            # this script that states that those functions need to be run first Also see
+            # comments on the emissions script. The emission values need to be corrected
             emi_dict[emi_name] = {}
             emi_dict[emi_name]["emi"] = pd.read_csv(emi_input_path)
 
-            # STEP 3: GET AND FORMAT PROXY DATA ---------------------------------------------
+            # STEP 3: GET AND FORMAT PROXY DATA ----------------------------------------
+            # if proxy_type == "vector":
+            #     pass
+
             emi_dict[emi_name]["proxy"] = gpd.read_parquet(proxy_input_path)
 
-            # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES -----------------------
+            # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES ------------------
             emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
                 emi_dict[emi_name]["proxy"],
                 emi_dict[emi_name]["emi"],
@@ -183,30 +218,36 @@ for _id, kwargs in gridding_params.items():
                 use_proportional=True,
                 proportional_col_name="emis_mmcfd",
             )
-            # STEP X: QC ALLOCATION ---------------------------------------------------------
+            # STEP X: QC ALLOCATION ----------------------------------------------------
             emi_dict[emi_name]["allocation_qc"] = QC_proxy_allocation(
                 emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi"]
             )
-            # STEP X: GRID EMISSIONS --------------------------------------------------------
+            # STEP X: GRID EMISSIONS ---------------------------------------------------
             emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
                 emi_dict[emi_name]["allocated"]
             )
-            # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
+
+            # raster proxies will probably need a different process from read to
+            # allocate. Then QC_emi_raster_sums and beyond would be the same.
+            # if proxy_type == "raster":
+            #     pass
+
+            # STEP X: QC GRIDDED EMISSIONS ---------------------------------------------
             emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
                 emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi"]
             )
 
-        # %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER --------------------------------------
+        # %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER ------------------------------
         raster_list = [emi_dict[emi_name]["rasters"] for emi_name in emi_dict.keys()]
         ch4_kt_result_rasters = combine_gridded_emissions(raster_list)
         ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
-        # %% STEP 5.2: QC FLUX AGAINST V2 ------------------------------------------------------
-        ## EEM: comment - do we need to import these functions if there were already imported
-        ## in the untils.py script?
+        # %% STEP 5.2: QC FLUX AGAINST V2 ----------------------------------------------
+        # EEM: comment - do we need to import these functions if there were already
+        # imported in the utils.py script?
         flux_emi_qc_df = qc_flux_emis(ch4_flux_result_rasters, v2_name=v2_name)
         flux_emi_qc_df
-        # %% STEP 6: SAVE THE FILES ------------------------------------------------------------
+        # %% STEP 6: SAVE THE FILES ----------------------------------------------------
         write_tif_output(ch4_kt_result_rasters, nc_kt_output_path)
         write_tif_output(ch4_flux_result_rasters, nc_flux_output_path)
         write_ncdf_output(
@@ -216,7 +257,7 @@ for _id, kwargs in gridding_params.items():
             netcdf_description,
         )
 
-        # %% STEP 7: PLOT THE RESULTS AND DIFFERENCE, SAVE FIGURES TO FILES --------------------
+        # %% STEP 7: PLOT THE RESULTS AND DIFFERENCE, SAVE FIGURES TO FILES ------------
         plot_annual_raster_data(ch4_flux_result_rasters, source_name)
         plot_raster_data_difference(ch4_flux_result_rasters, source_name)
 

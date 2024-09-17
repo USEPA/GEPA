@@ -1,27 +1,26 @@
 # %%
+import calendar
+import datetime
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
-import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
+import osgeo
+import pandas as pd
 import seaborn as sns
-from pytask import Product, task, mark
+from pyarrow import parquet
+from pytask import Product, mark, task
 
 from gch4i.config import (
     V3_DATA_PATH,
-    proxy_data_dir_path,
-    global_data_dir_path,
     ghgi_data_dir_path,
+    global_data_dir_path,
     max_year,
     min_year,
+    proxy_data_dir_path,
 )
-
 from gch4i.utils import name_formatter
 
 # %%
@@ -30,13 +29,15 @@ from gch4i.utils import name_formatter
 @mark.persist
 @task(id="abd_coal_proxy")
 def task_get_abd_coal_proxy_data(
-    inventory_workbook_path: Path = ghgi_data_dir_path
-    / "coal/AbandonedCoalMines1990-2022_FRv1.xlsx",
+    inventory_workbook_path: Path = (
+        ghgi_data_dir_path / "abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx"
+    ),
     msha_path: Path = V3_DATA_PATH / "sector/abandoned_mines/Mines.zip",
     county_path: str = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "abd_coal_proxy.parquet",
+    output_path: Annotated[Path, Product] = (
+        proxy_data_dir_path / "abd_coal_proxy.parquet"
+    ),
 ):
     """
     Location information (e.g., latitude/longitude) for each mine is taken from the MSHA
@@ -120,7 +121,7 @@ def task_get_abd_coal_proxy_data(
     )
     msha_gdf = msha_gdf[msha_gdf.intersects(state_gdf.dissolve().geometry.iat[0])]
 
-    ax = msha_gdf.plot(color="xkcd:scarlet", figsize=(10, 10))
+    ax = msha_gdf.plot(color="xkcd:scarlet", figsize=(10, 10), markersize=1)
     state_gdf.boundary.plot(ax=ax, color="xkcd:slate", lw=0.2, zorder=1)
 
     msha_cols = [
@@ -173,7 +174,7 @@ def task_get_abd_coal_proxy_data(
         .reset_index()
     )
     ghgi_mine_list
-
+    # %%
     # First try to match by ID alone
     print(f"total mines: {ghgi_mine_list.shape[0]}\n")
     matches = ghgi_mine_list[~ghgi_mine_list["geometry"].isna()]
@@ -323,7 +324,7 @@ def task_get_abd_coal_proxy_data(
     # abdmines["Active Emiss. (mmcfd) "][imine] * (1 - 0.8) * (
     #     1 + b_medium[ibasin] * D_sealed[ibasin] * ab_numyrs
     # ) ** (-1 / float(b_medium[ibasin]))
-
+    # %%
     def flooded_calc(df, basin, bc_df):
         return df["active_emiss"] * np.exp(
             -1 * bc_df.loc[basin, "Flooded"] * df["years_closed"]

@@ -5,31 +5,31 @@ import numpy as np
 import pandas as pd
 from pytask import Product, mark, task
 
-from gch4i.config import emi_data_dir_path, ghgi_data_dir_path, max_year, min_year
+from gch4i.config import (
+    V3_DATA_PATH,
+    emi_data_dir_path,
+    ghgi_data_dir_path,
+    max_year,
+    min_year,
+)
 from gch4i.utils import tg_to_kt
 
 # %%
-source_name = "fbar"
+source_name = "3F4_fbar"
 
-proxy_path = Path(
-    (
-        "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/"
-        "Gridded CH4 Inventory - Task 2/"
-        "gch4i_data_guide_v3.xlsx"
-    )
-)
+proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_data = pd.read_excel(proxy_path, sheet_name="testing").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 proxy_data
 
 emi_parameters_dict = {}
 
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
         "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
-        "source_list": data.ghgi_group.to_list(),
+        "source_list": data.gch4i_source.to_list(),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
@@ -77,7 +77,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             # rename the location column to what we need
             .rename(columns={"georef": "state_code"})
             # get just CH4 emissions, get only the emissions of our ghgi group
-            .query(f"(ghg == 'CH4') & (ghgi_source.isin(@source_list))")
+            .query("(ghg == 'CH4') & (ghgi_source.isin(@source_list))")
             # get just the columns we need
             .filter(
                 items=["state_code"] + year_list,

@@ -69,6 +69,8 @@ def get_comb_mobile_inv_data(input_path, output_path, subcategory):
             index_col=None
         )
     )
+    emi_df = emi_df.dropna(how="all", axis=1)
+
     emi_df2 = (emi_df.rename(columns=lambda x: str(x).lower())
         .drop(columns=["state"])
         .rename(columns={'unnamed: 0': 'state_code'})
