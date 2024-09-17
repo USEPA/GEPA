@@ -78,8 +78,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
-        # .query("year.between(@min_year, @max_year)")
-        .query("year.between(@min_year, 2021)")
+        .query("year.between(@min_year, @max_year)")
         .astype({"naics_code": str})
         .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
         .drop(columns=["naics_code"])
@@ -157,8 +156,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
-        # .query("year.between(@min_year, @max_year)")
-        .query("year.between(@min_year, 2021)")
+        .query("year.between(@min_year, @max_year)")
         .astype({"naics_code": str})
         .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
         .drop(columns=["naics_code"])
@@ -200,6 +198,23 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 
     reporting_pulp_paper_df.loc[:, 'found'] = 0
     reporting_pulp_paper_df.loc[:, 'city'] = reporting_pulp_paper_df.loc[:, 'city'].str.lower()
+
+    # try to match facilities to GHGRP based on county and city
+    for iyear in np.arange(0, num_years):
+        for ifacility in np.arange(0,num_mills):
+            imatch = np.where((reporting_pulp_paper_df['year'] == year_range[iyear]) & \
+                            (reporting_pulp_paper_df['state_code'] == mills_locs.loc[ifacility,'state_code']) & \
+                            (reporting_pulp_paper_df['city'] == mills_locs.loc[ifacility,'city']))[0]
+            if len(imatch) > 0:
+                mills_locs.loc[ifacility,'ghgrp_match'] = 1
+                mills_locs.loc[ifacility,'lat'] = reporting_pulp_paper_df.loc[imatch[0],'latitude']
+                mills_locs.loc[ifacility,'lon'] = reporting_pulp_paper_df.loc[imatch[0],'longitude']
+                reporting_pulp_paper_df.loc[imatch[0],'found'] = 1
+            else:
+                continue
+
+        print('Found (%) Year',year_range[iyear],':',100*np.sum(mills_locs['ghgrp_match']/len(reporting_pulp_paper_df)))
+    
 
     # FRS facilities with NAICS codes that start with 321 and 322
     frs_main = (
@@ -253,10 +268,12 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
     mills_locs = mills_locs.query(
         "ghgrp_match == 0 & FRS_match == 1").drop(
             columns=["state_name", "county", "city", "grades", "ghgrp_match", "FRS_match"]).rename(
-                columns={"lat": "latitude", "lon": "longitude"})
+                columns={"lat": "latitude", "lon": "longitude"}).dropna()
     
     # add a column to equally allocate unaccounted for GHGI emissions to all non-reporting mills
     mills_locs["ch4_kt"] = 1.0
+
+    mills_locs = mills_locs.reset_index(drop=True)
 
     nonreporting_pulp_paper_gdf = (
         gpd.GeoDataFrame(
@@ -319,8 +336,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})
-    # .query("year.between(@min_year, @max_year)")
-    .query("year.between(@min_year, 2021)")
+    .query("year.between(@min_year, @max_year)")
     .astype({"naics_code": int})
     .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
     .drop(columns=["naics_code"])
@@ -405,8 +421,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})
-    # .query("year.between(@min_year, @max_year)")
-    .query("year.between(@min_year, 2021)")
+    .query("year.between(@min_year, @max_year)")
     .astype({"naics_code": int})
     .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
     .drop(columns=["naics_code"])
