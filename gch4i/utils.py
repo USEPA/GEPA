@@ -47,6 +47,10 @@ def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> flo
     )
 
 
+# TODO: a REVERSE FLUX CALCULATION FUNCTION
+# def reverse_flux_calculation():               # This function will take the flux and convert it back to emissions (in kt) for a given area
+#     pass
+
 # TODO: write state / year inventory to GRID allocation, probably using geocube
 # EEM: question - for sources where we go from the state down to the grid-level, will
 # we still have this calculation step, or will we go straight to the rasterize step?
@@ -740,6 +744,7 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     # close the plot
     plt.close()
 
+
 us_state_to_abbrev_dict = {
     "Alabama": "AL",
     "Alaska": "AK",
@@ -798,10 +803,13 @@ us_state_to_abbrev_dict = {
     "Puerto Rico": "PR",
     "United States Minor Outlying Islands": "UM",
     "U.S. Virgin Islands": "VI",
-    }
+}
+
 
 def us_state_to_abbrev(state_name: str) -> str:
     """converts a full US state name to the two-letter abbreviation"""
-    return (us_state_to_abbrev_dict[state_name] 
-            if state_name in us_state_to_abbrev_dict 
-            else state_name)
+    return (
+        us_state_to_abbrev_dict[state_name]
+        if state_name in us_state_to_abbrev_dict
+        else state_name
+    )

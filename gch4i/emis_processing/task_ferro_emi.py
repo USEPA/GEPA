@@ -31,10 +31,7 @@ def read_emi_data(in_path, src):
         .rename(columns=lambda x: str(x).lower())
         # format the names of the emission source group strings
         .assign(
-            ghgi_source=lambda df: df["subcategory1"]
-            .astype(str)
-            .str.strip()
-            .str.casefold()
+            ghgi_source=lambda df: df["category"].astype(str).str.strip().str.casefold()
         )
         # rename the location column to what we need
         .rename(columns={"georef": "state_code"})
@@ -75,36 +72,39 @@ def read_emi_data(in_path, src):
     return emi_df
 
 
-source_name = "abandoned_coal"
+# %%
+source_name = "2C2_ferroalloy"
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="testing").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_name / x for x in data.file_name],
-        "source_list": data.ghgi_group.to_list(),
+        "input_paths": [list(ghgi_data_dir_path.rglob(x))[0] for x in data.file_name],
+        "source_list": data.gch4i_source.to_list(),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 emi_parameters_dict
 
-# input_paths, source_list, output_path = emi_parameters_dict["abd_coal_emi"].values()
+# %%
+# input_paths, source_list, output_path = emi_parameters_dict["ferro_emi"].values()
 # display(input_paths, source_list, output_path)
 
-
+# %%
 for _id, _kwargs in emi_parameters_dict.items():
 
     @mark.persist
     @task(id=_id, kwargs=_kwargs)
-    def task_and_coal_emi(
+    def task_ferro_emi_data(
         input_paths: list[Path],
         source_list: list[str],
         output_path: Annotated[Path, Product],
     ) -> None:
+        """read in the ghgi_ch4_kt values for each state"""
 
         source_list = [x.strip().casefold() for x in source_list]
 
@@ -121,6 +121,3 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         emission_group_df.head()
         emission_group_df.to_csv(output_path)
-
-
-# %%
