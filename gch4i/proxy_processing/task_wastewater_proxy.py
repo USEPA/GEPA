@@ -91,6 +91,39 @@ def filter_industry(df, naics_prefixes, sic_codes):
     filtered_df.reset_index(inplace=True, drop=True)
     
     return filtered_df
+def convert_state_names_to_codes(df, state_column):
+    """
+    Convert full state names in a DataFrame column to two-letter state codes.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the state names.
+    state_column (str): The name of the column containing the full state names.
+
+    Returns:
+    pd.DataFrame: DataFrame with the state column changed to two-letter state codes.
+    """
+    
+    # Dictionary mapping full state names to their two-letter codes
+    state_name_to_code = {
+        'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
+        'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
+        'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA', 'Kansas': 'KS',
+        'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD', 'Massachusetts': 'MA',
+        'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO', 'Montana': 'MT',
+        'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM',
+        'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH', 'Oklahoma': 'OK',
+        'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD',
+        'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT', 'Virginia': 'VA', 'Washington': 'WA',
+        'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
+    }
+    # Convert all caps to title case
+    df[state_column] = df[state_column].str.title()
+
+    # Map the full state names to their two-letter codes using the dictionary
+    df[state_column] = df[state_column].map(state_name_to_code)
+    
+    return df
+
 
 def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, industry='Pulp and Paper'):
     """
@@ -110,10 +143,12 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
     # Step 1: Match facilities to GHGRP based on location
     echo_df['ghgrp_match'] = 0
     echo_df['emis_kt'] = 0
-    echo_df['EF'] = 0
     ghgrp_df['found'] = 0
     
-    # Special handling for petroleum refining based on V2 code. If the GHGRP dataframe is empty, fill with empty data. Else, try to match. 
+    echo_df['emis_kt'] = echo_df['emis_kt'].astype(float)
+    ghgrp_df['emis_kt_tot'] = ghgrp_df['emis_kt_tot'].astype(float)
+
+    # Some GHGRP data are empty after trying to join the GHGRP emi and facility data
     if len(ghgrp_df) != 0:
         for idx, echo_row in echo_df.iterrows():
             for _, ghgrp_row in ghgrp_df.iterrows():
@@ -131,19 +166,27 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
         print(f"Total Emis (kt): {echo_df['emis_kt'].sum():.2f}")
 
         # Step 2: Add GHGRP facilities not found in ECHO to the "master" ECHO dataframe
-        for _, ghgrp_row in ghgrp_df[ghgrp_df['found'] == 0].iterrows():
-            new_row = pd.DataFrame([{
-                'Year': ghgrp_row['Year'],
-                'State': ghgrp_row['State'],
-                'ghgrp_match': 1,
-                'Facility Latitude': ghgrp_row['latitude'],
-                'Facility Longitude': ghgrp_row['longitude'],
-                'EF': 0,
-                'Wastewater Flow (MGal/yr)': 0,
-                'emis_kt': ghgrp_row['emis_kt_tot']
-            }])
-            echo_df = pd.concat([echo_df, new_row], ignore_index=True)
-            ghgrp_df.loc[ghgrp_row.name, 'found'] = 1
+
+        ghgrp_to_add = ghgrp_df[ghgrp_df['found'] == 0][['Year', 'State', 'latitude', 'longitude', 'emis_kt_tot']]
+
+        ghgrp_to_add = convert_state_names_to_codes(ghgrp_to_add, 'State')
+    
+        # Rename columns to match the desired output and add fixed values for new columns
+        ghgrp_to_add = ghgrp_to_add.rename(columns={
+            'latitude': 'Facility Latitude',
+            'longitude': 'Facility Longitude',
+            'emis_kt_tot': 'emis_kt'
+        })
+
+        # Add the fixed columns 'ghgrp_match' and 'Wastewater Flow (MGal/yr)'
+        ghgrp_to_add['ghgrp_match'] = 2
+        ghgrp_to_add['Wastewater Flow (MGal/yr)'] = 0
+
+        # Append the subset to the master dataframe
+        echo_df = pd.concat([echo_df, ghgrp_to_add], ignore_index=True)
+        
+        # Set the 'found' column to 2 for GHGRP facilities not location matched with ECHO but added
+        ghgrp_df.loc[ghgrp_df['found'] == 0, 'found'] = 2
 
         # Step 3: Distribute remaining emissions difference 
         # Pre-calculate unique states
@@ -163,20 +206,20 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
                 try:
                     year_state_emi = emi_df.loc[(year, state), 'ghgi_ch4_kt']
                 except KeyError:
-                    print(f"No data for {year} in {state}")
+                    #print(f"No data for {year} in {state}")
                     continue
                 
                 year_state_echo = year_echo[year_echo['State'] == state]
                 
                 if year_state_echo.empty:
-                    print(f"No ECHO data for {year} in {state}")
+                    #print(f"No ECHO data for {year} in {state}")
                     continue
                 
                 # Calculate GHGRP and non-GHGRP emissions
-                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] == 1]['emis_kt'].sum()
+                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] != 0]['emis_kt'].sum()
                 inv_emi_minus_ghgrp = year_state_emi - echo_ghgrp_emi
                 
-                print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
+                #print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
                 
                 # Calculate the fraction for non-GHGRP facilities
                 flow_sum = year_state_echo[year_state_echo['ghgrp_match'] == 0]['Wastewater Flow (MGal/yr)'].sum()
@@ -204,20 +247,20 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
                 try:
                     year_state_emi = emi_df.loc[(year, state), 'ghgi_ch4_kt']
                 except KeyError:
-                    print(f"No data for {year} in {state}")
+                    #print(f"No data for {year} in {state}")
                     continue
                 
                 year_state_echo = year_echo[year_echo['State'] == state]
                 
                 if year_state_echo.empty:
-                    print(f"No ECHO data for {year} in {state}")
+                    #print(f"No ECHO data for {year} in {state}")
                     continue
                 
                 # Calculate GHGRP and non-GHGRP emissions
-                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] == 1]['emis_kt'].sum()
+                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] != 0]['emis_kt'].sum()
                 inv_emi_minus_ghgrp = year_state_emi - echo_ghgrp_emi
                 
-                print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
+                #print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
                 
                 # Calculate the fraction for non-GHGRP facilities
                 flow_sum = year_state_echo['Wastewater Flow (MGal/yr)'].sum()
@@ -279,6 +322,7 @@ def merge_facility_and_emissions_data(facility_info, facility_emis):
 def filter_by_naics(df, naics_prefix):
     """Filter dataframe by NAICS code prefix."""
     return df[df['NAICS Code'].str.startswith(naics_prefix)].copy().reset_index(drop=True)
+
 
 # %%
 # Step 2.2 Read in full ECHO dataset
@@ -411,13 +455,59 @@ ghgrp_ref = ghgrp_industries['ref']
 
 # Step 2.6 Join GHGRP, ECHO, and emi data
 
-
 final_pp = process_facilities_and_emissions(echo_pp, ghgrp_pp, ww_pp_emi, years, industry='Pulp and Paper')
 final_mp = process_facilities_and_emissions(echo_mp, ghgrp_mp, ww_mp_emi, years, industry='Meat and Poultry')
 final_fv = process_facilities_and_emissions(echo_fv, ghgrp_fv, ww_fv_emi, years, industry='Fruit and Vegetables')
 final_eth = process_facilities_and_emissions(echo_eth, ghgrp_eth, ww_ethanol_emi, years, industry='Ethanol')
 final_brew = process_facilities_and_emissions(echo_brew, ghgrp_brew, ww_brew_emi, years, industry='Breweries')
 final_ref = process_facilities_and_emissions(echo_ref, ghgrp_ref, ww_petrref_emi, years, industry='Petroleum Refining')
+
+# %%
+# summary of the counts of datasets 
+
+def summarize_ghgrp_match(df, column_name, industry):
+    """
+    Summarize the counts and percentages of each unique value in the specified column.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the 'ghgrp_match' column.
+    column_name (str): The name of the column to summarize.
+
+    Returns:
+    pd.DataFrame: DataFrame showing the count and percentage of each unique value.
+    """
+
+    df[column_name] = df[column_name].replace({
+        0: "ECHO",
+        1: "GHGRP-ECHO Match",
+        2: "GHGRP"
+    })
+    
+    # Count the occurrences of each unique value
+    counts = df[column_name].value_counts()
+    
+    # Calculate the percentage of each value
+    percentages = (counts / len(df)) * 100
+    
+    print(f"Value counts for {industry}:")
+    print(df[column_name].value_counts())
+    print(f"Percentage of each value: {percentages}")
+    print("\n")
+
+summarize_ghgrp_match(final_pp, 'ghgrp_match', 'Pulp and Paper')
+summarize_ghgrp_match(final_mp, 'ghgrp_match', 'Meat and Poultry')
+summarize_ghgrp_match(final_fv, 'ghgrp_match', 'Fruit and Vegetables')
+summarize_ghgrp_match(final_eth, 'ghgrp_match', 'Ethanol')
+summarize_ghgrp_match(final_brew, 'ghgrp_match', 'Breweries')
+summarize_ghgrp_match(final_ref, 'ghgrp_match', 'Petroleum Refining')
+
+
+
+
+
+
+
+
 
 # %%
 
@@ -447,100 +537,3 @@ def create_final_proxy_df(final_proxy_df):
 ############################################
 # WILL NEED TO GET NEWEST POP DATA HERE
 ############################################
-
-
-#Read population density map
-pop_den_map = data_load_fn.load_pop_den_map(pop_map_inputfile)
-
-# convert to absolute population and re-grid to 0.1x0.1 degrees (hold population constant over all years)
-map_pop_001 = pop_den_map * area_map
-map_pop_01 = data_fn.regrid001_to_01(map_pop_001, Lat_01, Lon_01)
-
-map_pop = np.zeros([len(Lat_01),len(Lon_01),num_years])
-
-for iyear in np.arange(0, num_years):
-    map_pop[:,:,iyear] = map_pop_01
-
-
-
-# Step 3 Read in and format US EPA GHGI emissions
-
-#Read in the emissions data from the GHGI workbook (in kt)
-
-############################################################################################################
-# CHANGE FOR THIS TO BE THE WASTEWATER EMI file
-############################################################################################################
-
-names = pd.read_excel(EPA_ww_inputfile, sheet_name = "Dom Calcs", usecols = "B:AE",skiprows = 14, header = 0)
-colnames = names.columns.values
-EPA_emi_dom_ww_CH4 = pd.read_excel(EPA_ww_inputfile, sheet_name = "Dom Calcs", usecols = "B:AE", skiprows = 14, names = colnames)
-#drop rows with no data, remove the parentheses and ""
-EPA_emi_dom_ww_CH4 = EPA_emi_dom_ww_CH4.fillna('')
-EPA_emi_dom_ww_CH4.rename(columns={EPA_emi_dom_ww_CH4.columns[0]:'Source'}, inplace=True)
-EPA_emi_dom_ww_CH4['Source']= EPA_emi_dom_ww_CH4['Source'].str.replace(r"\(","")
-EPA_emi_dom_ww_CH4['Source']= EPA_emi_dom_ww_CH4['Source'].str.replace(r"\)","")
-EPA_emi_dom_ww_CH4 = EPA_emi_dom_ww_CH4.drop(columns = [n for n in range(1990, start_year,1)])
-
-names = pd.read_excel(EPA_ww_inputfile, sheet_name = "InvDB", usecols = "E:AJ",skiprows = 15, header = 0)
-colnames = names.columns.values
-EPA_emi_ind_ww_CH4 = pd.read_excel(EPA_ww_inputfile, sheet_name = "InvDB", usecols = "E:AJ", skiprows = 15, names = colnames)
-#drop rows with no data, remove the parentheses and ""
-EPA_emi_ind_ww_CH4 = EPA_emi_ind_ww_CH4.fillna('')
-EPA_emi_ind_ww_CH4.rename(columns={EPA_emi_ind_ww_CH4.columns[0]:'Source'}, inplace=True)
-EPA_emi_ind_ww_CH4['Source']= EPA_emi_ind_ww_CH4['Source'].str.replace(r"\(","")
-EPA_emi_ind_ww_CH4['Source']= EPA_emi_ind_ww_CH4['Source'].str.replace(r"\)","")
-EPA_emi_ind_ww_CH4.drop(EPA_emi_ind_ww_CH4.columns[[1,2]], axis =1, inplace= True)
-EPA_emi_ind_ww_CH4 = EPA_emi_ind_ww_CH4.drop(columns = [n for n in range(1990, start_year,1)])
-EPA_emi_ind_ww_CH4.iloc[:,1:] = EPA_emi_ind_ww_CH4.iloc[:,1:]*1000 #convert Tg to kt
-EPA_emi_ww_CH4 = EPA_emi_dom_ww_CH4.append(EPA_emi_ind_ww_CH4)
-EPA_emi_ww_CH4.reset_index(inplace=True, drop=True)
-
-#calculate national total values
-temp = EPA_emi_ind_ww_CH4.sum(axis=0)
-EPA_emi_ind_ww_CH4 = EPA_emi_ind_ww_CH4.append(temp, ignore_index=True)
-EPA_emi_ind_ww_CH4.iloc[-1,0] = 'Total'
-EPA_emi_ww_total = EPA_emi_ind_ww_CH4[EPA_emi_ind_ww_CH4['Source'] == 'Total']
-display(EPA_emi_ww_total)
-
-
-# 3.2 Split emissions into gridding groups
-
-#split GHG emissions into gridding groups, based on Coal Proxy Mapping file
-
-DEBUG =1
-start_year_idx = EPA_emi_ww_CH4.columns.get_loc((start_year))
-end_year_idx = EPA_emi_ww_CH4.columns.get_loc((end_year))+1
-ghgi_wwt_groups = ghgi_wwt_map['GHGI_Emi_Group'].unique()
-sum_emi = np.zeros([num_years])
-
-for igroup in np.arange(0,len(ghgi_wwt_groups)): #loop through all groups, finding the GHGI sources in that group and summing emissions for that region, year        vars()[ghgi_prod_groups[igroup]] = np.zeros([num_regions-1,num_years])
-    ##DEBUG## print(ghgi_stat_groups[igroup])
-    vars()[ghgi_wwt_groups[igroup]] = np.zeros([num_years])
-    source_temp = ghgi_wwt_map.loc[ghgi_wwt_map['GHGI_Emi_Group'] == ghgi_wwt_groups[igroup], 'GHGI_Source']
-    pattern_temp  = '|'.join(source_temp) 
-    emi_temp =EPA_emi_ww_CH4[EPA_emi_ww_CH4['Source'].str.contains(pattern_temp)]
-    vars()[ghgi_wwt_groups[igroup]][:] = emi_temp.iloc[:,start_year_idx:].sum()
-        
-        
-#Check against total summary emissions 
-print('QA/QC #1: Check Processing Emission Sum against GHGI Summary Emissions')
-for iyear in np.arange(0,num_years): 
-    for igroup in np.arange(0,len(ghgi_wwt_groups)):
-        sum_emi[iyear] += vars()[ghgi_wwt_groups[igroup]][iyear]
-        
-    summary_emi = EPA_emi_ww_total.iloc[0,iyear+1]  
-    #Check 1 - make sure that the sums from all the regions equal the totals reported
-    diff1 = abs(sum_emi[iyear] - summary_emi)/((sum_emi[iyear] + summary_emi)/2)
-    if DEBUG==1:
-        print(summary_emi)
-        print(sum_emi[iyear])
-    if diff1 < 0.0001:
-        print('Year ', year_range[iyear],': PASS, difference < 0.01%')
-    else:
-        print('Year ', year_range[iyear],': FAIL (check Production & summary tabs): ', diff1,'%') 
-
-
-### Step 4 Grid data
-
-
-# %%
