@@ -4,7 +4,7 @@ name: gch4i
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.12
   # - basemap # added by Nathan -- needed for module data_plot_functions (in "Global_Functions")
   - black
   - cartopy
@@ -44,6 +44,7 @@ dependencies:
   - pyogrio # use 
   - rioxarray
   - pip
+  - osgeo
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode
  

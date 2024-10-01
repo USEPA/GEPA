@@ -7,7 +7,6 @@ import rasterio
 import xarray as xr
 from rasterio.profiles import default_gtiff_profile
 
-
 # # specs for raster outputs. These are the default specs for which all input and output
 # # raster files should match.
 # res01 = 0.1  # deg
@@ -37,7 +36,7 @@ class GEPA_spatial_profile:
     lat_low = 20  # deg
     valid_resolutions = [0.1, 0.01]
 
-    def __init__(self, resolution:float = 0.1):
+    def __init__(self, resolution: float = 0.1):
         self.resolution = resolution
         self.check_resolution(self.resolution)
         self.x = np.arange(self.lon_left, self.lon_right, self.resolution)

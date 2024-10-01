@@ -15,6 +15,7 @@ ghgi_data_dir_path = V3_DATA_PATH / "ghgi"
 tmp_data_dir_path = V3_DATA_PATH / "tmp"
 emi_data_dir_path = V3_DATA_PATH / "emis"
 proxy_data_dir_path = V3_DATA_PATH / "proxy"
+sector_data_dir_path = V3_DATA_PATH / "sector"
 
 
 # this is used by the file task_download_census_geo.py to download specific census
