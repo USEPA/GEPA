@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 # import warnings
 
-from gch4i.config import global_data_dir_path, figures_data_dir_path
+from gch4i.config import global_data_dir_path, figures_data_dir_path, V3_DATA_PATH
 from gch4i.gridding import GEPA_spatial_profile
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
@@ -460,7 +460,7 @@ def write_tif_output(in_dict: dict, dst_path: Path, resolution=0.1) -> None:
 def load_area_matrix(resolution=0.1) -> np.array:
     """load the raster array of grid cell area in square meters"""
     res_text = str(resolution).replace(".", "")
-    input_path = global_data_dir_path / f"gridded_area_{res_text}_m2.tif"
+    input_path = global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
     with rasterio.open(input_path) as src:
         arr = src.read(1)
     return arr
@@ -641,13 +641,13 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
         plt.title(annual_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
-        plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
-
-        # Show the plot for review
-        plt.show()
+        # plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Save the plots as PNG files to the figures directory
         plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
+
+        # Show the plot for review
+        plt.show()
 
         # close the plot
         plt.close()
@@ -735,14 +735,163 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     )
     plt.title(difference_plot_title, fontsize=14)
 
-    # Show the plot for review
-    plt.show()
-
     # Save the plot as a PNG file
     plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
 
+    # Show the plot for review
+    plt.show()
+
     # close the plot
     plt.close()
+
+
+def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
+    """
+    Function to compare and plot the difference between v2 and v3 for each year of the raster data
+    for each sector.
+    """
+    if v2_name is None:
+        Warning(
+            f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!"
+            )
+    else:
+        profile = GEPA_spatial_profile()
+
+        # Get v2 flux raster data
+        v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
+        v2_data_dict = {}
+        for in_path in v2_data_paths:
+            v2_year = int(in_path.stem.split("_")[-1])
+            v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
+                v2_name
+            ].values.squeeze(axis=0)
+            v2_data_dict[v2_year] = v2_data
+
+        # Compare v2 data against v3 data for available v2 years
+        result_list = []
+        for year in v3_data.keys():
+            if year in v2_data_dict.keys():
+                # Comparison of fluxes:
+                # difference flux raster
+                yearly_dif = v3_data[year] - v2_data_dict[year]
+                # v2 flux raster sum
+                v2_sum = np.nansum(v2_data)
+                # v3 flux raster sum
+                v3_sum = np.nansum(v3_data[year])
+                # percent difference between v2 and v3
+                percent_dif = 100*(v3_sum - v2_sum)/((v3_sum + v2_sum)/2)
+                print(f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, percent difference: {percent_dif}")
+                # descriptive statistics on the difference raster
+                result_list.append(
+                    pd.DataFrame(yearly_dif.ravel())
+                    .dropna(how="all", axis=1)
+                    .describe()
+                    .rename(columns={0: year})
+                )
+                # Comparison of masses:
+                # flux to mass conversion factor
+                area_matrix = load_area_matrix()
+                month_days = [calendar.monthrange(int(year), x)[1] for x in range(1, 13)]
+                year_days = np.sum(month_days)
+                conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
+                # v2 mass raster sum
+                # divide by the flux conversion factor to transform back into mass units
+                v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
+                v2_mass_sum = np.nansum(v2_mass_raster)
+                # v3 mass raster sum
+                v3_mass_raster = v3_data[year] / conversion_factor_annual
+                v3_mass_sum = np.nansum(v3_mass_raster)
+                # percent difference between v2 and v3
+                percent_dif_mass = 100*(v3_mass_sum - v2_mass_sum)/((v3_mass_sum + v2_mass_sum)/2)
+                print(f"year: {year}, v2 mass sum: {v2_mass_sum}, v3 mass sum: {v3_mass_sum}, percent difference: {percent_dif_mass}")
+
+                # Set all raster values == 0 to nan so they are not plotted
+                v2_data_dict[year][np.where(v2_data_dict[year] == 0)] = np.nan
+                v3_data[year][np.where(v3_data[year] == 0)] = np.nan
+                yearly_dif[np.where(yearly_dif == 0)] = np.nan
+
+                # Plot the difference between v2 and v3 methane emissions for each year
+                custom_colormap = colors.LinearSegmentedColormap.from_list(
+                    name="custom_colormap",
+                    colors=[
+                        "#2166AC",
+                        "#4393C3",
+                        "#92C5DE",
+                        "#D1E5F0",
+                        "#F7F7F7",
+                        "#FDDBC7",
+                        "#F4A582",
+                        "#D6604D",
+                        "#B2182B",
+                    ],
+                    N=3000,
+                )
+                # Create a figure and axis with the specified projection
+                fig, ax = plt.subplots(
+                    figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+                )
+                # Set extent to the continental US
+                ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+                # This is a "background map" workaround that allows us to add plot features like
+                # the colorbar and then use rasterio to plot the raster data on top of the
+                # background map.
+                background_map = ax.imshow(
+                    yearly_dif,
+                    cmap=custom_colormap,
+                )
+                # Add natural earth features
+                ax.add_feature(cfeature.LAND)
+                ax.add_feature(cfeature.OCEAN)
+                ax.add_feature(cfeature.COASTLINE)
+                ax.add_feature(cfeature.STATES)
+                # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+                show(
+                    yearly_dif,
+                    transform=profile.profile["transform"],
+                    ax=ax,
+                    cmap=custom_colormap,
+                    interpolation="none",
+                )
+                # Set various plot parameters
+                ax.tick_params(labelsize=10)
+                fig.colorbar(
+                    background_map,
+                    orientation="horizontal",
+                    label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+                )
+                # Add a title
+                difference_plot_title = (
+                    f"{year} Difference between v2 and v3 methane emissions from {SOURCE_NAME}"
+                )
+                plt.title(difference_plot_title, fontsize=14)
+                # Save the plot as a PNG file
+                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
+                # Show the plot for review
+                plt.show()
+                # Close the plot
+                plt.close()
+                
+                # Plot the grid cell level frequencies of v2 and v3 methane emissions for each year
+                fig, (ax1, ax2) = plt.subplots(2)
+                fig.tight_layout()
+                ax1.hist(v2_data_dict[year].ravel(), bins=100)
+                ax2.hist(v3_data[year].ravel(), bins=100)
+                # Add a title
+                histogram_plot_title = f"{year} Frequency of methane emissions from {SOURCE_NAME} at the grid cell level"
+                ax1.set_title(histogram_plot_title)
+                # Add axis labels
+                ax2.set_xlabel("Methane emissions (Mg a$^{-1}$ km$^{-2}$)")
+                ax1.set_ylabel("v2 frequency")
+                ax2.set_ylabel("v3 frequency")
+                # Save the plot as a PNG file
+                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png")
+                # Show the plot for review
+                plt.show()
+                # Close the plot
+                plt.close()
+
+        result_df = pd.concat(result_list, axis=1)
+        return result_df
 
 
 us_state_to_abbrev_dict = {
