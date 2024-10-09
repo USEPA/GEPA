@@ -380,7 +380,6 @@ def task_get_waterways_proxy(
 # ########################################################################################
 # ########################################################################################
 # # %% Testing new source
-
 # coastline_2022 = gpd.read_file('/Users/aburnette/Downloads/tl_2022_us_coastline/tl_2022_us_coastline.shp')
 # coastline_2022 = coastline_2022.to_crs("ESRI:102003")
 

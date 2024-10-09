@@ -195,7 +195,6 @@ def task_get_railroads_proxy(
 
 #     return states_gdf
 
-
 # # Extract Line geometries from Geometry Collections
 # def extract_lines(geom):
 #     if geom is None:

@@ -1200,6 +1200,3 @@ def read_reduce_data_nodask(year):
 for year in year_range:
     read_reduce_data_nodask(year)
     print(f"Reduced roads for {year}")
-
-
-
