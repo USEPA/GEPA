@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
@@ -30,19 +31,18 @@ from gch4i.utils import name_formatter
 
 t_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
 mmt_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
-year_range = [*range(min_year, max_year+1,1)] #List of emission years
-year_range_str=[str(i) for i in year_range]
-num_years = len(year_range)
 
 
+# %%
 @mark.persist
 @task(id="industrial_landfills_emi")
 def task_get_industrial_landfills_pulp_paper_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-    reporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_pulp_paper_reporting_emi.csv",
-    nonreporting_pulp_paper_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_pulp_paper_nonreporting_emi.csv",
+    mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
+    reporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
+    nonreporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
@@ -59,7 +59,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     )
 
     # State-level inventory emissions for pulp and paper (reporting + non-reporting)
-    state_inventory_pulp_paper_emi_df = (
+    state_inventory_pp_emi_df = (
         pd.read_excel(
             inventory_workbook_path,
             sheet_name="P&P State Emissions",
@@ -90,12 +90,11 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
-
     # National-level inventory emissions for pulp and paper (reporting + non-reporting)
-    national_inventory_pulp_paper_emi_df = state_inventory_pulp_paper_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
+    national_inventory_pp_emi_df = state_inventory_pp_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
     # Reporting facilities from subpart tt with NAICS codes that start with 321 and 322
-    subpart_tt_pulp_paper_emi_df = (
+    subpart_tt_pp_emi_df = (
         pd.read_csv(
             subpart_tt_path,
             usecols=("facility_name",
@@ -117,47 +116,114 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .query("year.between(@min_year, @max_year)")
         .astype({"naics_code": str})
         .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
-        .drop(columns=["facility_id", "facility_name", "latitude", "longitude", "city", "zip", "naics_code"])
+        .drop(columns=["facility_id", "facility_name", "latitude", "longitude", "zip", "naics_code"])
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
-
     # State-level Subpart TT emissions for pulp and paper (reporting)
-    state_subpart_tt_pulp_paper_emi_df = subpart_tt_pulp_paper_emi_df.groupby(['year', 'state_code']).sum().reset_index()
-
+    state_subpart_tt_pp_emi_df = subpart_tt_pp_emi_df.groupby(['year', 'state_code']).sum().reset_index()
+    # list of unique states in subpart tt
+    subpart_tt_pp_states = state_subpart_tt_pp_emi_df['state_code'].unique()
     # National-level Subpart TT emissions for pulp and paper (reporting)
-    national_subpart_tt_pulp_paper_emi_df = state_subpart_tt_pulp_paper_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
+    national_subpart_tt_pp_emi_df = state_subpart_tt_pp_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # National-level reporting and non-reporting emissions by year
-    national_reporting_pulp_paper_emi_df = national_subpart_tt_pulp_paper_emi_df.copy()
+    # List of pulp and paper mills by state, county, and city
+    mills_online_df = (
+        pd.read_excel(
+            mills_online_path,
+            skiprows=3,
+            nrows=927,
+            usecols="A:F",
+        )
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"mill id#": "facility_id", "state": "state_name", "pulp and paper mill": "pulp_and_paper_mill"})
+        .query("pulp_and_paper_mill == 'Yes'")
+        .drop(columns=["pulp_and_paper_mill"])
+        .query("state_name.isin(@state_gdf['state_name'])")
+        .reset_index(drop=True)
+    )
+    # assign state codes to mills online facilities
+    mills_locs = mills_online_df.copy()
+    num_mills = len(mills_locs)
+    for imill in np.arange(0,num_mills):
+        state_name = mills_locs['state_name'][imill]
+        state_code = state_gdf[state_gdf['state_name'] == state_name]['state_code']
+        mills_locs.loc[imill, 'state_code'] = state_code.to_string(index=False)
+    # match subpart tt reporting facilities to the mills online facility list 
+    # and pull out non-reporting facilities
+    mills_locs.loc[:, 'ghgrp_match'] = 0
+    mills_locs.loc[:, 'city'] = mills_locs.loc[:, 'city'].str.lower()
+    subpart_tt_pp_emi_df.loc[:, 'city'] = subpart_tt_pp_emi_df.loc[:, 'city'].str.lower()
+    # try to match facilities to GHGRP based on county and city
+    for iyear in years:
+        for ifacility in np.arange(0,num_mills):
+            imatch = np.where((subpart_tt_pp_emi_df['year'] == iyear) & \
+                            (subpart_tt_pp_emi_df['state_code'] == mills_locs.loc[ifacility,'state_code']) & \
+                            (subpart_tt_pp_emi_df['city'] == mills_locs.loc[ifacility,'city']))[0]
+            if len(imatch) > 0:
+                mills_locs.loc[ifacility,'ghgrp_match'] = 1
+            else:
+                continue
+    # drop facilities already in reporting dataframe
+    mills_locs = mills_locs.query('ghgrp_match == 0')
+    # list of unique states in non-reporting dataframe
+    nr_pp_states = mills_locs['state_code'].unique()
+    # remove city from subpart tt dataframe
+    subpart_tt_pp_emi_df = subpart_tt_pp_emi_df.drop(columns=["city"])
 
-    # State-level reporting and non-reporting emissions by year
-    corrected_pulp_paper_emi_df = pd.DataFrame()  # dataframe to hold state-level reporting and nonreporting emissions
-    state_inventory_pulp_paper_emi_df_reporting_states = state_inventory_pulp_paper_emi_df.query("state_code.isin(@state_subpart_tt_pulp_paper_emi_df['state_code'])").reset_index(drop=True)
-    for iyear in np.arange(0, len(national_reporting_pulp_paper_emi_df)):
-        year_actual = years[iyear]
-        ghgi_national_emi = national_inventory_pulp_paper_emi_df.loc[iyear,'ch4_kt']
-        reporting_national_emi = national_reporting_pulp_paper_emi_df.loc[iyear, 'ch4_kt']
-        reporting_state_emi = state_inventory_pulp_paper_emi_df_reporting_states.query('year == @year_actual').assign(ghgi_ch4_kt=lambda df: df["ch4_kt"] * reporting_national_emi / ghgi_national_emi)
-        corrected_pulp_paper_emi_df = pd.concat([corrected_pulp_paper_emi_df, reporting_state_emi])
-    corrected_pulp_paper_emi_df = (corrected_pulp_paper_emi_df
-                                   .merge(state_inventory_pulp_paper_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
-                                   .rename(columns={"ghgi_ch4_kt": "rep_ghgi_ch4_kt", "ch4_kt_y": "tot_ghgi_ch4_kt"})
-                                   .fillna(0)
-                                   .assign(nonrep_ghgi_ch4_kt=lambda df: df['tot_ghgi_ch4_kt']-df['rep_ghgi_ch4_kt'])
-                                   .drop(columns=["ch4_kt_x"])                                   
-                                   )
+    # Calculate reporting and non-reporting emissions
+    # dataframe to hold state-level reporting and nonreporting emissions
+    corrected_pp_emi_df = pd.DataFrame()
+
+    for istate in subpart_tt_pp_states:
+        # subpart tt data for the specific state of interest
+        subpart_tt_pp_istate = state_subpart_tt_pp_emi_df.copy()
+        subpart_tt_pp_istate = subpart_tt_pp_istate.query('state_code == @istate')
+        # list of reporting years for the specific state of interest
+        # (not all states have data for all reporting years e.g., FL and OK)
+        subpart_tt_pp_istate_years = subpart_tt_pp_istate['year'].unique()
+        # inventory emissions for the specific state of interest
+        state_inventory_pp_istate = state_inventory_pp_emi_df.copy()
+        state_inventory_pp_istate = state_inventory_pp_istate.query('state_code == @istate')
+        
+        for iyear in subpart_tt_pp_istate_years:
+            # national inventory emission value for the specific year
+            inventory_national_emi = national_inventory_pp_emi_df.loc[national_inventory_pp_emi_df['year'] == iyear,'ch4_kt'].values[0]
+            # national subpart tt emission value for the specific year
+            subpart_tt_national_emi = national_subpart_tt_pp_emi_df.loc[national_subpart_tt_pp_emi_df['year'] == iyear, 'ch4_kt'].values[0]
+            # recalculated reporting emission for the specific state-year combination
+            # national subpart tt emission value weighted by the ratio of the specific
+            # state's inventory contribution to the total inventory.
+            if istate in nr_pp_states:
+                reporting_state_emi = state_inventory_pp_istate.query('year == @iyear').assign(r_ch4_kt=lambda df: df["ch4_kt"] * subpart_tt_national_emi / inventory_national_emi).drop(columns=["ch4_kt"])
+            else:
+                reporting_state_emi = state_inventory_pp_istate.query('year == @iyear').assign(r_ch4_kt=lambda df: df["ch4_kt"]).drop(columns=["ch4_kt"])
+            corrected_pp_emi_df = pd.concat([corrected_pp_emi_df, reporting_state_emi])
+    corrected_pp_emi_df = (corrected_pp_emi_df
+                                .merge(state_inventory_pp_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
+                                .rename(columns={"ch4_kt": "tot_ch4_kt"})
+                                .fillna(0)
+                                .assign(nr_ch4_kt=lambda df: df['tot_ch4_kt']-df['r_ch4_kt'])
+                                .replace(0, np.nan)                                   
+                                )
     
-    reporting_pulp_paper_emi_df = (corrected_pulp_paper_emi_df
-                                   .drop(columns=["tot_ghgi_ch4_kt", "nonrep_ghgi_ch4_kt"])
-                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+    reporting_pp_emi_df = (corrected_pp_emi_df
+                                   .drop(columns=["tot_ch4_kt", "nr_ch4_kt"])
+                                   .rename(columns={"r_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
 
-    nonreporting_pulp_paper_emi_df = (corrected_pulp_paper_emi_df
-                                   .drop(columns=["tot_ghgi_ch4_kt", "rep_ghgi_ch4_kt"])
-                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+    nonreporting_pp_emi_df = (corrected_pp_emi_df
+                                   .drop(columns=["tot_ch4_kt", "r_ch4_kt"])
+                                   .rename(columns={"nr_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
 
-    reporting_pulp_paper_emi_df.to_csv(reporting_pulp_paper_emis_output_path, index=False)
-    nonreporting_pulp_paper_emi_df.to_csv(nonreporting_pulp_paper_emis_output_path, index=False)
+    reporting_pp_emi_df.to_csv(reporting_pp_emis_output_path, index=False)
+    nonreporting_pp_emi_df.to_csv(nonreporting_pp_emis_output_path, index=False)
+
     return None
 
 
@@ -165,8 +231,9 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-    reporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_food_beverage_reporting_emi.csv",
-    nonreporting_food_beverage_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "industrial_landfills_food_beverage_nonreporting_emi.csv",
+    food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
+    reporting_fb_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_r_emi.csv",
+    nonreporting_fb_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
@@ -183,7 +250,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     )
         
     # State-level inventory emissions for pulp and paper (reporting + non-reporting)
-    state_inventory_food_beverage_emi_df = (
+    state_inventory_fb_emi_df = (
         pd.read_excel(
             inventory_workbook_path,
             sheet_name="F&B State Emissions",
@@ -214,12 +281,11 @@ def task_get_industrial_landfills_food_beverage_inv_data(
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
-
     # National-level inventory emissions for pulp and paper (reporting + non-reporting)
-    national_inventory_food_beverage_emi_df = state_inventory_food_beverage_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
+    national_inventory_fb_emi_df = state_inventory_fb_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
     # Reporting facilities from subpart tt with NAICS codes that start with 321 and 322
-    subpart_tt_food_beverage_emi_df = (
+    subpart_tt_fb_emi_df = (
     pd.read_csv(
         subpart_tt_path,
         usecols=("facility_name",
@@ -241,45 +307,114 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     .query("year.between(@min_year, @max_year)")
     .astype({"naics_code": int})
     .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
-    .drop(columns=["facility_id", "facility_name", "latitude", "longitude", "city", "zip", "naics_code"])
+    .drop(columns=["facility_id", "facility_name", "latitude", "longitude", "zip", "naics_code"])
     .query("state_code.isin(@state_gdf['state_code'])")
     .reset_index(drop=True)
     )
+    # State-level Subpart TT emissions for pulp and paper (reporting)
+    state_subpart_tt_fb_emi_df = subpart_tt_fb_emi_df.groupby(['year', 'state_code']).sum().reset_index()
+    # list of unique states in subpart tt
+    subpart_tt_fb_states = state_subpart_tt_fb_emi_df['state_code'].unique()
+    # National-level Subpart TT emissions for pulp and paper (reporting)
+    national_subpart_tt_fb_emi_df = state_subpart_tt_fb_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # State-level Subpart TT emissions for food and beverage (reporting)
-    state_subpart_tt_food_beverage_emi_df = subpart_tt_food_beverage_emi_df.groupby(['year', 'state_code']).sum().reset_index()
+    # list of food and beverage facilities
+    food_beverage_facilities_df = (
+    pd.read_excel(
+        food_manufacturers_processors_path,
+        sheet_name='Data',
+        nrows=59915,
+        usecols="A:K",
+    )
+    .rename(columns=lambda x: str(x).lower())
+    .rename(columns={"name": "facility_name", "state": "state_code", "uniqueid": "facility_id"})
+    .drop(columns=["naics_code_description"])
+    # filter for relevant NAICS codes (based on GHGI)
+    .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
+    .drop(columns=["naics_code"])
+    # remove facilities that do not report excess food waste
+    .dropna(subset=['excessfood_tonyear_lowest'])
+    # get only lower 48 + DC
+    # .query("state_code.isin(@state_info_df['state_code'])")
+    .reset_index(drop=True)
+    )
 
-    # National-level Subpart TT emissions for food and beverage (reporting)
-    national_subpart_tt_food_beverage_emi_df = state_subpart_tt_food_beverage_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
+    # try to match facilities to GHGRP based on county and city
+    food_beverage_facilities_locs = food_beverage_facilities_df.copy()
+    num_facilities = len(food_beverage_facilities_locs)
+    food_beverage_facilities_locs.loc[:,'ghgrp_match'] = 0
+    food_beverage_facilities_locs.loc[:,'city'] = food_beverage_facilities_locs.loc[:,'city'].str.lower()
 
-    # National-level reporting and non-reporting emissions by year
-    national_reporting_food_beverage_emi_df = national_subpart_tt_food_beverage_emi_df.copy()
+    subpart_tt_fb_emi_df.loc[:,'city'] = subpart_tt_fb_emi_df.loc[:,'city'].str.lower()
 
-    # State-level reporting and non-reporting emissions by year
-    corrected_food_beverage_emi_df = pd.DataFrame()  # dataframe to hold state-level reporting and nonreporting emissions
-    state_inventory_food_beverage_emi_df_reporting_states = state_inventory_food_beverage_emi_df.query("state_code.isin(@state_subpart_tt_food_beverage_emi_df['state_code'])").reset_index(drop=True)
-    for iyear in np.arange(0, len(national_reporting_food_beverage_emi_df)):
-        year_actual = years[iyear]
-        ghgi_national_emi = national_inventory_food_beverage_emi_df.loc[iyear,'ch4_kt']
-        reporting_national_emi = national_reporting_food_beverage_emi_df.loc[iyear, 'ch4_kt']
-        reporting_state_emi = state_inventory_food_beverage_emi_df_reporting_states.query('year == @year_actual').assign(ghgi_ch4_kt=lambda df: df["ch4_kt"] * reporting_national_emi / ghgi_national_emi)
-        corrected_food_beverage_emi_df = pd.concat([corrected_food_beverage_emi_df, reporting_state_emi])
-    corrected_food_beverage_emi_df = (corrected_food_beverage_emi_df
-                                   .merge(state_inventory_food_beverage_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
-                                   .rename(columns={"ghgi_ch4_kt": "rep_ghgi_ch4_kt", "ch4_kt_y": "tot_ghgi_ch4_kt"})
-                                   .fillna(0.0)
-                                   .assign(nonrep_ghgi_ch4_kt=lambda df: df['tot_ghgi_ch4_kt']-df['rep_ghgi_ch4_kt'])
-                                   .drop(columns=["ch4_kt_x"])
-                                   )
+    for iyear in years:
+        for ifacility in np.arange(0,num_facilities):
+            imatch = np.where((subpart_tt_fb_emi_df['year'] == iyear) & \
+                            (subpart_tt_fb_emi_df['state_code'] == food_beverage_facilities_locs.loc[ifacility,'state_code']) & \
+                            (subpart_tt_fb_emi_df['city'] == food_beverage_facilities_locs.loc[ifacility,'city']))[0]
+            if len(imatch) > 0:
+                food_beverage_facilities_locs.loc[ifacility,'ghgrp_match'] = 1
+            else:
+                continue
     
-    reporting_food_beverage_emi_df = (corrected_food_beverage_emi_df
-                                   .drop(columns=["tot_ghgi_ch4_kt", "nonrep_ghgi_ch4_kt"])
-                                   .rename(columns={"rep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+    # drop facilities already in the reporting dataframe
+    food_beverage_facilities_locs = food_beverage_facilities_locs.query('ghgrp_match == 0')
+    # list of unique states in non-reporting dataframe
+    nr_fb_states = food_beverage_facilities_locs['state_code'].unique()
+    # remove city from subpart tt dataframe
+    subpart_tt_fb_emi_df = subpart_tt_fb_emi_df.drop(columns=["city"])
 
-    nonreporting_food_beverage_emi_df = (corrected_food_beverage_emi_df
-                                   .drop(columns=["tot_ghgi_ch4_kt", "rep_ghgi_ch4_kt"])
-                                   .rename(columns={"nonrep_ghgi_ch4_kt": "ghgi_ch4_kt"}))
+    # Calcute reporting and non-reporting emissions
+    # dataframe to hold state-level reporting and nonreporting emissions
+    corrected_fb_emi_df = pd.DataFrame()
 
-    reporting_food_beverage_emi_df.to_csv(reporting_food_beverage_emis_output_path, index=False)
-    nonreporting_food_beverage_emi_df.to_csv(nonreporting_food_beverage_emis_output_path, index=False)
+    for istate in subpart_tt_fb_states:
+        # subpart tt data for the specific state of interest
+        subpart_tt_fb_istate = state_subpart_tt_fb_emi_df.copy()
+        subpart_tt_fb_istate = subpart_tt_fb_istate.query('state_code == @istate')
+        # list of reporting years for the specific state of interest
+        # (not all states have data for all reporting years e.g., FL and OK)
+        subpart_tt_fb_istate_years = subpart_tt_fb_istate['year'].unique()
+        # inventory emissions for the specific state of interest
+        state_inventory_fb_istate = state_inventory_fb_emi_df.copy()
+        state_inventory_fb_istate = state_inventory_fb_istate.query('state_code == @istate')
+        
+        for iyear in subpart_tt_fb_istate_years:
+            # national inventory emission value for the specific year
+            inventory_national_emi = national_inventory_fb_emi_df.loc[national_inventory_fb_emi_df['year'] == iyear,'ch4_kt'].values[0]
+            # national subpart tt emission value for the specific year
+            subpart_tt_national_emi = national_subpart_tt_fb_emi_df.loc[national_subpart_tt_fb_emi_df['year'] == iyear, 'ch4_kt'].values[0]
+            # recalculated reporting emission for the specific state-year combination
+            # national subpart tt emission value weighted by the ratio of the specific
+            # state's inventory contribution to the total inventory.
+            if istate in nr_fb_states:
+                reporting_state_emi = state_inventory_fb_istate.query('year == @iyear').assign(r_ch4_kt=lambda df: df["ch4_kt"] * subpart_tt_national_emi / inventory_national_emi).drop(columns=["ch4_kt"])
+            else:
+                reporting_state_emi = state_inventory_fb_istate.query('year == @iyear').assign(r_ch4_kt=lambda df: df["ch4_kt"]).drop(columns=["ch4_kt"])
+            corrected_fb_emi_df = pd.concat([corrected_fb_emi_df, reporting_state_emi])
+    corrected_fb_emi_df = (corrected_fb_emi_df
+                                .merge(state_inventory_fb_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
+                                .rename(columns={"ch4_kt": "tot_ch4_kt"})
+                                .fillna(0)
+                                .assign(nr_ch4_kt=lambda df: df['tot_ch4_kt']-df['r_ch4_kt'])
+                                .replace(0, np.nan)                                   
+                                )
+    
+    reporting_fb_emi_df = (corrected_fb_emi_df
+                                   .drop(columns=["tot_ch4_kt", "nr_ch4_kt"])
+                                   .rename(columns={"r_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
+
+    nonreporting_fb_emi_df = (corrected_fb_emi_df
+                                   .drop(columns=["tot_ch4_kt", "r_ch4_kt"])
+                                   .rename(columns={"nr_ch4_kt": "ghgi_ch4_kt"})
+                                   .dropna()
+                                   .reset_index(drop=True)
+                                   )
+
+    reporting_fb_emi_df.to_csv(reporting_fb_emis_output_path, index=False)
+    nonreporting_fb_emi_df.to_csv(nonreporting_fb_emis_output_path, index=False)
+    
     return None

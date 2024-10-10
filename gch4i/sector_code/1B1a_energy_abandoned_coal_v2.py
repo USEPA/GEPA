@@ -55,6 +55,9 @@ from gch4i.utils import (
     tg_to_kt,
     write_ncdf_output,
     write_tif_output,
+    calculate_flux,
+    combine_gridded_emissions,
+    QC_flux_emis
 )
 
 # from pytask import Product, task
@@ -71,50 +74,6 @@ import osgeo
 import rasterio
 import rioxarray
 import xarray as xr
-
-
-def qc_flux_emis(data: dict, v2_name: str):
-
-    v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
-    v2_data_dict = {}
-    for in_path in v2_data_paths:
-        v2_year = int(in_path.stem.split("_")[-1])
-        v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
-            v2_name
-        ].values.squeeze(axis=0)
-        v2_data = np.where(v2_data == 0, np.nan, v2_data)
-        v2_data_dict[v2_year] = v2_data
-
-    result_list = []
-    for year in data.keys():
-        if year in v2_data_dict.keys():
-            v3_data = np.where(data[year] == 0, np.nan, data[year])
-            yearly_dif = data[year] - v2_data_dict[year]
-            v2_sum = np.nansum(v2_data)
-            v3_sum = np.nansum(v3_data)
-            print(f"v2 sum: {v2_sum}, v3 sum: {v3_sum}")
-            result_list.append(
-                pd.DataFrame(yearly_dif.ravel())
-                .dropna(how="all", axis=1)
-                .describe()
-                .rename(columns={0: year})
-            )
-
-        # TODO: save out a map if differences
-        # compare sums of arrays by year
-
-        fig, (ax1, ax2) = plt.subplots(2)
-        fig.tight_layout()
-        ax1.hist(v2_data.ravel(), bins=100)
-        ax2.hist(v3_data.ravel() / 1000, bins=100)
-        plt.show()
-
-        np.nanmax(v3_data)
-
-        np.nanmax(v2_data)
-
-    result_df = pd.concat(result_list, axis=1)
-    return result_df
 
 
 # %% STEP 1. Load GHGI-Proxy Mapping Files
