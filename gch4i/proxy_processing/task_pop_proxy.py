@@ -6,7 +6,6 @@ from pyarrow import parquet  # noqa
 import osgeo  # noqa
 import geopandas as gpd
 import numpy as np
-import pytask
 import rasterio
 import requests
 import rioxarray
@@ -61,13 +60,6 @@ for _id, kwargs in _ID_TO_KWRARGS_DL.items():
             print("Error downloading the file:", e)
 
 
-pytask.build(
-    [task_download_world_pop(**kwargs) for _id, kwargs in _ID_TO_KWRARGS_DL.items()]
-)
-
-# %%
-
-
 def get_warp_params(years):
     _id_to_kwargs = {}
     for year in years:
@@ -106,23 +98,8 @@ for _id, kwargs in _ID_TO_KWRARGS_WARP.items():
                 # Read all data into memory.
                 _ = vrt.read()
 
-                # Process the dataset in chunks.
-                for _, window in vrt.block_windows():
-                    _ = vrt.read(window=window)
-
                 # write the file to disk
                 rio_shutil.copy(vrt, output_path, driver="GTiff")
-
-
-pytask.build(
-    tasks=[
-        task_warp_world_pop(**kwargs) for _id, kwargs in _ID_TO_KWRARGS_WARP.items()
-    ],
-    marker_expression="persist",
-)
-
-
-# %%
 
 
 def get_stack_params(years):
@@ -143,14 +120,16 @@ def get_stack_params(years):
     return _id_to_kwargs
 
 
-_ID_TO_KWRARGS_STACK = get_stack_params(years)
-_ID_TO_KWRARGS_STACK
+_ID_TO_KWARGS_STACK = get_stack_params(years)
+_ID_TO_KWARGS_STACK
 
-for _id, kwargs in _ID_TO_KWRARGS_STACK.items():
+for _id, kwargs in _ID_TO_KWARGS_STACK.items():
 
     # @mark.persist
     # @task(id=_id, kwargs=kwargs)
-    def task_population_proxy(input_paths: Path, output_path: Annotated[Path, Product]):
+    def task_stack_population_data(
+        input_paths: Path, output_path: Annotated[Path, Product]
+    ):
 
         raster_list = []
         years = [int(x.name.split("_")[2]) for x in input_paths]
@@ -170,25 +149,16 @@ for _id, kwargs in _ID_TO_KWRARGS_STACK.items():
             dst.descriptions = tuple([str(x) for x in years])
 
 
-# %%
-pytask.build(
-    tasks=[
-        task_population_proxy(**kwargs) for _id, kwargs in _ID_TO_KWRARGS_STACK.items()
-    ]
-)
-# %%
-
-
 @mark.persist
 @task
-def task_population_proxy_normed(
+def task_population_proxy(
     input_path: Path = tmp_data_dir_path / "population_proxy_raw.tif",
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "population_proxy.tif"
+        proxy_data_dir_path / "population_proxy.nc"
     ),
 ):
-    # %%
+
     # read in the state file and filter to lower 48 + DC
     state_gdf = (
         gpd.read_file(state_geo_path)
@@ -203,17 +173,22 @@ def task_population_proxy_normed(
 
     # read in the raw population data raster stack as a xarray dataset
     # masked will read the nodata value and set it to NA
-    pop_ds = rioxarray.open_rasterio(input_path, masked=True)
+    pop_ds = rioxarray.open_rasterio(input_path, masked=True).rename({"band": "year"})
+
+    with rasterio.open(input_path) as src:
+        ras_crs = src.crs
+
     # assign the band as our years so the output raster data has year band names
-    pop_ds["band"] = years
+    pop_ds["year"] = years
     # remove NA values
     # pop_ds = pop_ds.where(pop_ds != -99999)
 
     # create a state grid to match the input population array
+    # we use fill here to fill in the nodata values with 99 so that when we do the
+    # groupby, the nodata area is not collapsed, and the resulting dimensions align
+    # with the v3 gridded data.
     state_grid = make_geocube(
-        vector_data=state_gdf,
-        measurements=["statefp"],
-        like=pop_ds,
+        vector_data=state_gdf, measurements=["statefp"], like=pop_ds, fill=99
     )
     state_grid
     # assign the state grid as a new variable in the population dataset
@@ -228,14 +203,18 @@ def task_population_proxy_normed(
         return x / x.sum()
 
     # apply the normalization function to the population data
-    state_year_norm_ds = (
-        pop_ds.groupby(["band", "statefp"]).apply(normalize).sortby(["band", "y", "x"])
+    out_ds = (
+        pop_ds.groupby(["year", "statefp"])
+        .apply(normalize)
+        .sortby(["year", "y", "x"])
+        .to_dataset(name="population")
     )
-    state_year_norm_ds.shape
+    out_ds["population"].shape
 
     # check that the normalization worked
     all_eq_df = (
-        state_year_norm_ds.groupby(["statefp", "band"])
+        out_ds["population"]
+        .groupby(["statefp", "year"])
         .sum()
         .rename("sum_check")
         .to_dataframe()
@@ -249,45 +228,10 @@ def task_population_proxy_normed(
     if not vals_are_one:
         raise ValueError("not all values are normed correctly!")
 
-    # drop the state code variable and save the dataset as a new xarray dataset
-    out_ds = state_year_norm_ds.drop_vars("statefp").to_dataset(name="population")
-    out_ds
-
     # plot. Not hugely informative, but shows the data is there.
-    out_ds["population"][:, :, 0].plot.imshow()
+    out_ds["population"].sel(year=2020).plot.imshow()
 
-    tmp_path_1 = tmp_data_dir_path / "population_proxy_normed.tif"
-    out_ds["population"].transpose("band", "y", "x").round(10).rio.to_raster(tmp_path_1)
-
-    # warp the data to the GEPA spatial profile
-    profile = GEPA_spatial_profile(0.1)
-    vrt_options = {
-        "resampling": Resampling.sum,
-        "crs": profile.profile["crs"],
-        "transform": profile.profile["transform"],
-        "height": profile.height,
-        "width": profile.width,
-        "nodata": np.nan,
-    }
-    profile.profile.update(nodata=np.nan)
-
-    # when we do the groupby, the nodata area is collapsed, so the resulting dimensions
-    # do not align with our final output anymore. So we have to rewarp this data to
-    # be consistent with the rest of the gridded data.
-    with rasterio.open(tmp_path_1) as src:
-        with WarpedVRT(src, **vrt_options) as vrt:
-
-            # Read all data into memory.
-            _ = vrt.read()
-
-            # Process the dataset in chunks.
-            for _, window in vrt.block_windows():
-                _ = vrt.read(window=window)
-
-            # write the file to disk
-            rio_shutil.copy(vrt, output_path, driver="GTiff")
-
-    # update the band names to be the years
-    with rasterio.open(output_path, "r+") as src:
-        src.descriptions = tuple([str(x) for x in years])
+    out_ds["population"].transpose("year", "y", "x").round(10).rio.write_crs(
+        ras_crs
+    ).to_netcdf(output_path)
     # %%

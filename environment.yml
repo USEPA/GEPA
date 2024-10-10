@@ -5,9 +5,15 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  - pyarrow
+  - gdal
+  - rasterio
+  - geopandas
+  - fiona
   # - basemap # added by Nathan -- needed for module data_plot_functions (in "Global_Functions")
   - black
   - cartopy
+  - dask
   # - xlrd # added by Hannah -- needed in Coal
   - invoke
   - jupyter
@@ -33,18 +39,14 @@ dependencies:
   - xarray
   - openpyxl
   # - tabula-py
-  - pyarrow
-  - geopandas
   # - pyodbc
   - geopy
   # - PyPDF2
   - pytask
-  - rasterio
   - geocube
-  - pyogrio # use 
+  - pyogrio # use
   - rioxarray
   - pip
-  - osgeo
+  - xlsxwriter
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode
- 

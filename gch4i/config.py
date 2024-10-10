@@ -26,3 +26,5 @@ census_geometry_list = ["county", "state", "primaryroads"]
 min_year = 2012
 max_year = 2022
 years = range(min_year, max_year + 1)
+
+EQ_AREA_CRS = "ESRI:102003"
