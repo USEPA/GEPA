@@ -39,6 +39,10 @@ ww_mp_emi = pd.read_csv(emi_data_dir_path / "ww_mp_emi.csv")
 ww_petrref_emi = pd.read_csv(emi_data_dir_path / "ww_petrref_emi.csv")
 ww_pp_emi = pd.read_csv(emi_data_dir_path / "ww_pp_emi.csv")
 
+# Concatenate all industrial emissions dataframes for later use
+industrial_emi_dfs = [ww_brew_emi, ww_ethanol_emi, ww_fv_emi, ww_mp_emi, ww_petrref_emi, ww_pp_emi]
+industrial_emis = pd.concat(industrial_emi_dfs, axis=0, ignore_index=True)
+
 #proxy mapping file
 Wastewater_Mapping_inputfile = proxy_data_dir_path / "wastewater/WastewaterTreatment_ProxyMapping.xlsx"
 
@@ -54,7 +58,7 @@ def read_combined_file(file_path):
     return pd.read_csv(file_path, low_memory=False)
 
 def read_and_combine_csv_files(directory):
-    """Reads and combines all .csv files in the given directory, excluding the combined file if it exists."""
+    """Reads and combines all ECHO .csv files in the given directory, excluding the combined file if it exists."""
     dataframes = []
     for file in os.listdir(directory):
         if file.endswith('.csv') and not file.startswith("combined_echo_data"):
@@ -72,25 +76,29 @@ def read_and_combine_csv_files(directory):
     combined_df.to_csv(combined_echo_file_path, index=False)
     return combined_df
 
-def filter_industry(df, naics_prefixes, sic_codes):
+def extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes):
     """
-    Filter a dataframe based on NAICS Code prefixes and SIC Codes.
+    Extract industry-specific facilities from the non-POTW list.
     
     Parameters:
-    df (pd.DataFrame): Input dataframe containing 'NAICS Code' and 'SIC Code' columns
-    naics_prefixes (list): List of NAICS Code prefixes to filter
-    sic_codes (list): List of SIC Codes to filter
+    echo_nonpotw (pd.DataFrame): The input DataFrame containing non-POTW facilities.
+    industry_name (str): The name of the industry (used for the output variable name).
+    naics_prefix (str): The NAICS code prefix for the industry.
+    sic_codes (list): A list of SIC codes for the industry.
     
     Returns:
-    pd.DataFrame: Filtered dataframe
+    pd.DataFrame: A DataFrame containing the extracted industry-specific facilities.
     """
-    naics_filter = df['NAICS Code'].str.startswith(tuple(naics_prefixes))
-    sic_filter = df['SIC Code'].str.contains('|'.join(sic_codes), na=False)
+    industry_df = echo_nonpotw[
+        (echo_nonpotw['NAICS Code'].str.startswith(naics_prefix)) |
+        (echo_nonpotw['SIC Code'].str.contains('|'.join(sic_codes)))
+    ].copy()
     
-    filtered_df = df[naics_filter | sic_filter].copy()
-    filtered_df.reset_index(inplace=True, drop=True)
+    industry_df.reset_index(inplace=True, drop=True)
     
-    return filtered_df
+    return industry_df
+
+
 def convert_state_names_to_codes(df, state_column):
     """
     Convert full state names in a DataFrame column to two-letter state codes.
@@ -125,6 +133,150 @@ def convert_state_names_to_codes(df, state_column):
     return df
 
 
+def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
+    """
+    Function to calculate emissions proxy for states based on GHGI and GHGRP data.
+
+    Parameters:
+    - emi_df: DataFrame containing GHGI emissions data.
+    - ghgrp_df: DataFrame containing GHGRP emissions data.
+    - echo_df: DataFrame containing ECHO facility data.
+    - year_range: List or range of years to process.
+
+    Returns:
+    - final_proxy_df: DataFrame containing the processed emissions data for each state.
+    """
+
+    # Create the final dataframe that we will populate below
+    final_proxy_df = pd.DataFrame()
+
+    # Get the unique states in the ECHO data
+    unique_states = emi_df['state_code'].unique()
+
+    for year in year_range:
+        
+        # Filter total GHGI emissions for the current year
+        year_emi = emi_df[emi_df['year'] == year].copy()  
+
+        # Filter total GHGRP emissions for the current year
+        year_total_ghgrp_emis = ghgrp_df[ghgrp_df['Year'] == year]['emis_kt_tot'].sum()
+
+        # Calculate the difference between national GHGI and GHGRP emissions
+        year_national_emis_available = year_emi['ghgi_ch4_kt'].sum() - year_total_ghgrp_emis
+
+        # Filter echo_df for the current year
+        year_echo = echo_df[echo_df['Year'] == year].copy() 
+
+        # Calculate the proportion of each state's GHGI methane emissions for the current year
+        year_emi.loc[:, 'state_proportion'] = year_emi['ghgi_ch4_kt'] / year_emi['ghgi_ch4_kt'].sum()
+
+        # Allocate emissions to each state based on their proportion of total emissions
+        year_emi.loc[:, 'state_ghgi_emis'] = year_emi['state_proportion'] * year_national_emis_available
+
+        # Process emissions for each state
+        for state in unique_states:
+
+            year_state_echo = year_echo[year_echo['State'] == state].copy()  
+
+            # Keep GHGRP matches to concatenate later
+            year_state_echo_ghgrp = year_state_echo[year_state_echo['ghgrp_match'] == 1].copy() 
+
+            # Exclude GHGRP matches that already have emission values
+            year_state_echo_no_ghgrp = year_state_echo[year_state_echo['ghgrp_match'] == 0].copy()  
+
+            # Calculate the proportional flow at each facility
+            year_state_echo_no_ghgrp.loc[:, 'flow_proportion'] = (
+                year_state_echo_no_ghgrp['Wastewater Flow (MGal/yr)'] / 
+                year_state_echo_no_ghgrp['Wastewater Flow (MGal/yr)'].sum()
+            )
+            
+            # Calculate the emissions for each facility
+            state_ghgi_emis_value = year_emi[year_emi['state_code'] == state]['state_ghgi_emis'].values[0]
+            year_state_echo_no_ghgrp.loc[:, 'emis_kt'] = (
+                year_state_echo_no_ghgrp['flow_proportion'] * state_ghgi_emis_value
+            )
+
+            # Drop the flow proportion column
+            year_state_echo_no_ghgrp = year_state_echo_no_ghgrp.drop(columns=['flow_proportion'])
+
+            # Concatenate the GHGRP matches and non-matches for our final dataframe
+            final_proxy_df = pd.concat([final_proxy_df, year_state_echo_ghgrp, year_state_echo_no_ghgrp], ignore_index=True)
+
+    return final_proxy_df
+
+
+
+# def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
+#     """
+#     Function to calculate emissions proxy for states based on GHGI and GHGRP data.
+
+#     Parameters:
+#     - emi_df: DataFrame containing GHGI emissions data.
+#     - ghgrp_df: DataFrame containing GHGRP emissions data.
+#     - echo_df: DataFrame containing ECHO facility data.
+#     - year_range: List or range of years to process.
+
+#     Returns:
+#     - final_proxy_df: DataFrame containing the processed emissions data for each state.
+#     """
+
+#     # Create the final dataframe that we will populate below
+#     final_proxy_df = pd.DataFrame()
+
+#     # Get the unique states in the ECHO data
+#     unique_states = emi_df['state_code'].unique()
+
+#     for year in year_range:
+        
+#         # Filter total GHGI emissions for the current year
+#         year_emi = emi_df[emi_df['year'] == year]
+
+#         # Filter total GHGRP emissions for the current year
+#         year_total_ghgrp_emis = ghgrp_df[ghgrp_df['Year'] == year]['emis_kt_tot'].sum()
+
+#         # Calculate the difference between national GHGI and GHGRP emissions
+#         year_national_emis_available = year_emi['ghgi_ch4_kt'].sum() - year_total_ghgrp_emis
+
+#         # Filter echo_df for the current year
+#         year_echo = echo_df[echo_df['Year'] == year]
+
+#         # Calculate the proportion of each state's GHGI methane emissions for current year
+#         year_emi.loc[:, 'state_proportion'] = year_emi['ghgi_ch4_kt'] / year_emi['ghgi_ch4_kt'].sum()
+
+#         # Allocate emissions to each state based on their proportion of total emissions
+#         year_emi.loc[:, 'state_ghgi_emis'] = year_emi['state_proportion'] * year_national_emis_available
+
+#         # Process emissions for each state
+#         for state in unique_states:
+
+#             year_state_echo = year_echo[year_echo['State'] == state]
+
+#             # Keep only GHGRP matches to concatenate later
+#             year_state_echo_ghgrp = year_state_echo[year_state_echo['ghgrp_match'] == 1]
+
+#             # Exclude GHGRP matches that already have emission values
+#             year_state_echo_no_ghgrp = year_state_echo[year_state_echo['ghgrp_match'] == 0]
+
+#             # Calculate the proportional flow at each facility
+#             year_state_echo_no_ghgrp.loc[:, 'flow_proportion'] = (
+#                 year_state_echo_no_ghgrp['Wastewater Flow (MGal/yr)'] / 
+#                 year_state_echo_no_ghgrp['Wastewater Flow (MGal/yr)'].sum()
+#             )
+            
+#             # Calculate the emissions for each facility
+#             year_state_echo_no_ghgrp.loc[:, 'emis_kt'] = (
+#                 year_state_echo_no_ghgrp['flow_proportion'] * 
+#                 year_emi[year_emi['state_code'] == state]['state_ghgi_emis'].values[0]
+#             )
+
+#             # Drop the flow proportion column
+#             year_state_echo_no_ghgrp = year_state_echo_no_ghgrp.drop(columns=['flow_proportion'])
+
+#             # Concatenate the GHGRP matches and non-matches for our final dataframe
+#             final_proxy_df = pd.concat([final_proxy_df, year_state_echo_ghgrp, year_state_echo_no_ghgrp], ignore_index=True)
+
+#     return final_proxy_df
+
 def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, industry='Pulp and Paper'):
     """
     Process facilities data, match with GHGRP data, and distribute emissions.
@@ -139,14 +291,17 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
     Returns:
     pd.DataFrame: Processed ECHO dataset with matched and distributed emissions
     """
-    
+
     # Step 1: Match facilities to GHGRP based on location
     echo_df['ghgrp_match'] = 0
     echo_df['emis_kt'] = 0
     ghgrp_df['found'] = 0
     
+    # convert int to float to avoid potential math / dtype errors
     echo_df['emis_kt'] = echo_df['emis_kt'].astype(float)
     ghgrp_df['emis_kt_tot'] = ghgrp_df['emis_kt_tot'].astype(float)
+
+    ghgrp_df = convert_state_names_to_codes(ghgrp_df, 'State')
 
     # Some GHGRP data are empty after trying to join the GHGRP emi and facility data
     if len(ghgrp_df) != 0:
@@ -169,9 +324,7 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
 
         ghgrp_to_add = ghgrp_df[ghgrp_df['found'] == 0][['Year', 'State', 'latitude', 'longitude', 'emis_kt_tot']]
 
-        ghgrp_to_add = convert_state_names_to_codes(ghgrp_to_add, 'State')
-    
-        # Rename columns to match the desired output and add fixed values for new columns
+        # Rename columns to match the desired output
         ghgrp_to_add = ghgrp_to_add.rename(columns={
             'latitude': 'Facility Latitude',
             'longitude': 'Facility Longitude',
@@ -182,92 +335,19 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
         ghgrp_to_add['ghgrp_match'] = 2
         ghgrp_to_add['Wastewater Flow (MGal/yr)'] = 0
 
-        # Append the subset to the master dataframe
+        # Add the "not found" GHGRP facilities to the ECHO dataframe
         echo_df = pd.concat([echo_df, ghgrp_to_add], ignore_index=True)
         
-        # Set the 'found' column to 2 for GHGRP facilities not location matched with ECHO but added
+        # Set the 'found' column to 2 for GHGRP facilities not location matched with ECHO but added to ECHO
         ghgrp_df.loc[ghgrp_df['found'] == 0, 'found'] = 2
 
-        # Step 3: Distribute remaining emissions difference 
-        # Pre-calculate unique states
-        unique_states = emi_df['state_code'].unique()
+        # Step 3: Distribute remaining emissions difference
 
-        # Create a multi-index for faster lookups
-        emi_df.set_index(['year', 'state_code'], inplace=True)
-    
-        # Create the final dataframe that we will populate below
-        final_proxy_df = pd.DataFrame()
-
-        for year in year_range:
-            # Filter echo_df for the current year
-            year_echo = echo_df[echo_df['Year'] == year]
-            
-            for state in unique_states:
-                try:
-                    year_state_emi = emi_df.loc[(year, state), 'ghgi_ch4_kt']
-                except KeyError:
-                    #print(f"No data for {year} in {state}")
-                    continue
-                
-                year_state_echo = year_echo[year_echo['State'] == state]
-                
-                if year_state_echo.empty:
-                    #print(f"No ECHO data for {year} in {state}")
-                    continue
-                
-                # Calculate GHGRP and non-GHGRP emissions
-                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] != 0]['emis_kt'].sum()
-                inv_emi_minus_ghgrp = year_state_emi - echo_ghgrp_emi
-                
-                #print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
-                
-                # Calculate the fraction for non-GHGRP facilities
-                flow_sum = year_state_echo[year_state_echo['ghgrp_match'] == 0]['Wastewater Flow (MGal/yr)'].sum()
-                year_state_echo.loc[year_state_echo['ghgrp_match'] == 0, 'emis_kt'] += \
-                    inv_emi_minus_ghgrp * (year_state_echo.loc[year_state_echo['ghgrp_match'] == 0, 'Wastewater Flow (MGal/yr)'] / flow_sum)
-                
-                final_proxy_df = pd.concat([final_proxy_df, year_state_echo], ignore_index=True)
-
+        final_proxy_df = calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range)
+    # If no GHGRP data is found, assign all emissions to ECHO data
     else:
         print(f"GHGRP data not found for {industry}, assigning all emissions to ECHO data.")
-        # Pre-calculate unique states
-        unique_states = emi_df['state_code'].unique()
-
-        # Create a multi-index for faster lookups
-        emi_df.set_index(['year', 'state_code'], inplace=True)
-
-        # Create the final dataframe that we will populate below
-        final_proxy_df = pd.DataFrame()
-
-        for year in year_range:
-            # Filter echo_df for the current year
-            year_echo = echo_df[echo_df['Year'] == year]
-            
-            for state in unique_states:
-                try:
-                    year_state_emi = emi_df.loc[(year, state), 'ghgi_ch4_kt']
-                except KeyError:
-                    #print(f"No data for {year} in {state}")
-                    continue
-                
-                year_state_echo = year_echo[year_echo['State'] == state]
-                
-                if year_state_echo.empty:
-                    #print(f"No ECHO data for {year} in {state}")
-                    continue
-                
-                # Calculate GHGRP and non-GHGRP emissions
-                echo_ghgrp_emi = year_state_echo[year_state_echo['ghgrp_match'] != 0]['emis_kt'].sum()
-                inv_emi_minus_ghgrp = year_state_emi - echo_ghgrp_emi
-                
-                #print(f"Difference between EPA Inv emi and GHGRP emi for {year} in {state}: {inv_emi_minus_ghgrp:.2f}")
-                
-                # Calculate the fraction for non-GHGRP facilities
-                flow_sum = year_state_echo['Wastewater Flow (MGal/yr)'].sum()
-                year_state_echo.loc[year_state_echo['ghgrp_match'] == 0, 'emis_kt'] += \
-                    inv_emi_minus_ghgrp * year_state_echo.loc[year_state_echo['ghgrp_match'] == 0, 'Wastewater Flow (MGal/yr)'] / flow_sum
-                
-                final_proxy_df = pd.concat([final_proxy_df, year_state_echo], ignore_index=True)
+        final_proxy_df = calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range)
     
     return final_proxy_df
 
@@ -323,7 +403,32 @@ def filter_by_naics(df, naics_prefix):
     """Filter dataframe by NAICS code prefix."""
     return df[df['NAICS Code'].str.startswith(naics_prefix)].copy().reset_index(drop=True)
 
+def compare_state_sets(df1, df2, state_column1, state_column2):
+    """
+    Function to compare the unique sets of state abbreviations between two DataFrames.
+    
+    Parameters:
+    - df1: First DataFrame
+    - df2: Second DataFrame
+    - state_column1: Column name of the state abbreviations in the first DataFrame
+    - state_column2: Column name of the state abbreviations in the second DataFrame
+    
+    Returns:
+    - A message indicating if the sets of states are identical or which states are missing from the second DataFrame.
+    """
+    
+    # Extract unique states from both DataFrames
+    unique_states_df1 = set(df1[state_column1].unique())
+    unique_states_df2 = set(df2[state_column2].unique())
 
+    # Check if the sets are the same
+    if unique_states_df1 == unique_states_df2:
+        return "Both DataFrames have the same unique set of states."
+    else:
+        # Find the states that are in df1 but missing from df2
+        missing_states = unique_states_df1 - unique_states_df2
+        sorted_missing_states = sorted(list(missing_states))
+        return f"The following states are missing from echo: {sorted_missing_states}"
 # %%
 # Step 2.2 Read in full ECHO dataset
 
@@ -360,48 +465,48 @@ echo_nonpotw = clean_and_group_echo_data(echo_full, 'NON-POTW')
 echo_nonpotw['NAICS Code'] = echo_nonpotw['NAICS Code'].astype(str)
 echo_nonpotw['SIC Code'] = echo_nonpotw['SIC Code'].astype(str)
 
-# Define industry filters
-industry_filters = {
-    'Pulp and Paper': {
-        'naics': ['3221'],
-        'sic': ['2611', '2621', '2631']
-    },
-    'Meat and Poultry': {
-        'naics': ['3116'],
-        'sic': ['0751', '2011', '2048', '2013', '5147', '2077', '2015']
-    },
-    'Fruit and Vegetables': {
-        'naics': ['3114'],
-        'sic': ['2037', '2038', '2033', '2035', '2032', '2034', '2099']
-    },
-    'Ethanol': {
-        'naics': ['325193'],
-        'sic': ['2869']
-    },
-    'Breweries': {
-        'naics': ['312120'],
-        'sic': ['2082']
-    },
-    'Petroleum Refining': {
-        'naics': ['32411'],
-        'sic': ['2911']
-    }
+industries = {
+    'pp': ('3221', ['2611', '2621', '2631']),
+    'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
+    'fv': ('3114', ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
+    'ethanol': ('325193', ['2869']),
+    'brew': ('312120', ['2082']),
+    'petrref': ('32411', ['2911'])
 }
 
-# Create filtered dataframes
-filtered_dfs = {}
-for industry, codes in industry_filters.items():
-    filtered_dfs[industry] = filter_industry(echo_nonpotw, codes['naics'], codes['sic'])
-    print(f"{industry} dataframe created with {len(filtered_dfs[industry])} rows")
+# Process all industries
+for industry_name, (naics_prefix, sic_codes) in industries.items():
+    result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
+    exec(f"echo_{industry_name.lower()} = result_df")
 
-# Generate individual dataframes
-echo_pp = filtered_dfs['Pulp and Paper']
-echo_mp = filtered_dfs['Meat and Poultry']
-echo_fv = filtered_dfs['Fruit and Vegetables']
-echo_eth = filtered_dfs['Ethanol']
-echo_brew = filtered_dfs['Breweries']
-echo_ref = filtered_dfs['Petroleum Refining']
+# %%
 
+# Check if there are missing states between the ECHO and GHGI emi data
+
+# for emi_df in [ww_pp_emi, ww_mp_emi, ww_fv_emi, ww_ethanol_emi, ww_brew_emi, ww_petrref_emi]:
+#     for echo_df in [echo_pp, echo_mp, echo_fv, echo_ethanol, echo_brew, echo_petrref]:
+#         # for names in ["echo_pp", "echo_mp", "echo_fv", "echo_ethanol", "echo_brew", "echo_petrref"]:
+#         print("Comparing", names)
+#         print(compare_state_sets(emi_df, echo_df, 'state_code', 'State'))
+#         print("\n")
+
+print("Comparing Pulp and Paper")
+print(compare_state_sets(ww_pp_emi, echo_pp, 'state_code', 'State'))
+
+print("Comparing Meat and Poultry")
+print(compare_state_sets(ww_mp_emi, echo_mp, 'state_code', 'State'))
+
+print("Comparing Fruits and Vegetables")
+print(compare_state_sets(ww_fv_emi, echo_fv, 'state_code', 'State'))
+
+print("Comparing Ethanol")
+print(compare_state_sets(ww_ethanol_emi, echo_ethanol, 'state_code', 'State'))
+
+print("Comparing Breweries")
+print(compare_state_sets(ww_brew_emi, echo_brew, 'state_code', 'State'))
+
+print("Comparing Petroleum Refining")
+print(compare_state_sets(ww_petrref_emi, echo_petrref, 'state_code', 'State'))
 
 # %%
 
@@ -451,9 +556,18 @@ ghgrp_eth = ghgrp_industries['eth']
 ghgrp_brew = ghgrp_industries['brew']
 ghgrp_ref = ghgrp_industries['ref']
 
+dfs = [ghgrp_pp, ghgrp_mp, ghgrp_fv, ghgrp_eth, ghgrp_brew, ghgrp_ref]
+
+ghgrp_combined = pd.concat(dfs, ignore_index=True)
+
+total_ghgrp_emis = ghgrp_combined[['Year', 'State', 'emis_kt_tot']]
+
+
 # %%
 
 # Step 2.6 Join GHGRP, ECHO, and emi data
+
+industrial_emi_totals = pd.DataFrame(industrial_emis.groupby(['year'])['ghgi_ch4_kt'].sum().reset_index())
 
 final_pp = process_facilities_and_emissions(echo_pp, ghgrp_pp, ww_pp_emi, years, industry='Pulp and Paper')
 final_mp = process_facilities_and_emissions(echo_mp, ghgrp_mp, ww_mp_emi, years, industry='Meat and Poultry')
