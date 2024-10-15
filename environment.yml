@@ -44,7 +44,8 @@ dependencies:
   - pyogrio # use 
   - rioxarray
   - pip
-  - osgeo
+  - gdal
+  # - osgeo
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode
  
