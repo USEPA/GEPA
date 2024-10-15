@@ -1,3 +1,15 @@
+"""
+Name:                   task_roads_proxy.py
+Date Last Modified:     2024-10-09
+Authors Name:           A. Burnette (RTI International)
+Purpose:                Mapping of mobile combustion proxy emissions
+Input Files:            -
+Output Files:           -
+Notes:                  - Script will be updated to remove comments once adjustments
+                            are made for other mobile_combustion proxy emissions
+                        -
+"""
+
 ########################################################################################
 # %% STEP 0.1. Load Packages
 
