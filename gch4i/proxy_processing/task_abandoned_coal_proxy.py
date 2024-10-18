@@ -1,27 +1,29 @@
 # %%
-import calendar
+# import calendar
 import datetime
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
 
+import pyarrow.parquet  # noqa
+import osgeo  # noqa
 import geopandas as gpd
 import numpy as np
-import osgeo
 import pandas as pd
 import seaborn as sns
-from pyarrow import parquet
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
     ghgi_data_dir_path,
     global_data_dir_path,
+    sector_data_dir_path,
     max_year,
     min_year,
     proxy_data_dir_path,
 )
 from gch4i.utils import name_formatter
+
+pd.set_option("future.no_silent_downcasting", True)
 
 # %%
 
@@ -30,9 +32,9 @@ from gch4i.utils import name_formatter
 @task(id="abd_coal_proxy")
 def task_get_abd_coal_proxy_data(
     inventory_workbook_path: Path = (
-        ghgi_data_dir_path / "abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx"
+        ghgi_data_dir_path / "1B1a_abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx"
     ),
-    msha_path: Path = V3_DATA_PATH / "sector/abandoned_mines/Mines.zip",
+    msha_path: Path = sector_data_dir_path / "abandoned_mines/Mines.zip",
     county_path: str = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = (
@@ -61,15 +63,119 @@ def task_get_abd_coal_proxy_data(
 
     6 based on mine name, state, and county out of a total 544 mines.
 
-    For the remaining 101 mines, these emissions are allocated across the county on record
-    for that mine (based on the area in each grid cell relative to the total area in that
-    county). This approach is also used for 6 mines where the reported Lat/Lon in the MSHA
-    database does not match the state on record for that mine. In total, ~20% of total
-    annual abandoned mine emissions are allocated to the county-level rather than specific
-    mine location.
+    For the remaining 101 mines, these emissions are allocated across the county on
+    record for that mine (based on the area in each grid cell relative to the total area
+    in that county). This approach is also used for 6 mines where the reported Lat/Lon
+    in the MSHA database does not match the state on record for that mine. In total,
+    ~20% of total annual abandoned mine emissions are allocated to the county-level
+    rather than specific mine location.
     """
+    # %%
+    # basin recode dictionary for both the ratios and mines list.
+    basin_name_recode = {
+        "Central Appl": 0,
+        "Central Appl.": 0,
+        "Illinois": 1,
+        "Northern Appl": 2,
+        "Northern Appl.": 2,
+        "Warrior Basin": 3,
+        "Warrior": 3,
+        "Uinta": 4,
+        "Raton": 4,
+        "Arkoma": 4,
+        "Piceance": 4,
+        "Western Basins": 4,
+    }
+
+    # basin coefficients pulled from v2
+    # order: CA, IL, NA, BW, WS
+    basin_coef_dict = {
+        "Flooded": [0.672, 0.672, 0.672, 0.672, 0.672],
+        "Sealed": [0.000741, 0.000733, 0.000725, 0.000729, 0.000747],
+        "Venting": [0.003735, 0.003659, 0.003564, 0.003601, 0.003803],
+        "b_medium": [2.329011, 2.314585, 2.292595, 2.299685, 2.342465],
+    }
+
+    basin_coef_df = pd.DataFrame.from_dict(basin_coef_dict)
+    basin_coef_df
+
+    # the set of functions to calculate emissions based on the status of the mine and
+    # the basin it is in.
+    def flooded_calc(df, basin, bc_df):
+        # abdmines.loc[imine,'Active Emiss. (mmcfd) ']
+        # * np.exp(-1*D_flooded[ibasin]*ab_numyrs)
+        return df["active_emiss"] * np.exp(
+            -1 * bc_df.loc[basin, "Flooded"] * df["years_closed"]
+        )
+
+    def venting_calc(df, basin, bc_df):
+        # abdmines.loc[imine,'Active Emiss. (mmcfd) ']
+        # * (1+b_medium[ibasin]*D_venting[ibasin]*ab_numyrs)
+        # ** (-1/float(b_medium[ibasin]))
+        return df["active_emiss"] * (
+            1
+            + bc_df.loc[basin, "b_medium"]
+            * bc_df.loc[basin, "Venting"]
+            * df["years_closed"]
+        ) ** (-1 / bc_df.loc[basin, "b_medium"])
+
+    def sealed_calc(df, basin, bc_df):
+        # abdmines.loc[imine,'Active Emiss. (mmcfd) ']
+        # * (1-0.8)
+        # * (1+b_medium[ibasin]*D_sealed[ibasin]*ab_numyrs)
+        # ** (-1/float(b_medium[ibasin]))
+        return (
+            df["active_emiss"]
+            * (1 - 0.8)
+            * (
+                1
+                + bc_df.loc[basin, "b_medium"]
+                * bc_df.loc[basin, "Sealed"]
+                * df["years_closed"]
+            )
+            ** (-1 / bc_df.loc[basin, "b_medium"])
+        )
+
+    def unknown_calc(df, basin, bc_df, r_df):
+        em_flo = r_df.loc[basin, "Flooded"] * flooded_calc(df, basin, bc_df)
+        em_ven = r_df.loc[basin, "Venting"] * venting_calc(df, basin, bc_df)
+        em_sea = r_df.loc[basin, "Sealed"] * sealed_calc(df, basin, bc_df)
+        return np.sum([em_flo, em_ven, em_sea], axis=0)
+
+    # Create the ratios dataframe from the inventory workbook. Get the ratios of mines
+    # that are sealed, venting, and flooded by basin and year. the rows to skip to find
+    # each of the ratio tables.
+    skip_row_list = [26, 29, 29, 29, 29, 29, 29, 29, 30, 30, 30]
+    ratio_list = []
+    for year, skip_row in zip(range(min_year, max_year + 1), skip_row_list):
+
+        ratios_df = (
+            pd.read_excel(
+                inventory_workbook_path,
+                sheet_name=str(year),
+                skiprows=skip_row,
+                nrows=5,
+            )
+            .loc[:, ["Basin", "Sealed %", "Vented %", "Flooded %"]]
+            .rename(
+                columns={
+                    "Sealed %": "Sealed",
+                    "Vented %": "Venting",
+                    "Flooded %": "Flooded",
+                }
+            )
+            .assign(year=year)
+        )
+        ratio_list.append(ratios_df)
+    ratios_df = (
+        pd.concat(ratio_list).replace(basin_name_recode).set_index(["Basin", "year"])
+    )
+    ratios_normed_df = ratios_df.groupby("year").apply(
+        lambda df: df.div(df.sum(axis=1), axis=0)
+    )
 
     # %%
+    # load the state, county, and mine data
     state_gdf = (
         gpd.read_file(state_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -93,6 +199,7 @@ def task_get_abd_coal_proxy_data(
         .to_crs(4326)
     )
 
+    # load the MSHA mine data
     with ZipFile(msha_path) as z:
         with z.open("Mines.txt") as f:
             msha_df = (
@@ -114,11 +221,14 @@ def task_get_abd_coal_proxy_data(
                 # .set_index("MINE_ID")
             )
 
+    # make the mines data spatial
     msha_gdf = gpd.GeoDataFrame(
         msha_df.drop(columns=["LATITUDE", "LONGITUDE"]),
         geometry=gpd.points_from_xy(msha_df["LONGITUDE"], msha_df["LATITUDE"]),
         crs=4326,
     )
+    # get only the mines that are in the lower 48 + DC
+    # side effect that mines with invalid geometries are dropped
     msha_gdf = msha_gdf[msha_gdf.intersects(state_gdf.dissolve().geometry.iat[0])]
 
     ax = msha_gdf.plot(color="xkcd:scarlet", figsize=(10, 10), markersize=1)
@@ -146,7 +256,9 @@ def task_get_abd_coal_proxy_data(
         }
     }
 
-    ghgi_mine_list = (
+    # get the list of mines from the inventory workbook that are listed as abandoned.
+    # these are the ones we will try to match to the MSHA location data.
+    inventory_mine_df = (
         pd.read_excel(
             inventory_workbook_path,
             sheet_name="Mine List",
@@ -173,16 +285,12 @@ def task_get_abd_coal_proxy_data(
         .join(msha_gdf[msha_cols].set_index("MINE_ID"))
         .reset_index()
     )
-    ghgi_mine_list
+    inventory_mine_df
     # %%
-    # First try to match by ID alone
-    print(f"total mines: {ghgi_mine_list.shape[0]}\n")
-    matches = ghgi_mine_list[~ghgi_mine_list["geometry"].isna()]
-    missing_geoms = ghgi_mine_list[ghgi_mine_list["geometry"].isna()]
-    print(f"mines matched by ID: {matches.shape[0]}")
-    print(f"mines still missing geom: {missing_geoms.shape[0]}\n")
+    # match inventory mines to the location data using a variety of strategies, in order
+    # from the matching_attempts dictionary. The first match is by ID, then by the
+    # dictionary.
 
-    # Then try to match by a combination of columns in each dataset
     matching_attempts = {
         "name, date, county, state": [
             "formatted_name",
@@ -199,6 +307,15 @@ def task_get_abd_coal_proxy_data(
         "name, date": ["formatted_name", "date_abd"],
     }
 
+    # First try to match by ID alone
+    print(f"total mines: {inventory_mine_df.shape[0]}\n")
+    matches = inventory_mine_df[~inventory_mine_df["geometry"].isna()]
+    missing_geoms = inventory_mine_df[inventory_mine_df["geometry"].isna()]
+    print(f"mines matched by ID: {matches.shape[0]}")
+    print(f"mines still missing geom: {missing_geoms.shape[0]}\n")
+
+    # now loop through the dictionary of matching attempts to try to match the remaining
+    # mines.
     match_result_list = []
     match_result_list.append(matches)
     for match_name, col_list in matching_attempts.items():
@@ -213,9 +330,7 @@ def task_get_abd_coal_proxy_data(
         )
 
         matches = match_attempt[~match_attempt["geometry"].isna()]
-        missing_geoms = match_attempt[
-            match_attempt["geometry"].isna()
-        ]  # .drop(columns="MINE_ID")
+        missing_geoms = match_attempt[match_attempt["geometry"].isna()]
         match_result_list.append(matches)
         print(f"mines matched by {match_name}: {matches.shape[0]}")
         print(f"mines still missing geom: {missing_geoms.shape[0]}\n")
@@ -235,206 +350,241 @@ def task_get_abd_coal_proxy_data(
     matching_results = pd.concat(match_result_list)
     print(f"total geo match mines: {matching_results.shape[0]}\n")
 
-    active_mines = matching_results[matching_results["CURRENT_MINE_STATUS"] == "Active"]
-    print(
-        f"mines that are in the abandoned workbook but listed as active in the mine db: {active_mines}"
-    )
     # %%
+
     # it appears the new workbooks has a clean version of 'Current Emissions Status'
     # called "simple status" so there is no need to recode that from the broader list
     # found in v2.
+    all_mines_df = (
+        matching_results.assign(
+            # create column of recovering state
+            recovering=lambda df: np.where(
+                df["current model worksheet"].str.casefold().str.contains("recovering"),
+                1,
+                0,
+            ),
+            # reclass to basin number
+            basin_nr=lambda df: df["coal basin"].replace(basin_name_recode),
+            # get the reopen date
+            reopen_date=lambda df: pd.to_datetime(df["CURRENT_CONTROLLER_BEGIN_DT"]),
+            operating_status=lambda df: df["CURRENT_MINE_STATUS"],
+            # filter down columns we need.
+        )
+        # calculate only for mines that have emissions
+        .query("active_emiss > 0").loc[
+            :,
+            [
+                "MINE_ID",
+                "geometry",
+                "state_code",
+                "county",
+                "basin_nr",
+                "recovering",
+                "reopen_date",
+                "date_abd",
+                "simple status",
+                "active_emiss",
+                "operating_status",
+            ],
+        ]
+    )
+    all_mines_df
 
-    ## Step 3 - Add basin number. #CA, IL, NA, BW, WS
-    basin_name_recode = {
-        "Central Appl.": 0,
-        "Illinois": 1,
-        "Northern Appl.": 2,
-        "Warrior": 3,
-        "Uinta": 4,
-        "Raton": 4,
-        "Arkoma": 4,
-        "Piceance": 4,
-    }
+    # carrying over the guidance from v2, we will remove mines that are listed as active
+    #       NOTES:
+    # 1)    Mines reopened in 2020 will not affect this notebook run for 2012-2018.
+    # 2)    MSHA says mine 3600840 is active, but it is not in active mine GHGI
+    #       workbook. It is in the abandoned mine workbook. abandoned in 1994.
+    #       We keep it here.
+    # 3)    Mine 4200079 is present in active mines notebook and also has abandoned
+    #       emissions. However, its emissions are only ~0.8% of Utah's abandoned mines
+    #       emissions. We keep it here.
+    #       Old: We remove it in the flux calculation block for 2016-2018.
+    # 4)    Mine 1100588 is listed as a refuse recovery mine in the active mines
+    #       notebook, with coal production for the years 2012-2016. Refuse recovery mine
+    #       emissions are not included in the active mining emissions estimates.
+    #       This mine also has abandoned emissions and is in the abandoned GHGI workbook
+    #       (close in 1995). We keep this here.
+    #       #old: We remove it in the flux calculation block here for years 2014-2018.
+    # 5)    Check to see if there are other mines listed below.
 
-    # basin coefficients pulled from v2:
-    basin_coef_dict = {
-        "Flooded": [0.672, 0.672, 0.672, 0.672, 0.672],
-        "Sealed": [0.000741, 0.000733, 0.000725, 0.000729, 0.000747],
-        "Venting": [0.003735, 0.003659, 0.003564, 0.003601, 0.003803],
-        "b_medium": [2.329011, 2.314585, 2.292595, 2.299685, 2.342465],
-    }
+    # So we filter the active mines that closed in 2020 or later to handle in the yearly
+    # emissions calculations.
 
-    basin_coef_df = pd.DataFrame.from_dict(basin_coef_dict)
-    basin_coef_df
+    active_mines_df = all_mines_df.query(
+        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)"
+    ).sort_values("reopen_date")
+    print(
+        "mines that are in the abandoned workbook but "
+        f"listed as active in the mine db: {len(active_mines_df)}"
+    )
+    active_mines_df
 
-    calc_results = matching_results.assign(
-        # create column of recovering state
-        recovering=lambda df: np.where(
-            df["current model worksheet"].str.casefold().str.contains("recovering"),
-            1,
-            0,
-        ),
-        # reclass to basin number
-        basin_nr=lambda df: df["coal basin"].replace(basin_name_recode),
-        # get the reopen date
-        reopen_date=lambda df: pd.to_datetime(df["CURRENT_CONTROLLER_BEGIN_DT"]),
-        # filter down columns we need.
-    ).loc[
-        :,
-        [
-            "MINE_ID",
-            "geometry",
-            "state_code",
-            "county",
-            "basin_nr",
-            "recovering",
-            "reopen_date",
-            "date_abd",
-            "simple status",
-            "active_emiss",
-        ],
+    # remove the active mines from the abandoned mines
+    abandoned_mines_df = all_mines_df.loc[
+        ~all_mines_df.index.isin(active_mines_df.index)
     ]
-    calc_results
-
-    # TODO: Current workbook is missing some years of this data. update this when we get
-    # the final workbook. wrap this up into a single table that we query by year in the
-    # loop below.
-    ratios_df = (
-        pd.read_excel(inventory_workbook_path, sheet_name="2018", skiprows=20, nrows=5)
-        .loc[:, ["Sealed %", "Vented %", "Flooded %"]]
-        .rename(
-            columns={
-                "Sealed %": "Sealed",
-                "Vented %": "Venting",
-                "Flooded %": "Flooded",
-            }
-        )
-    )  # .apply(lambda x: x / x.sum(), axis=1)
-    # ).loc[:, ["Basin", "Sealed %", "Vented %", "Flooded %"]]
-
-    ratios_normed_df = ratios_df / ratios_df.sum().sum()
-    ratios_normed_df
-    # # orig flooded calc
-    # abdmines["Active Emiss. (mmcfd) "][imine] * np.exp(-1 * D_flooded[ibasin] * ab_numyrs)
-    # # orig venting calc
-    # abdmines["Active Emiss. (mmcfd) "][imine] * (
-    #     1 + b_medium[ibasin] * D_venting[ibasin] * ab_numyrs
-    # ) ** (-1 / float(b_medium[ibasin]))
-    # # orig sealed calc
-    # abdmines["Active Emiss. (mmcfd) "][imine] * (1 - 0.8) * (
-    #     1 + b_medium[ibasin] * D_sealed[ibasin] * ab_numyrs
-    # ) ** (-1 / float(b_medium[ibasin]))
     # %%
-    def flooded_calc(df, basin, bc_df):
-        return df["active_emiss"] * np.exp(
-            -1 * bc_df.loc[basin, "Flooded"] * df["years_closed"]
-        )
-
-    def venting_calc(df, basin, bc_df):
-        return df["active_emiss"] * (
-            1
-            + bc_df.loc[basin, "b_medium"]
-            * bc_df.loc[basin, "Venting"]
-            * df["years_closed"]
-        ) ** (-1 / bc_df.loc[basin, "b_medium"])
-
-    def sealed_calc(df, basin, bc_df):
-        return (
-            df["active_emiss"]
-            * (1 - 0.8)
-            * (
-                1
-                + bc_df.loc[basin, "b_medium"]
-                * bc_df.loc[basin, "Sealed"]
-                * df["years_closed"]
-            )
-            ** (-1 / bc_df.loc[basin, "b_medium"])
-        )
-
-    def unknown_calc(df, basin, bc_df, r_df):
-        em_flo = r_df.loc[basin, "Flooded"] * flooded_calc(df, basin, bc_df)
-        em_ven = r_df.loc[basin, "Venting"] * venting_calc(df, basin, bc_df)
-        em_sea = r_df.loc[basin, "Sealed"] * sealed_calc(df, basin, bc_df)
-        return np.sum([em_flo, em_ven, em_sea])
+    # previously year days were recalculated for every year to calculate the fraction
+    # of years a mine way closed. I think a better approach would be to assign a
+    # constant that roughly equals the number of days in a year.
+    year_days = 365.25
 
     result_list = []
-    # for each year we have mine data
+    # for each year we have mine data, calculate emissions based on the basin, mine
+    # status, and the number of years closed.
     for year in range(min_year, max_year + 1):
 
-        # get the year days
-        month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-        year_days = np.sum(month_days)
+        # get the normalized ratios of mine status by year
+        yearly_ratios_normed_df = ratios_normed_df.loc[year].droplevel(-1)
+
+        # check that the ratios sum to 1 for each basin
+        if (
+            not yearly_ratios_normed_df.sum(axis=1)
+            .apply(lambda x: np.isclose(x, 1))
+            .all()
+        ):
+            raise ValueError("Ratios do not sum to 1")
+
+        # # get the number of days in the year
+        # month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
+        # year_days = np.sum(month_days)
 
         # this year date to calc relative emissions
-        calc_date = datetime.datetime(year=year, month=7, day=2)
+        # NOTE: this is different from the v2 notebook where the date was 07/02
+        # We can calculate the actual fraction of emissions for a given year.
+        calc_date = datetime.datetime(year=year, month=12, day=31)
 
-        year_df = (
-            calc_results.copy()
-            # use only mines that are closed this year or earlier
-            # e.g. if it's 2012 and the mine closed in 2022, remove it because it is not
-            # abandoned yet.
-            .query("date_abd.dt.year <= @year")
-            .query("active_emiss > 0")
-            .assign(
-                year=year,
-                # calculate the number of days closed relative to 07/02 of this year?
-                # XXX: why not calculate the entire year?
-                # if the mine closed this year, give it special treatment where the number
-                # of days closed is 1/2 of the number of days closed relative to our date of 07/02
-                # the logic here is: if the mine closed in this year, the number of days closed
-                # is equal to 1/2 the days closed relative to 07/02.
-                days_closed=lambda df: np.where(
-                    df["date_abd"].dt.year == year,
-                    -((calc_date - df["date_abd"]) / 2),
-                    calc_date - df["date_abd"],
-                ),
-                years_closed=lambda df: (df["days_closed"].dt.days / year_days),
-                emis_mmcfd=0,
-            )
+        # calculate the number of days closed relative to 07/02 of this year?
+        # XXX: why not calculate the entire year?
+        # if the mine closed this year, give it special treatment where the
+        # number of days closed is 1/2 of the number of days closed relative to
+        # our date of 07/02 the logic here is: if the mine closed in this year,
+        # the number of days closed is equal to 1/2 the days closed relative to
+        # 07/02.
+        # calc_date = datetime.datetime(year=year, month=7, day=2)
+
+        # get the mines that are abandoned this year or earlier
+        year_abandoned_mines_df = abandoned_mines_df.query(
+            "date_abd <= @calc_date"
+        ).assign(
+            # assign the current year for calculations
+            year=year,
+            days_closed=lambda df: (calc_date - df["date_abd"]),
+            # days_closed=lambda df: np.where(
+            #     df["date_abd"].dt.year == year,
+            #     -((calc_date - df["date_abd"]) / 2),
+            #     calc_date - df["date_abd"],
+            # ),
+            # calculate the number of years closed
+            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
+            # create an empty column to hold the results
+            mine_emi=0,
         )
-        print(year, year_df.shape[0])
 
+        # these are mines that are listed as active, but were reopened this year
+        # so we take these mines and calculate the days closed as the difference
+        # of days from when it when it was abandoned to the day it reopened this year.
+        # if the mine was opened this year, we subtract out the number of days it was
+        # operational from the days closed
+        year_active_mines_df = active_mines_df.query(
+            "(date_abd < @calc_date) & (reopen_date.dt.year >= @calc_date.year)"
+        ).assign(
+            operating_days=lambda df: np.where(
+                df["reopen_date"].dt.year.eq(year), calc_date - df["reopen_date"], 0
+            ),
+            days_closed=lambda df: (calc_date - df["date_abd"]) - df["operating_days"],
+            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
+            # create an empty column to hold the results
+            mine_emi=0,
+        )
+
+        # combine the abandoned and newly reopened mines for this year
+        year_mines_df = pd.concat([year_abandoned_mines_df, year_active_mines_df])
+
+        # we now calculate the emissions for each mine based on the status of the mine
+        # and the basin it is in.
         data_list = []
-        for (basin, status), data in year_df.groupby(["basin_nr", "simple status"]):
+        for (basin, status), data in year_mines_df.groupby(
+            ["basin_nr", "simple status"]
+        ):
             if status == "Flooded":
-                data["emis_mmcfd"] = flooded_calc(data, basin, basin_coef_df)
+                data["mine_emi"] = flooded_calc(data, basin, basin_coef_df)
             if status == "Venting":
-                data["emis_mmcfd"] = venting_calc(data, basin, basin_coef_df)
+                data["mine_emi"] = venting_calc(data, basin, basin_coef_df)
             if status == "Sealed":
-                data["emis_mmcfd"] = sealed_calc(data, basin, basin_coef_df)
+                data["mine_emi"] = sealed_calc(data, basin, basin_coef_df)
+            # if the status of the mine is unknown, we calculate the emissions based on
+            # the fraction of mines that are sealed, venting, and flooded in the basin.
             if status == "Unknown":
-                data["emis_mmcfd"] = unknown_calc(
-                    data, basin, basin_coef_df, ratios_normed_df
+                data["mine_emi"] = unknown_calc(
+                    data, basin, basin_coef_df, yearly_ratios_normed_df
                 )
             data_list.append(data)
-        year_df = pd.concat(data_list)
-        year_df.loc[year_df["recovering"].eq(1), "emis_mmcfd"] = 0
-        result_list.append(year_df)
+        res_df = pd.concat(data_list)
+        # mines that are recovering are assigned 0 emissions
+        res_df.loc[res_df["recovering"].eq(1), "mine_emi"] = 0
+        result_list.append(res_df)
 
-    result_df = pd.concat(result_list)
-    result_df["year"].value_counts().sort_index()
+    result_df = pd.concat(result_list, ignore_index=True)
+
+    # QC all recovering mines have 0 emissions
+    if (
+        not result_df[result_df["recovering"].eq(1)]
+        .groupby("year")["mine_emi"]
+        .sum()
+        .eq(0)
+        .all()
+    ):
+        raise ValueError("Recovering mines should have 0 emissions")
+
+    # result_df.head()
 
     # %%
-    sns.relplot(data=result_df, y="emis_mmcfd", x="year", hue="state_code", kind="line")
-    sns.relplot(data=result_df, y="emis_mmcfd", x="year", kind="line")
-    result_df.groupby(["year", "state_code"])["emis_mmcfd"].sum()
+    # some visuals to check the data
+    sns.relplot(data=result_df, y="mine_emi", x="year", hue="state_code", kind="line")
+    # sns.relplot(data=result_df, y="mine_emi", x="year", kind="line")
 
-    result_df.groupby("year")["emis_mmcfd"].sum().describe()
-    # looking at values against the v2 numbers, it's not far off in some cases, but in
-    # others it's a drastic difference. This needs more input and review. We're close, but
-    # either the estimates have changed or more likely I've messed up somewhere...
-    # coefficients by year are wrong here so maybe a factor?
-    # Could be worth running this code against the v2 workbook to see if I get the same
-    # answer.
-    result_df[result_df.year == 2018].groupby("state_code")["emis_mmcfd"].sum()
+    # some QC checks I'll leave in here for reference
+    # the emission by state and year
+    # result_df.groupby(["year", "state_code"])["mine_emi"].sum()
+
+    # check the emissions based on the basin and status
+    # result_df.groupby(["basin_nr", "simple status"])[
+    #     "mine_emi"
+    # ].sum().reset_index()
+
+    # big list of checks for state, year, basin, status
+    # result_df.groupby(["state_code", "year", "basin_nr", "simple status"])[
+    #     "mine_emi"
+    # ].sum().reset_index()
+
     # %%
+
+    # format the final proxy data by getting only the columns we need.
     proxy_gdf = gpd.GeoDataFrame(result_df, crs=4326).loc[
-        :, ["MINE_ID", "state_code", "year", "emis_mmcfd", "geometry"]
+        :, ["MINE_ID", "state_code", "year", "mine_emi", "geometry"]
     ]
 
-    # proxy_gdf.to_file(output_path)
+    # calculate the relative emissions by state and year for allocation.
+    proxy_gdf["rel_emi"] = proxy_gdf.groupby(["state_code", "year"])[
+        "mine_emi"
+    ].transform(lambda x: x / x.sum())
+
+    # %%
+    # check that relative values by state and year sum to 1.
+    if (
+        not proxy_gdf.groupby(["state_code", "year"])["rel_emi"]
+        .sum()
+        .apply(lambda x: np.isclose(x, 1))
+        .all()
+    ):
+        raise ValueError("relative emissions do not sum to 1")
+    # %%
+    # visual check of the final proxy data
+    ax = state_gdf.boundary.plot(color="xkcd:slate", lw=0.2, figsize=(10, 10))
+    proxy_gdf.plot(column="rel_emi", markersize=5, legend=False, ax=ax)
+    # %%
+    # save the final proxy data
     proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# %%
+    # %%

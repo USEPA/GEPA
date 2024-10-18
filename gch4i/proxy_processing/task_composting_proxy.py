@@ -26,23 +26,25 @@ from gch4i.utils import name_formatter
 COMPOSTING_FRS_NAICS_CODE = 562219
 DUPLICATION_TOLERANCE_M = 250
 
+composting_dir = sector_data_dir_path / "composting"
+
 
 @mark.persist
 @task(id="composting_proxy")
 def get_composting_proxy_data(
-    excess_food_op_path: Path = sector_data_dir_path / "CompostingFacilities.xlsx",
+    excess_food_op_path: Path = composting_dir / "CompostingFacilities.xlsx",
     frs_facility_path: Path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
     frs_naics_path: Path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
-    biocycle_path: Path = sector_data_dir_path / "biocycle_locs_clean.csv",
+    biocycle_path: Path = composting_dir / "biocycle_locs_clean.csv",
     comp_council_path: Path = (
-        sector_data_dir_path / "STA Certified Compost Participants Map.kml"
+        composting_dir / "STA Certified Compost Participants Map.kml"
     ),
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     dst_path: Annotated[Path, Product] = (
         proxy_data_dir_path / "composting_proxy.parquet"
     ),
 ):
-
+    # %%
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -102,7 +104,7 @@ def get_composting_proxy_data(
         .drop(columns="description")
         .assign(
             formatted_fac_name=lambda df: name_formatter(df["name"]),
-            geometry=lambda df: df.geometry.transform(_drop_z),
+            geometry=lambda df: df.geometry.apply(_drop_z),
             source="comp_council",
         )
     )
@@ -159,3 +161,6 @@ def get_composting_proxy_data(
         ]
     ).reset_index(drop=True)
     final_facility_gdf.to_parquet(dst_path)
+
+
+# %%
