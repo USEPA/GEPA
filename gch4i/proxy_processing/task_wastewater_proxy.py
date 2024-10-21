@@ -8,6 +8,7 @@ import datetime
 from pyarrow import parquet
 from io import StringIO
 import pandas as pd
+import duckdb
 import osgeo
 import geopandas as gpd
 import numpy as np
@@ -43,13 +44,11 @@ ww_pp_emi = pd.read_csv(emi_data_dir_path / "ww_pp_emi.csv")
 industrial_emi_dfs = [ww_brew_emi, ww_ethanol_emi, ww_fv_emi, ww_mp_emi, ww_petrref_emi, ww_pp_emi]
 industrial_emis = pd.concat(industrial_emi_dfs, axis=0, ignore_index=True)
 
-#proxy mapping file
-Wastewater_Mapping_inputfile = proxy_data_dir_path / "wastewater/WastewaterTreatment_ProxyMapping.xlsx"
-
 # GHGRP Data
 ghgrp_emi_ii_inputfile = proxy_data_dir_path / "wastewater/ghgrp_subpart_ii.csv"
 
 ghgrp_facility_ii_inputfile = proxy_data_dir_path / "wastewater/SubpartII_Facilities.csv"
+
 
 # %% Functions
 def read_combined_file(file_path):
@@ -429,6 +428,80 @@ def compare_state_sets(df1, df2, state_column1, state_column2):
         missing_states = unique_states_df1 - unique_states_df2
         sorted_missing_states = sorted(list(missing_states))
         return f"The following states are missing from echo: {sorted_missing_states}"
+
+
+def subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, naics_prefix):
+    """
+    Subset a dataset of industrial sectors using DuckDB.
+    
+    Parameters:
+    frs_facility_path (str): Path to the FRS facility file.
+    frs_naics_path (str): Path to the FRS NAICS file.
+    sector_name (str): Name of the industrial sector.
+    naics_prefix (str): NAICS code prefix for the sector.
+    
+    Returns:
+    pd.DataFrame: A DataFrame containing the subset of facilities for the given sector.
+    """
+    query = f"""
+    SELECT 
+        frs.primary_name AS name, 
+        frs.latitude83 AS latitude, 
+        frs.longitude83 AS longitude,
+        frs.state_code AS state_code,
+        frs.create_date AS create_date,
+        frs.update_date AS update_date,
+        frs_naics.naics_code AS naics_code
+    FROM 
+        (SELECT registry_id, primary_name, latitude83, longitude83, state_code, create_date, update_date FROM '{frs_facility_path}') AS frs
+    JOIN 
+        (SELECT registry_id, naics_code FROM '{frs_naics_path}') AS frs_naics
+    ON 
+        frs.registry_id = frs_naics.registry_id
+    WHERE 
+        CAST(naics_code AS VARCHAR) LIKE '{naics_prefix}%'
+    """
+    
+    frs_df = duckdb.query(query).df()
+    
+    # # Apply name formatting and add source column
+    # frs_df['formatted_fac_name'] = frs_df['name'].apply(name_formatter)
+    # frs_df['source'] = 'frs'
+    
+    return frs_df
+
+# %%
+
+# Subset the FRS data to only those sectors we need 
+
+frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
+frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
+
+# Subset the FRS data for each industrial sector
+naics_codes = {
+    'pp': '3221',
+    'mp': '3116',
+    'fv': '3114',
+    'ethanol': '325193',
+    'brew': '312120',
+    'petrref': '32411'
+}
+
+# Process all sectors
+sector_dataframes = {}
+for sector_name, naics_prefix in naics_codes.items():
+    sector_df = subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, naics_prefix)
+    sector_dataframes[sector_name] = sector_df
+    print(f"Processed {sector_name} sector. Shape: {sector_df.shape}")
+
+# Access individual sector dataframes
+frs_pp = sector_dataframes['pp']
+frs_mp = sector_dataframes['mp']
+frs_fv = sector_dataframes['fv']
+frs_ethanol = sector_dataframes['ethanol']
+frs_brew = sector_dataframes['brew']
+frs_petrref = sector_dataframes['petrref']
+
 # %%
 # Step 2.2 Read in full ECHO dataset
 
@@ -614,12 +687,6 @@ summarize_ghgrp_match(final_fv, 'ghgrp_match', 'Fruit and Vegetables')
 summarize_ghgrp_match(final_eth, 'ghgrp_match', 'Ethanol')
 summarize_ghgrp_match(final_brew, 'ghgrp_match', 'Breweries')
 summarize_ghgrp_match(final_ref, 'ghgrp_match', 'Petroleum Refining')
-
-
-
-
-
-
 
 
 
