@@ -49,6 +49,49 @@ ghgrp_emi_ii_inputfile = proxy_data_dir_path / "wastewater/ghgrp_subpart_ii.csv"
 
 ghgrp_facility_ii_inputfile = proxy_data_dir_path / "wastewater/SubpartII_Facilities.csv"
 
+# %% 
+# Exploring the NPDES data
+
+npdes_2012 = pd.read_csv("/Users/ccoxen/Downloads/NPDES_DMRS_FY2012.csv")
+npdes_metadata = pd.read_csv("/Users/ccoxen/Downloads/npdes_outfalls_layer.csv")
+
+# %%
+npdes_2022 = pd.read_csv("/Users/ccoxen/Downloads/NPDES_DMRS_FY2022.csv")
+# %%
+
+npdes_pp = npdes_metadata[
+        (npdes_metadata['NAICS_CODES'].str.startswith('3221')) |
+        (npdes_metadata['SIC_CODES'].str.contains('|'.join(['2661', '2621', '2631'])))
+    ].copy()
+
+# %%
+npdes_pp_2022 = pd.merge(npdes_2022, npdes_pp, on='EXTERNAL_PERMIT_NMBR')
+
+# npdes_pp_2012 = pd.merge(npdes_2012, npdes_pp, on='EXTERNAL_PERMIT_NMBR')
+
+# %% 
+industries = {
+    'pp': ('3221', ['2611', '2621', '2631']),
+    'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
+    'fv': ('3114', ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
+    'eth': ('325193', ['2869']),
+    'brew': ('312120', ['2082']),
+    'petrref': ('32411', ['2911'])
+}
+
+# Process all industries
+for industry_name, (naics_prefix, sic_codes) in industries.items():
+    result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
+    exec(f"echo_{industry_name.lower()} = result_df")
+
+# %%
+def find_mgal_values(df, column_name):
+    # Convert the column to lowercase and filter rows where the column contains 'mgal'
+    mgal_values = df[df[column_name].str.lower().str.contains('mgal/yr', na=False)]
+    return mgal_values
+
+find_mgal_values(npdes_2012, 'DMR_UNIT_DESC')['DMR_UNIT_DESC'].unique()
+
 
 # %% Functions
 def read_combined_file(file_path):
