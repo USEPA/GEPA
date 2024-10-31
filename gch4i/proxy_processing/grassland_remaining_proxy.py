@@ -29,10 +29,10 @@ from gch4i.config import (
 # %% Read in the data
 
 # Read in emi data
-forest_land_emi = pd.read_csv(emi_data_dir_path / "forest_land_emi.csv")
+grassland_emi = pd.read_csv(emi_data_dir_path / "grassland_emi.csv")
 
 # Read in proxy data
-forest_land_proxy = pd.read_csv(proxy_data_dir_path / "fire/MTBS_byEventFuelFuelbed_09Sep2024.csv")
+grassland_proxy = pd.read_csv(proxy_data_dir_path / "fire/MTBS_byEventFuelFuelbed_09Sep2024.csv")
 
 # Read in MTBS proxy lat long data
 mtbs_lat_long = pd.read_csv(proxy_data_dir_path / "fire/mtbs_lat_longs.csv")
@@ -177,27 +177,26 @@ def create_final_proxy_df(proxy_df):
 # %% Step 1 - Data wrangling
 
 # Edit the fuelbed_aggregate column to remove the 'evg' string and convert to an integer
-forest_land_proxy['fuelbed_aggregate'] = forest_land_proxy['fuelbed_aggregate'].str.replace('evg', '').astype(float).astype(int)
+grassland_proxy['fuelbed_aggregate'] = grassland_proxy['fuelbed_aggregate'].str.replace('evg', '').astype(float).astype(int)
 
 # Convert the FIPS state codes to two-letter state codes
-forest_land_proxy = convert_FIPS_to_two_letter_code(forest_land_proxy, 'originstatecd')
+grassland_proxy = convert_FIPS_to_two_letter_code(grassland_proxy, 'originstatecd')
 
 # Get the forest and nonforest habitat types from the FCCS data
-fccs_forest = get_habitat_types(fccs_fuelbed, 'FUELBED', 'forest')
+fccs_grass = get_habitat_types(fccs_fuelbed, 'FUELBED', 'grassland')
 
-nawfd_forest = get_habitat_types(nawfd_fuelbed, 'name', 'forest')
-
+nawfd_grass = get_habitat_types(nawfd_fuelbed, 'name', 'grassland')
 
 # Filter the MTBS data to only include forest habitat types in the FCCS and NAWFD data
 
-forest_land_proxy = forest_land_proxy[
-    forest_land_proxy['fuelbed_aggregate'].isin(fccs_forest['FCCS']) |
-    forest_land_proxy['fuelbed_aggregate'].isin(nawfd_forest['nawfd_id'])
+grassland_proxy = grassland_proxy[
+    grassland_proxy['fuelbed_aggregate'].isin(fccs_grass['FCCS']) |
+    grassland_proxy['fuelbed_aggregate'].isin(nawfd_grass['nawfd_id'])
 ]
 
 
 # %% Step 2 - Calculate proxy emissions for each state
-proxy_df = calculate_state_emissions(forest_land_emi, forest_land_proxy, years)
+proxy_df = calculate_state_emissions(grassland_emi, grassland_proxy, years)
 
 # %% Join the MTBS lat long data to the proxy data
 
@@ -209,4 +208,6 @@ proxy_df = proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
 
 final_proxy_df = create_final_proxy_df(proxy_df)
 
-final_proxy_df.to_parquet(proxy_data_dir_path / "forest_land_proxy.parquet", index=False)
+final_proxy_df.to_parquet(proxy_data_dir_path / "grassland_proxy.parquet", index=False)
+
+# %%
