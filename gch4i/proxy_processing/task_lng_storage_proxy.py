@@ -22,9 +22,9 @@ from gch4i.utils import us_state_to_abbrev_dict
 @task(id="lng_storage_proxy")
 def get_lng_storage_proxy_data(
     # Inputs
-    LNG_storage_input_folder: Path = sector_data_dir_path / 'lng_storage/annual-liquefied-natural-gas-2010-present/',  # individual files like annual_gas_distribution_2010.xlsx
-    LNG_storage_Enverus_inputfile: Path = sector_data_dir_path / 'lng_storage/LNG_Terminals_AllUS_WGS84.xls',
-    FracTracker_inputfile: Path = sector_data_dir_path / 'lng_storage/FracTracker_PeakShaving_WGS84.xls',
+    LNG_storage_input_folder: Path = sector_data_dir_path / 'lng/annual-liquefied-natural-gas-2010-present/',  # individual files like annual_gas_distribution_2010.xlsx
+    LNG_storage_Enverus_inputfile: Path = sector_data_dir_path / 'lng/LNG_Terminals_AllUS_WGS84.xls',
+    FracTracker_inputfile: Path = sector_data_dir_path / 'lng/FracTracker_PeakShaving_WGS84.xls',
     
     # Outputs
     output_path: Annotated[Path, Product] = (
