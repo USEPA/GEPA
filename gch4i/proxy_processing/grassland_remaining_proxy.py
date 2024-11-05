@@ -158,21 +158,32 @@ def calculate_state_emissions(emi_df, proxy_df, year_range):
     return final_proxy_df
 
 def create_final_proxy_df(proxy_df):   
-    
-    # process to create a final proxy dataframe
+    """
+    Function to create the final proxy df that is ready for gridding
 
-    proxy_df['est_ch4'] = proxy_df['emis_kt'] / sum(proxy_df['emis_kt'])
+    Parameters:
+    - proxy_df: DataFrame containing proxy data.
+
+    Returns:
+    - final_proxy_df: DataFrame containing the processed emissions data for each state.
+    """
     
     # Create a GeoDataFrame and generate geometry from longitude and latitude
-    proxy_df = gpd.GeoDataFrame(
+    proxy_gdf = gpd.GeoDataFrame(
         proxy_df,
         geometry=gpd.points_from_xy(proxy_df['longitude'], proxy_df['latitude'])
     )
 
     # subset to only include the columns we want to keep
-    proxy_df = proxy_df[['eventID', 'originstatecd', 'year', 'latitude', 'longitude', 'emis_kt', 'geometry']]
-
-    return proxy_df
+    proxy_gdf = proxy_gdf[['eventID', 'state_code', 'year', 'latitude', 'longitude', 'emis_kt', 'geometry']]
+    
+    # Normalize relative emissions to sum to 1 for each year and state
+    proxy_gdf = proxy_gdf.groupby(['state_code', 'year']).filter(lambda x: x['emis_kt'].sum() > 0) #drop state-years with 0 total volume
+    proxy_gdf['emis_kt'] = proxy_gdf.groupby(['year', 'state_code'])['emis_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0) #normalize to sum to 1
+    sums = proxy_gdf.groupby(["state_code", "year"])["emis_kt"].sum() #get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
+    
+    return proxy_gdf
 
 # %% Step 1 - Data wrangling
 
@@ -203,6 +214,7 @@ proxy_df = calculate_state_emissions(grassland_emi, grassland_proxy, years)
 mtbs_lat_long = mtbs_lat_long[['Event_ID', 'BurnBndLat', 'BurnBndLon']]
 mtbs_lat_long.rename(columns={'Event_ID': 'eventID', 'BurnBndLat': 'latitude', 'BurnBndLon': 'longitude'}, inplace=True)
 proxy_df = proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
+proxy_df.rename(columns={'originstatecd': 'state_code'}, inplace=True)
 
 # %% Step 3 Create the final proxy dataframe
 
