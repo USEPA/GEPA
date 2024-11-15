@@ -14,7 +14,7 @@ dependencies:
   - black
   - cartopy
   - dask
-  # - xlrd # added by Hannah -- needed in Coal
+  - xlrd # added by Hannah -- needed in Coal and Roads
   - invoke
   - jupyter
   - jupyterlab

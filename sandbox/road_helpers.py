@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 import gc
 
+from datetime import datetime
+
 import geopandas as gpd
 from shapely.geometry import MultiLineString, LineString, GeometryCollection
 
@@ -73,9 +75,60 @@ num_years = len(year_range)
 # %% Functions
 ########################################################################################
 
+def get_overlay_dir(year, 
+                    out_dir: Path=task_outputs_path / 'overlay_cell_state_region'):
+    return out_dir / f'cell_state_region_{year}.parquet'
+
+def get_overlay_gdf(year):
+    return gpd.read_parquet(get_overlay_dir(year))
+
+# Read in State Spatial Data
+def get_states_gdf(crs=4326):
+    """
+    Read in State spatial data
+    """
+
+    gdf_states = gpd.read_file(gdf_state_files)
+
+    gdf_states = gdf_states[~gdf_states['STUSPS'].isin(
+        ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI']
+        )]
+    gdf_states = gdf_states[['STUSPS', 'NAME', 'geometry']]
+    gdf_states = gdf_states.to_crs(crs)
+
+    return gdf_states
+
+# Read in Region Spatial Data
+def get_region_gdf(year, crs=4326):
+    """
+    Read in region spatial data
+    """
+    road_loc = (
+        gpd.read_parquet(f"{road_file}{year}_us_uac.parquet", columns=['geometry'])
+        .assign(year=year)
+        .to_crs(crs)
+        .assign(urban=1)
+    )
+    return road_loc
+
+def benchmark_load(func):
+    def wrapper(*args, **kwargs):
+        start = datetime.now()
+        result = func(*args, **kwargs)
+        print(f"{func.__name__} took {datetime.now() - start}")
+        return result
+    return wrapper
+
+def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads"):
+    return Path(raw_roads_path) / f"tl_{year}_us_allroads.parquet"
+
+@benchmark_load
+def read_roads(year):
+    return gpd.read_parquet(get_roads_path(year)).to_crs("ESRI:4326")
+
 
 # Read in VM2 Data
-def read_vmt2(num_years):
+def get_vm2_arrays(num_years):
     # Initialize arrays
     Miles_road_primary = np.zeros([2, len(State_ANSI), num_years])
     Miles_road_secondary = np.zeros([2, len(State_ANSI), num_years])
@@ -140,7 +193,7 @@ def read_vmt2(num_years):
 
 
 # Read in VM4 Data
-def read_vmt4(num_years):
+def get_vm4_arrays(num_years):
     # Initialize arrays
     Per_vmt_mot = np.zeros([2, 3, len(State_ANSI), num_years])
     Per_vmt_pas = np.zeros([2, 3, len(State_ANSI), num_years])
@@ -497,708 +550,32 @@ def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy):
     return None
 
 
-########################################################################################
-# %% Proxy Functions
-
-def read_reduce_data(year):
-    """
-    Read in All Roads data. Deduplicate and reduce data early.
-    """
-    # Order road types
-    road_type_order = ['Primary', 'Secondary', 'Other']
-
-    df = (gpd.read_parquet(f"{raw_road_file}{year}_us_allroads.parquet",
-                           columns=['MTFCC', 'geometry'])
-          .assign(year=year))
-
-    road_data = (
-        df.to_crs("ESRI:102003")
-        .assign(
-            geometry=lambda df: df.normalize(),
-            road_type=lambda df: pd.Categorical(
-                np.select(
-                    [
-                        df['MTFCC'] == 'S1100',
-                        df['MTFCC'] == 'S1200',
-                        df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
-                    ],
-                    [
-                        'Primary',
-                        'Secondary',
-                        'Other'
-                    ],
-                    default=None
-                ),
-                categories=road_type_order,  # Define the categories
-                ordered=True  # Ensure the categories are ordered
-            )
-        )
-    )
-    # Sort
-    road_data = road_data.sort_values('road_type').reset_index(drop=True)
-    # Explode to make LineStrings
-    road_data = road_data.explode(index_parts=True).reset_index(drop=True)
-    # Remove duplicates of geometries
-    road_data = road_data.drop_duplicates(subset='geometry', keep='first')
-
-    # Separate out Road Types
-    prim_year = road_data[road_data['road_type'] == 'Primary']
-    sec_year = road_data[road_data['road_type'] == 'Secondary']
-    oth_year = road_data[road_data['road_type'] == 'Other']
-
-    buffer_distance = 3  # meters
-
-    # Set buffers
-    prim_buffer = prim_year.buffer(buffer_distance)
-    prim_buffer = gpd.GeoDataFrame(geometry=prim_buffer, crs=road_data.crs)
-
-    prisec_buffer = pd.concat([prim_year, sec_year], ignore_index=True)
-    prisec_buffer = prisec_buffer.buffer(buffer_distance)
-    prisec_buffer = gpd.GeoDataFrame(geometry=prisec_buffer, crs=road_data.crs)
-
-    # Overlay
-    sec_red = gpd.overlay(sec_year, prim_buffer, how='difference')
-    other_red = gpd.overlay(oth_year, prisec_buffer, how='difference')
-
-    # Combine
-    road_data = pd.concat([prim_year, sec_red, other_red], ignore_index=True)
-
-    road_data = road_data[['year', 'road_type', 'geometry']]
-
-    # Write to parquet
-    road_data.to_parquet(task_outputs_path / f"reduced_roads_{year}.parquet")
-
-    del road_data, prim_year, sec_year, oth_year, prim_buffer, prisec_buffer, sec_red, other_red
-
-    gc.collect()
-
-    return None
-
-
-# Read in Region Spatial Data
-def read_regions(year):
-    """
-    Read in region spatial data
-    """
-    road_loc = (
-        gpd.read_parquet(f"{road_file}{year}_us_uac.parquet", columns=['geometry'])
-        .assign(year=year)
-        .to_crs("ESRI:102003")
-    )
-    return road_loc
-
-
-# Read in State Spatial Data
-def read_states():
-    """
-    Read in State spatial data
-    """
-
-    gdf_states = gpd.read_file(gdf_state_files)
-
-    gdf_states = gdf_states[~gdf_states['STUSPS'].isin(
-        ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI']
-        )]
-    gdf_states = gdf_states[['STUSPS', 'NAME', 'geometry']]
-    gdf_states = gdf_states.to_crs("ESRI:102003")
-
-    return gdf_states
-
-
-# Extract Line geometries from Geometry Collections
-def extract_lines(geom):
-    if geom is None:
-        return None
-    if isinstance(geom, (LineString, MultiLineString)):
-        # Return the geometry
-        return geom
-    elif isinstance(geom, GeometryCollection):
-        # Filter the collection to include only LineString or MultiLineString, Remove Points
-        lines = [g for g in geom.geoms if isinstance(g, (LineString, MultiLineString))]
-        if len(lines) == 1:
-            return lines[0]
-        elif len(lines) > 1:
-            return MultiLineString(lines)
-    else:
-        return None  # Only returns LineStrings and MultiLineStrings (no polygons or points)
-
-
-# Process geometry column
-def process_geometry_column(gdf):
-    # Apply the extract_lines function
-    gdf['geometry'] = gdf['geometry'].apply(extract_lines)
-
-    # Remove rows where geometry is None
-    gdf = gdf.dropna(subset=['geometry'])
-
-    # Ensure the GeoDataFrame only contains LineString and MultiLineString
-    gdf = gdf[gdf['geometry'].apply(lambda geom: isinstance(geom, (LineString, MultiLineString)))]
-
-    # Explode MultiLineStrings into LineStrings
-    gdf = gdf.explode(index_parts=True).reset_index(drop=True)
-
-    return gdf
-
-
-# Function to process each year's data
-def process_year(year_data, year_region):
-    # Ensure year_region only has necessary columns
-    year_region = year_region[['geometry']]
-
-    # Overlay for urban roads
-    urban_roads = gpd.overlay(year_data, year_region, how='intersection',
-                              keep_geom_type=False)
-    urban_roads['region'] = 'urban'
-
-    # Overlay for rural roads
-    rural_roads = gpd.overlay(year_data, year_region, how='difference',
-                              keep_geom_type=False)
-    rural_roads['region'] = 'rural'
-
-    # Combine results and select necessary columns
-    combined = pd.concat([urban_roads, rural_roads])
-
-    # Filter for LineStrings and MultiLineStrings
-    combined = process_geometry_column(combined)
-
-    return combined[['year', 'STUSPS', 'region', 'road_type', 'geometry']]
-
-
-# Finishing function
-def state_region_join(year):
-
-    states_gdf = read_states()
-
-    # Step 1: Filter to year
-    road_data = gpd.read_parquet(task_outputs_path / f"reduced_roads_{year}.parquet")
-    # Step 2: Overlay to cut at state boundaries
-    road_data = gpd.overlay(road_data, states_gdf, how='identity', keep_geom_type=False)
-    # Step 3: Remove geometries that re not LineStrings or MultiLineStrings               # Check here if an issue
-    road_data = process_geometry_column(road_data)
-    # Step 4: Use a state buffer to prevent accidental road reduction
-    buffer_distance = 10  # meters
-    states_gdf_buffer = states_gdf.buffer(buffer_distance)
-    states_gdf_buffer = gpd.GeoDataFrame(geometry=states_gdf_buffer, crs=states_gdf.crs)
-    states_gdf_buffer = states_gdf_buffer.join(states_gdf.drop(columns='geometry'))
-    # Step 5 Spatial join to assign state attributes
-    road_data = gpd.sjoin(road_data, states_gdf_buffer, how='left', predicate='within')
-    # Step 6: Remove duplicate road segments (again, if new generated)
-    road_data = road_data.drop_duplicates(subset=['geometry'])
-    # Step 7: Clean table
-    road_data = (
-        road_data[['year', 'STUSPS_right', 'geometry', 'road_type']]
-        .rename(columns={'STUSPS_right': 'STUSPS'})
-        .dropna(subset=['STUSPS'])
-        # .assign(year=year,
-        #         type=road_type_label)
-    )
-    # Step 8: Garbage collection
-    del states_gdf, states_gdf_buffer, buffer_distance
-
-    gc.collect()
-
-    # Part 3: Generate Roads by State, Region
-    year_region = read_regions(year)
-    result = process_year(road_data, year_region)
-
-    # Combine results and dissolve
-    result = result.to_crs(epsg=4326)
-    result = result.dissolve(by=['year', 'STUSPS', 'region', 'road_type']).reset_index()
-
-    result.to_parquet(task_outputs_path / f"final_roads_{year}.parquet")
-
-    del road_data, year_region, result
-
-    gc.collect()
-
-    return None
-
-
-##########
-# %% Join Data Together
-# Proportional and Proxy Data Join
-def prop_proxy_join():
-    """
-    Join proportional and proxy data
-    """
-
-    # Read in Proportional Data
-    proportional_proxy = pd.read_csv(task_outputs_path / "roads_proxy_proportions.csv")
-
-    # Read in All Roads Data
-    result_list = []
-    for year in year_range:
-        year_data = gpd.read_parquet(task_outputs_path / f"final_roads_{year}.parquet")
-        result_list.append(year_data)
-    all_roads_proxy = pd.concat(result_list, ignore_index=True)
-
-    del result_list
-    gc.collect()
-
-    # Join proportional data with geometry data
-    roads_proxy = pd.merge(
-        proportional_proxy,
-        all_roads_proxy,
-        on=['state_code', 'year', 'region', 'road_type'],
-        how='left'
-    ).reset_index()
-
-    # Convert back to a GeoDataFrame
-    roads_proxy = gpd.GeoDataFrame(roads_proxy, geometry="geometry").to_crs(epsg=4326)
-
-    return roads_proxy
-
-
-########################################################################################
-########################################################################################
-########################################################################################
-# %% Pytask
-
-@mark.persist
-@task(id="roads_proxy")
-def task_get_roads_proxy(
-    state_path: Path = gdf_state_files,
-    reporting_proxy_output: Annotated[Path, Product] = proxy_data_dir_path
-    / "mobile_combustion/roads_proxy.parquet",
-):
-    """
-    Relative location information for roads in the US.
-    """
-
-    # Proportional Allocation of Roads Emissions
-    ####################################################################################
-    # VM2 Outputs
-    Miles_road_primary, Miles_road_secondary, Miles_road_other, total, total2 = read_vmt2(num_years)
-
-    # VM4 Outputs
-    Per_vmt_mot, Per_vmt_pas, Per_vmt_lig, Per_vmt_hea = read_vmt4(num_years)
-
-    # State Proxy Outputs
-    pas_proxy, lig_proxy, hea_proxy, vmt_tot = calculate_state_proxies(num_years,
-                                                                       Miles_road_primary,
-                                                                       Miles_road_secondary,
-                                                                       Miles_road_other,
-                                                                       Per_vmt_pas,
-                                                                       Per_vmt_lig,
-                                                                       Per_vmt_hea)
-
-    # Unpack State Proxy Outputs
-    pas_proxy = unpack_state_proxy(pas_proxy)
-    lig_proxy = unpack_state_proxy(lig_proxy)
-    hea_proxy = unpack_state_proxy(hea_proxy)
-    # tot_proxy = unpack_state_allroads_proxy(vmt_tot)
-
-    # Generate Roads Proportions Data
-    get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy)
-
-    # Roads Proxy Processing
-    ####################################################################################
-
-    # Read in All Roads data. Deduplicate and reduce data early.
-    for year in year_range:
-        read_reduce_data(year)
-
-    """
-    Current outputs ran through this point: read_reduce_data(year)
-    * output reduced_roads_{year}.parquet & roads_proportion_data.csv to raw_roads>task_outputs folder
-
-    Previous versions:
-    * read in all years to one gdf and processed by year
-        * can't hold all years in memory
-        * Solution: read in one year at a time to process and write to disk
-        * Doesn't need to be continuously read in and out, this was for testing steps
-
-    Attempted Solutions:
-    * DASK Geopandas : worked on one year at a time, took too long on region split
-    * Parallel Processing : Ran into issues with batching (Geopandas CRS)
-        * converted to WKT to batch and converted back to CRS when read in
-        * briefly worked, kernel died, stopped experimentation to focus on other tasks
-    * Sequential Processing (no parallel processing, just batched): 
-        * Built out code, did not run yet
-
-    File: processed_state_roads_2012.parquet
-    * stored in task_outputs folder
-    * took 2 hours to run
-    * effectively deduplicated roads and clipped to state boundaries
-        * Tested methods:
-            * grouping by state and clipping at state boundaries (running for each state)
-            was quicker than gpd.overlay( identity ) > add buffer to state polygons >
-            sjoin( within )
-    * Code was originally ran in a different script, will include below Pytask code
-
-    read_reduce_data function
-    * Initially, I read in roads and split by fips code to separate into states. This made
-    it difficult to deduplicate roads, since roads that were duplicated across states
-    would be deleted for one state and not the other. To avoid this, I read in all roads
-    at the beginning, sorted by hierarchy (primary, secondary, other), processed/exploded
-    (made all multilinestrings into linestrings), and deduplicated > then clipped by state
-    polygons.
-    * Code for State_Fips version exists in separate script (can include if necessary).
-
-    """
-
-    for year in year_range:
-        state_region_join(year)
-
-    # Join Proportional and Proxy Data
-    ####################################################################################
-
-    # Join Proportional and Proxy Data
-    roads_proxy = prop_proxy_join()
-
-    # Save output
-    roads_proxy.to_parquet(reporting_proxy_output)
-    return None
-
-########################################################################################
-########################################################################################
-########################################################################################
-########################################################################################
-# %% Processed_state_roads method described above
-states_gdf = read_states()
-region_gdf = read_regions(2012)
-roads_2012 = gpd.read_parquet(task_outputs_path / "reduced_roads_2012.parquet")
-
-import time
-import geopandas as gpd
-import pandas as pd
-from tqdm import tqdm
-from datetime import datetime
-
-def process_roads(road_data, states_gdf):
-    start_time = time.time()
-    final_roads = []
-
-    # Process each state
-    for _, state in tqdm(states_gdf.iterrows(), desc="Processing states"):
-        # Create single state GeoDataFrame
-        print(f'Reading states gdf {datetime.now()}')
-        state_gdf = gpd.GeoDataFrame(geometry=[state.geometry], crs=states_gdf.crs)
-
-        # Clip roads to state boundary
-        state_roads = gpd.clip(road_data, state_gdf)
-
-        if not state_roads.empty:
-            # Add state identifier
-            state_roads['STUSPS'] = state.STUSPS
-        
-        final_roads.append(state_roads)
-        print(f"Processed {state.STUSPS}")
-
-    # Combine all results
-    final_result = pd.concat(final_roads)
-
-    end_time = time.time()
-    execution_time = end_time - start_time
-    print(f"Total execution time: {execution_time:.2f} seconds")
-
-    return final_result
-
-processed_roads_2012 = process_roads(roads_2012, states_gdf)
-# 2 hr 50 min
-
-# Make all LineStrings
-processed_roads_2012 = process_geometry_column(processed_roads_2012)
-
-# Write out
-#processed_roads_2012.to_parquet(task_outputs_path / "processed_state_roads_2012.parquet")
-processed_roads_2012 = gpd.read_parquet(task_outputs_path / "processed_state_roads_2012.parquet")
-
-########################################################################################
-########################################################################################
-# %% Dask (commented out sections during testing) and Not Dask: Previous Method for state joins
-
-import dask_geopandas as dgpd
-
-"""
-Dask code is messy because I ran into issues with deduplication, and attempted to
-troubleshoot everything in Dask.
-In hindsight, I should have just used my reduce method applied above and attempted
-dask on the region split and/or the state join.
-"""
-
-year_range = [2020, 2021, 2022]
-
-
-def read_reduce_data(year):
-    """
-    Read in All Roads data. Deduplicate and reduce data early.
-    """
-    road_data = (gpd.read_parquet(f"{raw_road_file}{year}_us_allroads.parquet",
-                                  columns=['MTFCC', 'geometry'])
-                 .assign(year=year))
-
-    print(type(road_data))
-
-    road_data = dgpd.from_geopandas(road_data, npartitions=4)
-
-    print("Type after Dask transformation:", type(road_data))
-    print("Columns:", road_data.columns)
-
-    # Order road types
-    road_type_order = ['Primary', 'Secondary', 'Other']
-
-    # Define road type
-    # def assign_road_type(df):
-    #     df['road_type'] = (np.select(
-    #         [
-    #             df['MTFCC'] == 'S1100',
-    #             df['MTFCC'] == 'S1200',
-    #             df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
-    #         ],
-    #         [
-    #             'Primary',
-    #             'Secondary',
-    #             'Other'
-    #         ],
-    #         default=None
-    #     )
-    #     return df
-
-    road_data = (
-        road_data.map_partitions(
-            lambda df: df.assign(
-                road_type=pd.Categorical(
-                    np.select(
-                        [
-                            df['MTFCC'] == 'S1100',
-                            df['MTFCC'] == 'S1200',
-                            df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
-                        ],
-                        [
-                            'Primary',
-                            'Secondary',
-                            'Other'
-                        ],
-                        default=None
-                    ),
-                    categories=road_type_order,
-                    ordered=True
-                )
-            ),
-            meta={'MTFCC': 'object',
-                  'geometry': 'geometry',
-                  'year': 'int64',
-                  'road_type': 'category'}
-        )
-    )
-
-    print("Columns after road_type_creation:", road_data.columns)
-    print("Type after road_type_creation:", type(road_data))
-
-    # Convert back to Dask GeoDataFrame
-    def dask_to_dgdf(dask_df):
-        return dgpd.from_dask_dataframe(dask_df, geometry='geometry')
-
-    # Convert back
-    road_data = dask_to_dgdf(road_data)
-    road_data = road_data.set_crs("ESRI:102003", allow_override=True)
-
-    #road_data = road_data[['year', 'road_type', 'geometry']]
-    #print("Columns after column reduction:", road_data.columns)
-
-    # Order road types
-    # road_type_order = ['Primary', 'Secondary', 'Other']
-
-    #road_data['road_type'] = pd.Categorical(road_data['road_type'], categories=road_type_order, ordered=True)
-    #road_data = road_data.sort_values('road_type').reset_index(drop=True)
-    def sort_by_road_type(road_data):
-        road_data_sorted = road_data.map_partitions(
-            lambda df: df.sort_values('road_type').reset_index(drop=True),
-            meta={'MTFCC': 'object',
-                  'geometry': 'geometry',
-                  'year': 'int64',
-                  'road_type': 'category'}
-        )
-        return road_data_sorted
-
-    road_data = sort_by_road_type(road_data)
-
-    print("Columns after sort:", road_data.columns)
-
-    print("Before explode:", type(road_data))
-    # Convert back
-    road_data = dask_to_dgdf(road_data)
-    road_data = road_data.set_crs("ESRI:102003", allow_override=True)
-    print("After convert back:", type(road_data))
-
-    # Explode to make LineStrings
-    road_data = road_data.map_partitions(
-        lambda df: gpd.GeoDataFrame(df).explode(column='geometry')
-    ).reset_index(drop=True)
-
-    print("After explode:", type(road_data))
-    road_data = dask_to_dgdf(road_data)
-    road_data = road_data.set_crs("ESRI:102003", allow_override=True)
-    print("After convert back:", type(road_data))
-    # Remove duplicates of geometries
-    road_data = road_data.drop_duplicates(subset='geometry')
-
-    print("After drop_duplicates:", type(road_data))
-    road_data = dask_to_dgdf(road_data)
-    road_data = road_data.set_crs("ESRI:102003", allow_override=True)
-
-    # Compute
-    road_data = road_data.compute()
-
-    print("After compute", type(road_data))
-
-    if not isinstance(road_data, gpd.GeoDataFrame):
-        road_data = gpd.GeoDataFrame(road_data, crs="ESRI:102003")
-
-    print(type(road_data))
-
-    # Adjust columns
-    road_data = road_data[['year', 'road_type', 'geometry']]
-
-    road_data = dgpd.from_geopandas(road_data, npartitions=4)
-
-    print("type after transform:", type(road_data))
-
-    # Separate out Road Types
-    prim_year = road_data[road_data['road_type'] == 'Primary']
-    sec_year = road_data[road_data['road_type'] == 'Secondary']
-    oth_year = road_data[road_data['road_type'] == 'Other']
-
-    buffer_distance = 3  # meters
-
-    meta = {
-        'year': 'int64',
-        'road_type': 'category',
-        'geometry': 'geometry'
-    }
-
-    # Define buffer_geometries
-    def buffer_geometries(gdf, buffer_distance):
-        # Buffer geometries
-        gdf['geometry'] = gdf.geometry.buffer(buffer_distance)
-        return gdf
-
-    def apply_overlay(target_gdf, buffer_gdf):
-        return gpd.overlay(target_gdf.compute(), buffer_gdf.compute(), how='difference')
-
-    def process_year_data(prim_year, sec_year, oth_year, buffer_distance):
-        # Set buffers
-        prim_year_buffer = prim_year.map_partitions(buffer_geometries, buffer_distance, meta=meta)
-        prisec_year = dd.concat([prim_year, sec_year], axis=0)
-        prisec_buffer = prisec_year.map_partitions(buffer_geometries, buffer_distance, meta=meta)
-
-        # Apply overlay
-        sec_red = apply_overlay(sec_year, prim_year_buffer)
-        other_red = apply_overlay(oth_year, prisec_buffer)
-
-        return prim_year, sec_red, other_red
-
-    prim_year, sec_red, other_red = process_year_data(prim_year, sec_year, oth_year, buffer_distance)
-
-    # Combine
-    road_data = dd.concat([prim_year, sec_red, other_red], axis=0)
-
-    road_data = road_data[['year', 'road_type', 'geometry']]
-
-    # Compute
-    road_data = road_data.compute()
-
-    road_data.to_parquet(task_outputs_path / f"reduced_roads_{year}.parquet")
-
-    del road_data, prim_year, sec_year, oth_year
-
-    gc.collect()
-
-    return None
-
-
-######
-# my_road_data = read_reduce_data()
-for year in year_range:
-    read_reduce_data(year)
-    print(f"Reduced roads for {year}")
-######
-
-
-########################################################################################
-# %% Non Dask Version
-
-year_range = [2020, 2021]
-
-
-def read_reduce_data_nodask(year):
-    """
-    Read in All Roads data. Deduplicate and reduce data early.
-    """
-    # Order road types
-    road_type_order = ['Primary', 'Secondary', 'Other']
-
-    df = (gpd.read_parquet(f"{raw_road_file}{year}_us_allroads.parquet",
-                           columns=['MTFCC', 'geometry'])
-          .assign(year=year))
-
-    road_data = (
-        df.to_crs("ESRI:102003")
-        .assign(
-            geometry=lambda df: df.normalize(),
-            road_type=lambda df: pd.Categorical(
-                np.select(
-                    [
-                        df['MTFCC'] == 'S1100',
-                        df['MTFCC'] == 'S1200',
-                        df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
-                    ],
-                    [
-                        'Primary',
-                        'Secondary',
-                        'Other'
-                    ],
-                    default=None
-                ),
-                categories=road_type_order,  # Define the categories
-                ordered=True  # Ensure the categories are ordered
-            )
-        )
-    )
-    # Sort
-    road_data = road_data.sort_values('road_type').reset_index(drop=True)
-    # Explode to make LineStrings
-    road_data = road_data.explode(index_parts=True).reset_index(drop=True)
-    # Remove duplicates of geometries
-    road_data = road_data.drop_duplicates(subset='geometry', keep='first')
-
-    # Separate out Road Types
-    prim_year = road_data[road_data['road_type'] == 'Primary']
-    sec_year = road_data[road_data['road_type'] == 'Secondary']
-    oth_year = road_data[road_data['road_type'] == 'Other']
-
-    buffer_distance = 3  # meters
-
-    # Set buffers
-    prim_buffer = prim_year.buffer(buffer_distance)
-    prim_buffer = gpd.GeoDataFrame(geometry=prim_buffer, crs=road_data.crs)
-
-    prisec_buffer = pd.concat([prim_year, sec_year], ignore_index=True)
-    prisec_buffer = prisec_buffer.buffer(buffer_distance)
-    prisec_buffer = gpd.GeoDataFrame(geometry=prisec_buffer, crs=road_data.crs)
-
-    # Overlay
-    sec_red = gpd.overlay(sec_year, prim_buffer, how='difference')
-    other_red = gpd.overlay(oth_year, prisec_buffer, how='difference')
-
-    # Combine
-    road_data = pd.concat([prim_year, sec_red, other_red], ignore_index=True)
-
-    road_data = road_data[['year', 'road_type', 'geometry']]
-
-    # Write to parquet
-    road_data.to_parquet(task_outputs_path / f"reduced_roads_{year}.parquet")
-
-    del road_data, prim_year, sec_year, oth_year, prim_buffer, prisec_buffer, sec_red, other_red
-
-    gc.collect()
-
-    return None
-
-########################################################################################
-
-
-for year in year_range:
-    read_reduce_data_nodask(year)
-    print(f"Reduced roads for {year}")
+def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_proportion_data.csv"):
+    if not road_proxy_out_path.exists():
+        # Proportional Allocation of Roads Emissions
+        #################
+        # VM2 Outputs
+        Miles_road_primary, Miles_road_secondary, Miles_road_other, total, total2 = get_vm2_arrays(num_years)
+
+        # VM4 Outputs
+        Per_vmt_mot, Per_vmt_pas, Per_vmt_lig, Per_vmt_hea = get_vm2_arrays(num_years)
+
+        # State Proxy Outputs
+        pas_proxy, lig_proxy, hea_proxy, vmt_tot = calculate_state_proxies(num_years,
+                                                                        Miles_road_primary,
+                                                                        Miles_road_secondary,
+                                                                        Miles_road_other,
+                                                                        Per_vmt_pas,
+                                                                        Per_vmt_lig,
+                                                                        Per_vmt_hea)
+
+        # Unpack State Proxy Outputs
+        pas_proxy = unpack_state_proxy(pas_proxy)
+        lig_proxy = unpack_state_proxy(lig_proxy)
+        hea_proxy = unpack_state_proxy(hea_proxy)
+        # tot_proxy = unpack_state_allroads_proxy(vmt_tot)
+
+        # Generate Roads Proportions Data
+        get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy)
+    
+    return pd.read_csv(road_proxy_out_path)
