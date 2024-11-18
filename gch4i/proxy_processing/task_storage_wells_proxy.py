@@ -12,6 +12,7 @@ from gch4i.config import (
     min_year,
     proxy_data_dir_path,
     sector_data_dir_path,
+    V3_DATA_PATH,
 )
 
 @mark.persist
@@ -64,8 +65,8 @@ def get_storage_wells_proxy_data(
     ###############################################################
 
     # load county geometries to use as fallback locations for facilities without known lat-lon
-    county_fips = pd.read_csv('../geospatial/county_fips.csv')[['STATEFP', 'COUNTYFP', 'STATE', 'COUNTYNAME']]
-    county_shapes = gpd.read_file('../geospatial/cb_2018_us_county_500k/cb_2018_us_county_500k.shp')
+    county_fips = pd.read_csv(V3_DATA_PATH / 'geospatial/county_fips.csv')[['STATEFP', 'COUNTYFP', 'STATE', 'COUNTYNAME']]
+    county_shapes = gpd.read_file(V3_DATA_PATH / 'geospatial/cb_2018_us_county_500k/cb_2018_us_county_500k.shp')
     county_shapes['STATEFP'] = county_shapes['STATEFP'].astype('int64')
     county_shapes['COUNTYFP'] = county_shapes['COUNTYFP'].astype('int64')
     county_shapes = county_shapes.merge(county_fips, how='left', on=['STATEFP', 'COUNTYFP'])[['COUNTYNAME', 'STATE', 'geometry']].dropna()
@@ -106,9 +107,3 @@ def get_storage_wells_proxy_data(
     proxy_gdf.to_parquet(output_path)
 
     return
-    # return EIA_StorFields, EIA_StorFields_locs, merged_fields, proxy_gdf
-
-# EIA_StorFields, EIA_StorFields_locs, merged_fields, proxy_gdf = get_storage_wells_proxy_data()
-
-# proxy_gdf.info()
-# proxy_gdf.sample(50)
