@@ -43,7 +43,7 @@ def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads")
 
 @benchmark_load
 def read_roads(year):
-    return gpd.read_parquet(get_roads_path(year)).to_crs("ESRI:4326")
+    return gpd.read_parquet(get_roads_path(year)).to_crs("4326")
 
 
 # Define local variables
@@ -95,32 +95,7 @@ def intersect_sindex(cell, roads):
 result = intersect_sindex(cell, roads)
 
 #%%
-# plot the cell and the resulting intersected roads
-# plot a grid of 2 plots
-# in plot 1, plot the full extent
-# in plot 2, set max extent to the cell bounds
-import matplotlib.pyplot as plt
 
-fig, ax = plt.subplots(1, 2, figsize=(10, 5))
-gpd.GeoSeries(cell).plot(ax=ax[0], color='red')
-result.plot(ax=ax[0], color='blue')
-ax[0].set_title("Full extent")
-ax[1].set_title("Cell bounds")
-ax[0].set_aspect('equal')
-ax[1].set_aspect('equal')
-
-gpd.GeoSeries(cell).plot(ax=ax[1], color='red')
-result.plot(ax=ax[1], color='blue')
-ax[0].set_title("Full extent")
-ax[1].set_title("Cell bounds")
-ax[0].set_aspect('equal')
-ax[1].set_aspect('equal')
-
-# set the extent of the plot to the cell bounds
-ax[1].set_xlim(cell.bounds[0], cell.bounds[2])
-ax[1].set_ylim(cell.bounds[1], cell.bounds[3])
-
-plt.show()
 
 
 #%%
@@ -135,6 +110,7 @@ gpd.GeoSeries(cell).plot(ax=ax, color='red')
 clipped.plot(ax=ax, color='blue')
 plt.show()
 
+#%%
 
 
 

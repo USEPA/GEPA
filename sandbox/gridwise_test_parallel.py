@@ -24,6 +24,8 @@ import rasterio as rio
 import xarray as xr
 import rioxarray as riox
 
+import concurrent.futures
+
 from pathlib import Path
 from datetime import datetime
 
@@ -75,71 +77,113 @@ def plot_result(cell, result):
     plt.show()
 
 urban_map = {1: 'urban', 0: 'rural'}
-task_outputs_path = Path('tmp/gridwise_test_outputs')
-task_outputs_path.mkdir(exist_ok=True, parents=True)
+
 
 #%%
 
 if __name__ == '__main__':
-    for year in range(min_year, max_year+1):
-        epsg = "ESRI:102003"
-        road_type_col = 'road_type'
-        road_proxy_df = get_road_proxy_data().rename(columns={'state_code': 'state'})
-        cells = get_overlay_gdf(year, crs=epsg).rename(columns={'STUSPS': 'state', 'urban': 'region'})
-        cells['region'] = cells['region'].map(urban_map)
+    year = 2012
+    epsg = "ESRI:102003"
+    road_type_col = 'road_type'
+    road_proxy_df = get_road_proxy_data().rename(columns={'state_code': 'state'})
+    cells = get_overlay_gdf(year, crs=epsg).rename(columns={'STUSPS': 'state', 'urban': 'region'})
+    cells['region'] = cells['region'].map(urban_map)
 
-        print(f'Reading roads')
-        roads = read_roads(year, crs=epsg, raw=False)
+    #%%
 
-        cell_n = len(cells)
-        print(f"Starting processing for {year} at {datetime.now()}")
-        interm_out_path = task_outputs_path / f"gridwise_mapping_intermediate_{year}.csv"
+    roads = read_roads(year, crs=epsg, raw=False)
 
-        if not interm_out_path.exists():
-            # create an empty CSV file to store intermediate results
-            pd.DataFrame(columns=['state', 'region', 'year', 'road_type', 'cell_id', 'vehicle', 'proxy', 'rd_length']).to_csv(interm_out_path, index=False)
+
+    # # cells = get_cell_gdf()
+    # cell = get_urban_cell()
+    # print(cell)
+    # # read in the reduced roads dataset
+    # result = intersect_sindex(cell, roads)
+    # plot_result(cell, result)
+    # # clip the roads to the cell bounds and plot again
+    # result = intersect_and_clip(roads, cell)
+    # plot_result(cell, result)
+
+    #%%
+    import traceback
+    long_table_list = []
+    cell_n = len(cells)
+    print(f"Starting processing for {year} at {datetime.now()}")
+    interm_out_path = task_outputs_path / f"gridwise_mapping_intermediate_{year}.csv"
+
+    if not interm_out_path.exists():
+        # create an empty CSV file to store intermediate results
+        pd.DataFrame(columns=['state', 'region', 'year', 'road_type', 'cell_id', 'vehicle', 'proxy', 'rd_length']).to_csv(interm_out_path, index=False)
+    
+    else:
+        # read in the intermediate file and filter cells that have already been processed based on ['cell_id', 'state', 'region']
+        processed_cells = pd.read_csv(interm_out_path)
+        cells = cells.loc[~cells.set_index(['cell_id', 'state', 'region']).index.isin(processed_cells.set_index(['cell_id', 'state', 'region']).index)]
+        # remove the intermediate file from environment
+        del(processed_cells)
+
+    # Assuming `cells` is your dataframe
+    print(f"CHUNKING DATA AND PROCESSING IN PARALLEL: {datetime.now()}")
+    def process_chunk(chunk):
+        try:
+            for idx, cell in chunk.reset_index().iterrows():
+                cell_id = cell['cell_id']
+                state = cell['state']
+                region = cell['region']
+                geom = cell['geometry'] # get box around cell for more efficient spatial query
+
+                # get road value from proxy data
+                road_value = road_proxy_df.loc[(road_proxy_df['state'] == state) & (road_proxy_df['region'] == region) & (road_proxy_df['year'] == year)]
+
+                # get roads in cell
+                cell_roads = intersect_and_clip(roads, geom)
+
+                # Calculate the length of lines within each road_type group
+                # first check if DF has values. intersect_and_clip returns an empty DF if no roads are found
+                if not cell_roads.empty:
+                    road_type_df = (
+                        cell_roads
+                        .groupby(road_type_col, observed=True)['geometry']
+                        .apply(lambda x: x.length.sum()).rename('rd_length')
+                        .to_frame().reset_index()
+                        .assign(state=state, region=region, year=year, cell_id=cell_id)
+                        .set_index(['state', 'region', 'year', 'cell_id', road_type_col])
+                    )
+                else:
+                    # if no roads in cell, create a DF where rd_length are 0 and join
+                    road_type_df = pd.DataFrame({road_type_col: roads[road_type_col].unique(), 'rd_length': 0}).assign(state=state, region=region, year=year, cell_id=cell_id, rd_length=0).set_index(['state', 'region', 'year', 'cell_id', road_type_col])
+
+                # merge with road_value and write to CSV
+                road_value.set_index(['state', 'region', 'year', 'road_type']).join(road_type_df, how='left').reset_index()\
+                    .to_csv(interm_out_path, mode='a', header=False, index=False)
+                
+        except Exception as e:
+            print(f"Error processing chunk: {e}")
+            traceback.print_exc()
+            with open('tmp/log.txt', 'w') as f:
+                f.write(f"Error processing chunk: {e}\n")
+
+    # Split the dataframe into chunks
+    def chunk_dataframe(df, chunk_size):
+        for start in range(0, df.shape[0], chunk_size):
+            yield df.iloc[start:start + chunk_size]
+
+    # Define the chunk size (adjust based on your memory constraints)
+    chunk_size = 1000  # Example chunk size
+
+    # Process the chunks in parallel
+    results = []
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = [executor.submit(process_chunk, chunk) for chunk in chunk_dataframe(cells, chunk_size)]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
         
-        else:
-            # read in the intermediate file and filter cells that have already been processed based on ['cell_id', 'state', 'region']
-            processed_cells = pd.read_csv(interm_out_path)
-            cells = cells.loc[~cells.set_index(['cell_id', 'state', 'region']).index.isin(processed_cells.set_index(['cell_id', 'state', 'region']).index)]
-            # remove the intermediate file from environment
-            del(processed_cells)
 
-        for idx, cell in cells.reset_index().iterrows():
-            print(f'Processing index {idx}/{cell_n}', end='\r')
-            cell_id = cell['cell_id']
-            state = cell['state']
-            region = cell['region']
-            geom = cell['geometry'] # get box around cell for more efficient spatial query
 
-            # get road value from proxy data
-            road_value = road_proxy_df.loc[(road_proxy_df['state'] == state) & (road_proxy_df['region'] == region) & (road_proxy_df['year'] == year)]
-
-            # get roads in cell
-            cell_roads = intersect_and_clip(roads, geom)
-
-            # Calculate the length of lines within each road_type group
-            # first check if DF has values. intersect_and_clip returns an empty DF if no roads are found
-            if not cell_roads.empty:
-                road_type_df = (
-                    cell_roads
-                    .groupby(road_type_col, observed=True)['geometry']
-                    .apply(lambda x: x.length.sum()).rename('rd_length')
-                    .to_frame().reset_index()
-                    .assign(state=state, region=region, year=year, cell_id=cell_id)
-                    .set_index(['state', 'region', 'year', 'cell_id', road_type_col])
-                )
-            else:
-                # if no roads in cell, create a DF where rd_length are 0 and join
-                road_type_df = pd.DataFrame({road_type_col: roads[road_type_col].unique(), 'rd_length': 0}).assign(state=state, region=region, year=year, cell_id=cell_id, rd_length=0).set_index(['state', 'region', 'year', 'cell_id', road_type_col])
-
-            # merge with road_value and write to CSV
-            road_value.set_index(['state', 'region', 'year', 'road_type']).join(road_type_df, how='left').reset_index()\
-                .to_csv(interm_out_path, mode='a', header=False, index=False)
-
+        
+    #%%
     # concatenate
-    long_table = pd.read_csv(interm_out_path)
+    long_table = pd.concat(long_table_list)
 
     print(f'Gridwise processing for {year} complete: {datetime.now()}')
 
@@ -157,10 +201,6 @@ if __name__ == '__main__':
     long_table.to_csv(task_outputs_path / f"gridwise_mapping_{year}.csv", index=False)
 
     print(f'FULL PROCESSING FOR {year} COMPLETE: {datetime.now()}')
-
-    #%%
-
-
 
 
 # The result of this script is a CSV file with the following columns:

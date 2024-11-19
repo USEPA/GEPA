@@ -13,7 +13,9 @@ import gc
 from datetime import datetime
 
 import geopandas as gpd
-from shapely.geometry import MultiLineString, LineString, GeometryCollection
+import dask_geopandas as dgpd
+from pyproj import CRS
+from shapely.geometry import MultiLineString, LineString, GeometryCollection, box
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -79,22 +81,35 @@ def get_overlay_dir(year,
                     out_dir: Path=task_outputs_path / 'overlay_cell_state_region'):
     return out_dir / f'cell_state_region_{year}.parquet'
 
-def get_overlay_gdf(year):
-    return gpd.read_parquet(get_overlay_dir(year))
+def get_overlay_gdf(year, crs="EPSG:4326"):
+    crs_obj = CRS(crs)
+
+    gdf = gpd.read_parquet(get_overlay_dir(year))
+
+    if gdf.crs != crs_obj:
+        print(f"Converting overlay to crs {crs_obj.to_epsg()}")
+        gdf.to_crs(crs, inplace=True)
+
+    return gdf
 
 # Read in State Spatial Data
-def get_states_gdf(crs=4326):
+def get_states_gdf(crs="EPSG:4326"):
     """
     Read in State spatial data
     """
+    crs_obj = CRS(crs)
 
     gdf_states = gpd.read_file(gdf_state_files)
+
 
     gdf_states = gdf_states[~gdf_states['STUSPS'].isin(
         ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI']
         )]
     gdf_states = gdf_states[['STUSPS', 'NAME', 'geometry']]
-    gdf_states = gdf_states.to_crs(crs)
+
+    if gdf_states.crs != crs_obj:
+        print(f"Converting states to crs {crs_obj.to_epsg()}")
+        gdf_states.to_crs(crs, inplace=True)
 
     return gdf_states
 
@@ -103,6 +118,7 @@ def get_region_gdf(year, crs=4326):
     """
     Read in region spatial data
     """
+    crs = CRS(crs)
     road_loc = (
         gpd.read_parquet(f"{road_file}{year}_us_uac.parquet", columns=['geometry'])
         .assign(year=year)
@@ -119,12 +135,69 @@ def benchmark_load(func):
         return result
     return wrapper
 
-def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads"):
-    return Path(raw_roads_path) / f"tl_{year}_us_allroads.parquet"
+def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads", raw=True):
+    '''
+    If raw is True, it returns the parquet files of the original roads data at at path:
+        C:/Users/<USER>/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/global/raw_roads/tl_{year}_us_allroads.parquet
+    If raw is False, it returns the parquet files of the reduced roads data (as generated in Andrew's original task_roads_proxy.py script `reduce_roads()`): 
+        C:/Users/<USER>/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/global/raw_roads/task_outputs/reduced_roads_{year}.parquet
+    
+    '''
+    if raw:
+        return Path(raw_roads_path) / f"tl_{year}_us_allroads.parquet"
+    else:
+        return Path(raw_roads_path) / f"task_outputs/reduced_roads_{year}.parquet"
+
 
 @benchmark_load
-def read_roads(year):
-    return gpd.read_parquet(get_roads_path(year)).to_crs("ESRI:4326")
+def read_roads(year, raw=True, crs='EPSG:4326'):
+    crs_obj = CRS(crs)
+    gdf = gpd.read_parquet(get_roads_path(year, raw=raw))
+    if gdf.crs != crs_obj:
+        print(f"Converting {year} roads to crs {crs_obj.to_epsg()}")
+        return gdf.to_crs(crs)
+    else:
+        return gdf
+    
+def intersect_sindex(cell, roads):
+    '''
+    Based of fthis geoff boeing blog post:
+    https://geoffboeing.com/2016/10/r-tree-spatial-index-python/
+    '''
+    # first, add rtree spatial index to roads
+
+    
+    spatial_index = roads.sindex
+    possible_matches_index = list(spatial_index.intersection(cell.bounds))
+    possible_matches = roads.iloc[possible_matches_index]
+    precise_matches = possible_matches[possible_matches.intersects(cell)]
+    return precise_matches
+
+# @benchmark_load
+def intersect_and_clip(roads, state_geom, state_abbrev=None, simplify=None, dask=False):
+    '''
+    The simplify parameer is used to simplify the geometry of the roads before clipping to the state boundary
+    '''
+    state_box = box(*state_geom.bounds)
+    # Get the roads that intersect with the state bounding box
+    state_roads = intersect_sindex(state_box, roads)
+    # print(f"Found {len(state_roads)} roads in {state_abbrev}")
+    if not state_roads.empty:
+        if simplify:
+            state_geom = state_geom.simplify(simplify)
+        
+        # convert to dask
+        if dask:
+            state_roads = dgpd.from_geopandas(state_roads, npartitions=4)
+            # clip roads to state boundary
+            result = state_roads.clip(state_geom)
+            return result.compute()
+        
+        else:
+            # clip roads to state boundary
+            result = state_roads.clip(state_geom)
+            return result
+    return state_roads
 
 
 # Read in VM2 Data
@@ -459,6 +532,7 @@ def calculate_state_proxies(num_years,
             tot_hea[istate, iyear] = np.sum(vmt_hea[:, :, istate, iyear])
 
     # Calculate proxy values
+    print(f"CALCULATING")
     pas_proxy = vmt_pas / tot_pas
     lig_proxy = vmt_lig / tot_lig
     hea_proxy = vmt_hea / tot_hea
@@ -467,7 +541,7 @@ def calculate_state_proxies(num_years,
 
 
 # Unpack State Proxy Arrays
-def unpack_state_proxy(state_proxy_array):
+def unpack_state_proxy(state_proxy_array, proxy_name='Emission Allocation'):
     reshaped_state_proxy = state_proxy_array.reshape(-1)
 
     row_index = np.repeat(['urban', 'rural'], 3 * 57 * num_years)
@@ -480,7 +554,7 @@ def unpack_state_proxy(state_proxy_array):
         'Road Type': col1_index,
         'State': col2_index,
         'Year': col3_index,
-        'Proxy': reshaped_state_proxy
+        proxy_name: reshaped_state_proxy
     })
 
     df['State_abbr'] = df['State'].map(state_mapping)
@@ -519,10 +593,11 @@ def unpack_state_allroads_proxy(vmt_tot):
 
 
 # Generate Roads Proportions Data
-def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy):
+def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy, out_path, proxy_name='Emission Allocation'):
     """
     Formats data for roads proxy emissions
     """
+    proxy_name = proxy_name.lower()
     # Add Vehicle Type column
     pas_proxy['Vehicle'] = 'Passenger'
     lig_proxy['Vehicle'] = 'Light'
@@ -539,9 +614,9 @@ def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy):
                        .query("state_code not in ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI', 'UM']")
     )
     vmt_roads_proxy = vmt_roads_proxy[['state_code', 'year', 'vehicle', 'region',
-                                       'road_type', 'proxy']]
+                                       'road_type', proxy_name]]
 
-    vmt_roads_proxy.to_csv(task_outputs_path / "roads_proportion_data.csv", index=False)
+    vmt_roads_proxy.to_csv(out_path, index=False)
 
     del pas_proxy, lig_proxy, hea_proxy
 
@@ -553,12 +628,13 @@ def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy):
 def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_proportion_data.csv"):
     if not road_proxy_out_path.exists():
         # Proportional Allocation of Roads Emissions
+        # The "Proxy" column in the output data represents the proportion of VMT for each vehicle type, disaggregated by urban/rural and road type
         #################
         # VM2 Outputs
         Miles_road_primary, Miles_road_secondary, Miles_road_other, total, total2 = get_vm2_arrays(num_years)
 
         # VM4 Outputs
-        Per_vmt_mot, Per_vmt_pas, Per_vmt_lig, Per_vmt_hea = get_vm2_arrays(num_years)
+        Per_vmt_mot, Per_vmt_pas, Per_vmt_lig, Per_vmt_hea = get_vm4_arrays(num_years)
 
         # State Proxy Outputs
         pas_proxy, lig_proxy, hea_proxy, vmt_tot = calculate_state_proxies(num_years,
@@ -576,6 +652,19 @@ def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_pro
         # tot_proxy = unpack_state_allroads_proxy(vmt_tot)
 
         # Generate Roads Proportions Data
-        get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy)
+        get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy, out_path=road_proxy_out_path)
+
+        return pas_proxy, lig_proxy, hea_proxy
     
     return pd.read_csv(road_proxy_out_path)
+
+#%%
+
+if __name__ == '__main__':
+    get_road_proxy_data(Path('tmp/roads_proportion_data.csv'))
+
+    # the following will total all valid rows to 1
+    # df.groupby(['Year', 'Vehicle', 'State_abbr']).Proxy.sum()
+
+
+#%%
