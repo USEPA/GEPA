@@ -87,6 +87,7 @@ def task_get_abd_coal_proxy_data(
         "Western Basins": 4,
     }
 
+    # https://www.epa.gov/sites/default/files/2016-03/documents/amm_final_report.pdf
     # basin coefficients pulled from v2
     # order: CA, IL, NA, BW, WS
     basin_coef_dict = {
@@ -412,6 +413,7 @@ def task_get_abd_coal_proxy_data(
     # emissions calculations.
 
     active_mines_df = all_mines_df.query(
+        # "(operating_status == 'Active')"
         "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)"
     ).sort_values("reopen_date")
     print(
@@ -420,10 +422,16 @@ def task_get_abd_coal_proxy_data(
     )
     active_mines_df
 
+    # questionable mines are those that have a reopen date after the date of
+    # abandonment, regardless of their status. There are 52 mines total that fall into
+    # this grey zone, include the 6 that are listed as active.
+    # questionable_mines = all_mines_df.query(
+    #     "reopen_date > date_abd"
+    # ).sort_values("MINE_ID")
+
     # remove the active mines from the abandoned mines
-    abandoned_mines_df = all_mines_df.loc[
-        ~all_mines_df.index.isin(active_mines_df.index)
-    ]
+    abandoned_mines_df = all_mines_df.drop(index=active_mines_df.index)
+
     # %%
     # previously year days were recalculated for every year to calculate the fraction
     # of years a mine way closed. I think a better approach would be to assign a

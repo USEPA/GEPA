@@ -1,28 +1,27 @@
-from pathlib import Path
 import calendar
+from pathlib import Path
 
-import osgeo  # noqa f401
-import numpy as np
-import rasterio
-from rasterio.plot import show
-import geopandas as gpd
-import xarray as xr
-import pandas as pd
-import rioxarray  # noqa f401
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import geopandas as gpd
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+import numpy as np
+import osgeo  # noqa f401
+import pandas as pd
+import rasterio
+import requests
+import rioxarray  # noqa f401
+import seaborn as sns
+import xarray as xr
 from IPython.display import display
 from rasterio.features import rasterize, shapes
-import seaborn as sns
-import matplotlib.pyplot as plt
+from rasterio.plot import show
 
-# import warnings
-
-from gch4i.config import global_data_dir_path, figures_data_dir_path, V3_DATA_PATH
+from gch4i.config import V3_DATA_PATH, figures_data_dir_path, global_data_dir_path
 from gch4i.gridding import GEPA_spatial_profile
 
+# import warnings
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
@@ -751,9 +750,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
     for each sector.
     """
     if v2_name is None:
-        Warning(
-            f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!"
-            )
+        Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
     else:
         profile = GEPA_spatial_profile()
 
@@ -779,8 +776,10 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # v3 flux raster sum
                 v3_sum = np.nansum(v3_data[year])
                 # percent difference between v2 and v3
-                percent_dif = 100*(v3_sum - v2_sum)/((v3_sum + v2_sum)/2)
-                print(f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, percent difference: {percent_dif}")
+                percent_dif = 100 * (v3_sum - v2_sum) / ((v3_sum + v2_sum) / 2)
+                print(
+                    f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, percent difference: {percent_dif}"
+                )
                 # descriptive statistics on the difference raster
                 result_list.append(
                     pd.DataFrame(yearly_dif.ravel())
@@ -791,9 +790,13 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # Comparison of masses:
                 # flux to mass conversion factor
                 area_matrix = load_area_matrix()
-                month_days = [calendar.monthrange(int(year), x)[1] for x in range(1, 13)]
+                month_days = [
+                    calendar.monthrange(int(year), x)[1] for x in range(1, 13)
+                ]
                 year_days = np.sum(month_days)
-                conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
+                conversion_factor_annual = calc_conversion_factor(
+                    year_days, area_matrix
+                )
                 # v2 mass raster sum
                 # divide by the flux conversion factor to transform back into mass units
                 v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
@@ -802,8 +805,14 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 v3_mass_raster = v3_data[year] / conversion_factor_annual
                 v3_mass_sum = np.nansum(v3_mass_raster)
                 # percent difference between v2 and v3
-                percent_dif_mass = 100*(v3_mass_sum - v2_mass_sum)/((v3_mass_sum + v2_mass_sum)/2)
-                print(f"year: {year}, v2 mass sum: {v2_mass_sum}, v3 mass sum: {v3_mass_sum}, percent difference: {percent_dif_mass}")
+                percent_dif_mass = (
+                    100
+                    * (v3_mass_sum - v2_mass_sum)
+                    / ((v3_mass_sum + v2_mass_sum) / 2)
+                )
+                print(
+                    f"year: {year}, v2 mass sum: {v2_mass_sum}, v3 mass sum: {v3_mass_sum}, percent difference: {percent_dif_mass}"
+                )
 
                 # Set all raster values == 0 to nan so they are not plotted
                 v2_data_dict[year][np.where(v2_data_dict[year] == 0)] = np.nan
@@ -860,17 +869,18 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
                 )
                 # Add a title
-                difference_plot_title = (
-                    f"{year} Difference between v2 and v3 methane emissions from {SOURCE_NAME}"
-                )
+                difference_plot_title = f"{year} Difference between v2 and v3 methane emissions from {SOURCE_NAME}"
                 plt.title(difference_plot_title, fontsize=14)
                 # Save the plot as a PNG file
-                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
+                plt.savefig(
+                    str(figures_data_dir_path)
+                    + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png"
+                )
                 # Show the plot for review
                 plt.show()
                 # Close the plot
                 plt.close()
-                
+
                 # Plot the grid cell level frequencies of v2 and v3 methane emissions for each year
                 fig, (ax1, ax2) = plt.subplots(2)
                 fig.tight_layout()
@@ -884,7 +894,10 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 ax1.set_ylabel("v2 frequency")
                 ax2.set_ylabel("v3 frequency")
                 # Save the plot as a PNG file
-                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png")
+                plt.savefig(
+                    str(figures_data_dir_path)
+                    + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png"
+                )
                 # Show the plot for review
                 plt.show()
                 # Close the plot
@@ -962,3 +975,11 @@ def us_state_to_abbrev(state_name: str) -> str:
         if state_name in us_state_to_abbrev_dict
         else state_name
     )
+
+
+def download_url(url, output_path):
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
