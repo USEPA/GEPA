@@ -19,6 +19,8 @@ import pandas as pd
 import geopandas as gpd
 from shapely import from_wkt
 from shapely.geometry import box
+from shapely.ops import unary_union
+from shapely import errors as se
 
 import rasterio as rio
 import xarray as xr
@@ -82,16 +84,18 @@ task_outputs_path.mkdir(exist_ok=True, parents=True)
 
 if __name__ == '__main__':
     for year in range(min_year, max_year+1):
+        if year < 2018:
+            continue
         epsg = "ESRI:102003"
         road_type_col = 'road_type'
         road_proxy_df = get_road_proxy_data().rename(columns={'state_code': 'state'})
         cells = get_overlay_gdf(year, crs=epsg).rename(columns={'STUSPS': 'state', 'urban': 'region'})
+        cells = cells.loc[~cells['state'].isna()]
         cells['region'] = cells['region'].map(urban_map)
 
         print(f'Reading roads')
         roads = read_roads(year, crs=epsg, raw=False)
 
-        cell_n = len(cells)
         print(f"Starting processing for {year} at {datetime.now()}")
         interm_out_path = task_outputs_path / f"gridwise_mapping_intermediate_{year}.csv"
 
@@ -106,6 +110,7 @@ if __name__ == '__main__':
             # remove the intermediate file from environment
             del(processed_cells)
 
+        cell_n = len(cells)
         for idx, cell in cells.reset_index().iterrows():
             print(f'Processing index {idx}/{cell_n}', end='\r')
             cell_id = cell['cell_id']
@@ -117,8 +122,18 @@ if __name__ == '__main__':
             road_value = road_proxy_df.loc[(road_proxy_df['state'] == state) & (road_proxy_df['region'] == region) & (road_proxy_df['year'] == year)]
 
             # get roads in cell
-            cell_roads = intersect_and_clip(roads, geom)
+            try:
+                cell_roads = intersect_and_clip(roads, geom)
 
+            except se.GEOSException as e:
+                geom = geom.buffer(0)
+
+                try:
+                    cell_roads = intersect_and_clip(roads, geom)
+            
+                except Exception as e:
+                    print(f'ERROR processing cell {cell_id}, region: {region}, state: {state}, for year {year}: {e}')
+                    continue
             # Calculate the length of lines within each road_type group
             # first check if DF has values. intersect_and_clip returns an empty DF if no roads are found
             if not cell_roads.empty:
@@ -138,48 +153,47 @@ if __name__ == '__main__':
             road_value.set_index(['state', 'region', 'year', 'road_type']).join(road_type_df, how='left').reset_index()\
                 .to_csv(interm_out_path, mode='a', header=False, index=False)
 
-    # concatenate
-    long_table = pd.read_csv(interm_out_path)
+        # concatenate
+        long_table = pd.read_csv(interm_out_path)
 
-    print(f'Gridwise processing for {year} complete: {datetime.now()}')
+        print(f'\nGridwise processing for {year} complete: {datetime.now()}')
 
-    print(f'Calculating emission allocatoin for {year}')
-    # calculate road length by state:
-    state_road_length = long_table.groupby(['state', 'year'])['rd_length'].sum().rename('m_road_in_state').reset_index()
+        print(f'Calculating emission allocatoin for {year}')
+        # calculate road length by state:
+        state_road_length = long_table.groupby(['state', 'year'])['rd_length'].sum().rename('m_road_in_state').reset_index()
 
-    # join with long table:
-    long_table = long_table.join(state_road_length.set_index(['state', 'year']), on=['state', 'year'])
+        # join with long table:
+        long_table = long_table.join(state_road_length.set_index(['state', 'year']), on=['state', 'year'])
 
-    # calculate methane emission allocation at the cell/region level
-    long_table['methane_emission_allocation'] = (long_table['rd_length'] / long_table['m_road_in_state']) * long_table['proxy']
+        # calculate methane emission allocation at the cell/region level
+        long_table['methane_emission_allocation'] = (long_table['rd_length'] / long_table['m_road_in_state']) * long_table['proxy']
 
-    print(f'Saving to CSV... {datetime.now()}')
-    long_table.to_csv(task_outputs_path / f"gridwise_mapping_{year}.csv", index=False)
+        print(f'Saving to CSV... {datetime.now()}')
+        long_table.to_csv(task_outputs_path / f"gridwise_mapping_{year}.csv", index=False)
 
-    print(f'FULL PROCESSING FOR {year} COMPLETE: {datetime.now()}')
+        print(f'FULL PROCESSING FOR {year} COMPLETE: {datetime.now()}')
 
-    #%%
-
-
+        del(roads)
 
 
-# The result of this script is a CSV file with the following columns:
-# - state
-# - region
-# - year
-# - road_type
-# - proxy
-# - rd_length
-# - cell_id
-# - m_road_in_state 
-# - methane_emission
 
-# The variable for methane emission allocation represents the proportion of 
-# state-wide methane emissions from that year that are attirbutable to that vehicle type/road/urbanicity(region) type in a given cell
-        
-# There's a chance that these will need to be re-aggregated to the cell level as follows:
-long_table.groupby(['year', 'cell_id'])['methane_emission_allocation'].sum()\
-    .reset_index().to_csv(task_outputs_path / f"gridwise_mapping_{year}_cell.csv", index=False)
+        # The result of this script is a CSV file with the following columns:
+        # - state
+        # - region
+        # - year
+        # - road_type
+        # - proxy
+        # - rd_length
+        # - cell_id
+        # - m_road_in_state 
+        # - methane_emission
+
+        # The variable for methane emission allocation represents the proportion of 
+        # state-wide methane emissions from that year that are attirbutable to that vehicle type/road/urbanicity(region) type in a given cell
+                
+        # There's a chance that these will need to be re-aggregated to the cell level as follows:
+        long_table.groupby(['year', 'cell_id'])['methane_emission_allocation'].sum()\
+            .reset_index().to_csv(task_outputs_path / f"gridwise_mapping_{year}_cell.csv", index=False)
 
 #%%
 # WORKING THEORY:
