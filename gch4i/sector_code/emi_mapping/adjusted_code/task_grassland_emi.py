@@ -1,10 +1,10 @@
 """
-Name:                   task_forest_land_emi.py
-Date Last Modified:     2024-10-15
+Name:                   task_grassland_emi.py
+Date Last Modified:     2024-10-24
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of Forest Land emissions to State, Year, emissions format
-Input Files:            - ForestCarbon_90-22_State_Gridding.xlsx
-Output Files:           - forest_land_emi.csv
+Input Files:            - GrassFires_nonCO2_90-22_FR.xlsx
+Output Files:           - grassland_emi.csv
 Notes:                  - This version of emi mapping is draft for mapping .py files
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -28,17 +28,17 @@ from gch4i.utils import tg_to_kt
 # %% Step 1. Create Function
 
 
-def get_forest_land_inv_data(in_path, src, params):
+def get_grassland_inv_data(in_path, src, params):
     """read in the ch4_kt values for each state
     User is required to specify the subcategory of interest:
-    - Forest Fires
+    - Grass Fires
     """
 
     emi_df = pd.read_excel(
         in_path,
         sheet_name=params["arguments"][0],  # InvDB
         skiprows=params["arguments"][1],  # 15
-        nrows=params["arguments"][2],  # 1979
+        nrows=params["arguments"][2],  # 101
         )
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
@@ -52,7 +52,6 @@ def get_forest_land_inv_data(in_path, src, params):
         )
         .rename(columns={"georef": "state_code"})
         .query(f"(ghg == 'CH4') & (ghgi_source == '{src}')")
-        .query("state_code not in ['USTERR', 'National']")
         .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
         .replace(0, pd.NA)
@@ -74,8 +73,8 @@ def get_forest_land_inv_data(in_path, src, params):
 
 
 # %% STEP 2. Initialize Parameters
-source_name = "4A1_4A2_Forest_land_remaining_forest_land"
-source_path = "4A1_4A2_Forest_land_remaining_forest_land"
+source_name = "4C1_4C2_Grassland_remaining_grassland"
+source_path = "4C1_4C2_Grassland_remaining_grassland"
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
@@ -101,7 +100,7 @@ for _id, _kwargs in emi_parameters_dict.items():
 
     @mark.persist
     @task(id=_id, kwargs=_kwargs)
-    def task_forest_land_emi(
+    def task_grassland_emi(
         input_paths: list[Path],
         source_list: list[str],
         parameters: dict,
@@ -110,9 +109,9 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         emi_df_list = []
         for input_path, ghgi_group in zip(input_paths, source_list):
-            individual_emi_df = get_forest_land_inv_data(input_path,
-                                                         ghgi_group,
-                                                         parameters)
+            individual_emi_df = get_grassland_inv_data(input_path,
+                                                       ghgi_group,
+                                                       parameters)
             emi_df_list.append(individual_emi_df)
 
         emission_group_df = (
