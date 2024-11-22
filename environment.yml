@@ -25,10 +25,11 @@ dependencies:
   - pandas
   - pandas-flavor
   - pandas-profiling
+  - pyxlsb
   # - plotly
   # - pyjanitor
   - pylint
-  # - pyodbc # added by Nathan -- needed in Wastewater
+  - pyodbc # added by Nathan -- needed in Wastewater
   - pyprojroot
   # - pyshp # added by Hannah -- needed in Petroleum Systems
   - python-duckdb
@@ -48,5 +49,6 @@ dependencies:
   - rioxarray
   - pip
   - xlsxwriter
+  - lxml
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode
