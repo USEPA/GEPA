@@ -1,15 +1,3 @@
-"""
-Name:                   task_post_meter.py
-Date Last Modified:     2024-07-12
-Authors Name:           John Bollenbacher (RTI International)
-Purpose:                Mapping of post meter emissions to State, Year, emissions format
-Input Files:            - Emi_CommCustomers.xlsx
-                        - Emi_IndEGU.xlsx
-                        - Emi_CNGVehicles.xlsx
-                        - Emi_ResCustomers.xlsx
-Output Files:           - Do not use output. This is a single function script.
-Notes:                  
-"""
 from pathlib import Path
 from typing import Annotated
 

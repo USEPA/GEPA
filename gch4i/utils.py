@@ -1,28 +1,28 @@
-from pathlib import Path
 import calendar
+from pathlib import Path
 
-import osgeo  # noqa f401
-import numpy as np
-import rasterio
-from rasterio.plot import show
-import geopandas as gpd
-import xarray as xr
-import pandas as pd
-import rioxarray  # noqa f401
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import geopandas as gpd
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+import numpy as np
+import osgeo  # noqa f401
+import pandas as pd
+import rasterio
+import requests
+import rioxarray  # noqa f401
+import seaborn as sns
+import xarray as xr
 from IPython.display import display
 from rasterio.features import rasterize, shapes
-import seaborn as sns
-import matplotlib.pyplot as plt
+from rasterio.plot import show
 
-# import warnings
+from gch4i.config import V3_DATA_PATH, figures_data_dir_path, global_data_dir_path
 
-from gch4i.config import global_data_dir_path, figures_data_dir_path, V3_DATA_PATH
 from gch4i.gridding import GEPA_spatial_profile
 
+# import warnings
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
@@ -46,6 +46,10 @@ def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> flo
         / cell_area_matrix
     )
 
+
+# TODO: a REVERSE FLUX CALCULATION FUNCTION
+# def reverse_flux_calculation():               # This function will take the flux and convert it back to emissions (in kt) for a given area
+#     pass
 
 # TODO: write state / year inventory to GRID allocation, probably using geocube
 # EEM: question - for sources where we go from the state down to the grid-level, will
@@ -637,13 +641,13 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
         plt.title(annual_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
-        plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
-
-        # Show the plot for review
-        plt.show()
+        # plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Save the plots as PNG files to the figures directory
         plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
+
+        # Show the plot for review
+        plt.show()
 
         # close the plot
         plt.close()
@@ -731,11 +735,11 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     )
     plt.title(difference_plot_title, fontsize=14)
 
-    # Show the plot for review
-    plt.show()
-
     # Save the plot as a PNG file
     plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
+
+    # Show the plot for review
+    plt.show()
 
     # close the plot
     plt.close()
@@ -799,7 +803,7 @@ us_state_to_abbrev_dict = {
     "Puerto Rico": "PR",
     "United States Minor Outlying Islands": "UM",
     "U.S. Virgin Islands": "VI",
-    }
+}
 
 
 def us_state_to_abbrev(state_name: str) -> str:
@@ -956,3 +960,11 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
 
         result_df = pd.concat(result_list, axis=1)
         return result_df
+
+
+def download_url(url, output_path):
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)

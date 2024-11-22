@@ -1,540 +1,158 @@
-# %%
-# Name: 2B8_petrochemical_production.py
+"""
+Name:                   2B8_petrochemical_production.py
+Date Last Modified:     2024-08-13
+Authors Name:           N. Kruskamp, H. Lohman (RTI International), Erin McDuffie
+                        (EPA/OAP)
+Purpose:                Spatially allocates methane emissions for source category 2B8,
+                        sector industrial processes and product use, 
+                        source Petrochemical Production.
+Input Files:            - 
+Output Files:           - 
+Notes:                  - 
+"""
 
-# Authors Name: N. Kruskamp, H. Lohman (RTI International), Erin McDuffie (EPA/OAP)
-# Date Last Modified: 5/10/2024
-# Purpose: Spatially allocates methane emissions for source category 2B8 Petrochemical production
-# 
-# Input Files: 
-#      - State_Petrochemicals_1990-2021.xlsx, SubpartX_Petrochemical_Facilities.csv,
-#           all_ghgi_mappings.csv, all_proxy_mappings.csv
-# Output Files:
-#      - f"{INDUSTRY_NAME}_ch4_kt_per_year.tif, f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
-# Notes:
-# TODO: update to use facility locations from 2024 GHGI state inventory files
-# TODO: include plotting functionaility
-# TODO: include netCDF writting functionality 
-    
-# ---------------------------------------------------------------------
-# %% STEP 0. Load packages, configuration files, and local parameters
+# %% STEP 0. Load packages, configuration files, and local parameters ------------------
 
+# for testing/development
+# %load_ext autoreload
+# %autoreload 2
+from zipfile import ZipFile
 import calendar
-import warnings
-from pathlib import Path
+import datetime
 
 import osgeo  # noqa
+import duckdb
 import geopandas as gpd
-import numpy as np
 import pandas as pd
-import rasterio
-import rasterio.enums
 import seaborn as sns
+from geopy.geocoders import Nominatim
 from IPython.display import display
+import numpy as np
+
+from gch4i.config import (
+    V3_DATA_PATH,
+    ghgi_data_dir_path,
+    proxy_data_dir_path,
+    global_data_dir_path,
+    max_year,
+    min_year,
+    tmp_data_dir_path,
+    emi_data_dir_path,
+)
+from gch4i.utils import (
+    QC_emi_raster_sums,
+    QC_proxy_allocation,
+    grid_allocated_emissions,
+    name_formatter,
+    plot_annual_raster_data,
+    plot_raster_data_difference,
+    allocate_emissions_to_proxy,
+    tg_to_kt,
+    write_ncdf_output,
+    write_tif_output,
+    calculate_flux,
+    combine_gridded_emissions,
+    QC_flux_emis
+)
+
 # from pytask import Product, task
-from rasterio.features import rasterize
 
-from gch4i.config import (ghgi_data_dir_path, max_year, min_year,
-                          tmp_data_dir_path, data_dir_path)
-from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
-from gch4i.utils import calc_conversion_factor, load_area_matrix, write_tif_output
-# %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data
-# Set output paths
-# EEM: add constants (note, we should try to do conversions using variable names, so 
-#      that we don't have constants hard coded into the scripts)
-tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
-t_to_kt = 0.001  # conversion factor, tonnes to kilotonnes
+gpd.options.io_engine = "pyogrio"
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", 20)
 
 
-# @mark.persist
-# @task
-# def task_sector_industry_petrochemical():
-#     pass
-
+# %%
 # https://www.epa.gov/system/files/documents/2024-02/us-ghg-inventory-2024-main-text.pdf
-INDUSTRY_NAME = "2B8_industry_petrochemical"
+IPCC_ID = "2B8"
+SECTOR_NAME = "Industrial Processes and Product Use"
+SOURCE_NAME = "Petrochemical Production"
+FULL_NAME = "_".join([IPCC_ID, SECTOR_NAME, SOURCE_NAME]).replace(" ", "_")
 
-# NOTE: We expect both the summary emissions and the proxy to come from the same file
-# for this sector.
-EPA_inputfile = Path(ghgi_data_dir_path / "State_Petrochemicals_1990-2021.xlsx")
+netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
+netcdf_description = (
+    f"Gridded EPA Inventory - {SECTOR_NAME} - "
+    f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
+)
 
-# NOTE: this file uses the Envirofacts GHG Query Builder to retrieve
-# Supart X facility-level emissions and locations (latitude, longitude).
-EPA_ghgrp_petrochemical_inputfile = "https://data.epa.gov/efservice/x_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV"
-
-# OUTPUT FILES (TODO: include netCDF flux files)
-ch4_kt_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_kt_per_year.tif"
-ch4_flux_dst_path = tmp_data_dir_path / f"{INDUSTRY_NAME}_ch4_emi_flux.tif"
-
-# NOTE: I think it makes sense to still load the area matrix in here so it persists
-# in memory and we pass it to the flux calculation function when needed.
-# EEM NOTE: in some scripts we use 0.01x0.01 degree resolution area matrix, 
-# in other scripts with use the 0.1x0.1 area matrix. Can we add both to this function 
-# and specify which we're using here?
-area_matrix = load_area_matrix()
-# ----------------------------------------------------------------------------
+# OUTPUT FILES
+ch4_kt_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_kt_per_year"
+ch4_flux_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_emi_flux"
 
 # %% STEP 1. Load GHGI-Proxy Mapping Files
+proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-# NOTE: looking at rework of the proxy mapping files into an aggregate flat file
-# that would then be formed into a proxy dictionary to retain the existing approach
-# but allow for interrogation of the objects when needed.
-
-ghgi_map_path = data_dir_path / "all_ghgi_mappings.csv"
-proxy_map_path = data_dir_path / "all_proxy_mappings.csv"
-ghgi_map_df = pd.read_csv(ghgi_map_path)
-proxy_map_df = pd.read_csv(proxy_map_path)
-
-proxy_map_df.query("GHGI_Emi_Group == 'Emi_Petro'").merge(
-    ghgi_map_df.query("GHGI_Emi_Group == 'Emi_Petro'"), on="GHGI_Emi_Group"
+proxy_mapping = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+    f"Category == '{SOURCE_NAME}'"
 )
+proxy_mapping
 
-# HACL: The next few lines of code developing the petro_map_data_dict needs to be updated
-# for how data is handled in the petrochemicals workbook. There is no single tab called
-# Petrochemical Calculations that reports facility-level emissions. Instead, state-level
-# CH4 and CO2 emissions are reported on State Summary.
-# petro_map_data_dict = {}
-# petro_map_data_dict["Emi_Petro"] = {
-#     "Map_Petro": {
-#         "facility_data_file": EPA_inputfile,
-#         "sheet_name": "Petrochemical Calculations",
-#     }
-# }
-# #load GHGI Mapping Groups
-# names = pd.read_excel(Ind_Mapping_inputfile, sheet_name = "GHGI Map - Ind", usecols = "A:B",skiprows = 1, header = 0)
-# colnames = names.columns.values
-# ghgi_ind_map = pd.read_excel(Ind_Mapping_inputfile, sheet_name = "GHGI Map - Ind", usecols = "A:B", skiprows = 1, names = colnames)
-# #drop rows with no data, remove the parentheses and ""
-# ghgi_ind_map = ghgi_ind_map[ghgi_ind_map['GHGI_Emi_Group'] != 'na']
-# ghgi_ind_map = ghgi_ind_map[ghgi_ind_map['GHGI_Emi_Group'].notna()]
-# ghgi_ind_map['GHGI_Source']= ghgi_ind_map['GHGI_Source'].str.replace(r"\(","")
-# ghgi_ind_map['GHGI_Source']= ghgi_ind_map['GHGI_Source'].str.replace(r"\)","")
-# ghgi_ind_map.reset_index(inplace=True, drop=True)
-# display(ghgi_ind_map)
 
-# #load emission group - proxy map
-# names = pd.read_excel(Ind_Mapping_inputfile, sheet_name = "Proxy Map - Ind", usecols = "A:D",skiprows = 1, header = 0)
-# colnames = names.columns.values
-# proxy_ind_map = pd.read_excel(Ind_Mapping_inputfile, sheet_name = "Proxy Map - Ind", usecols = "A:D", skiprows = 1, names = colnames)
-# display((proxy_ind_map))
+# %% READ IN EPA DATA, ALLOCATE, GRID, AND QC ----------------------------------
 
-# #create empty proxy and emission group arrays (add months for proxy variables that have monthly data)
-# for igroup in np.arange(0,len(proxy_ind_map)):
-#     vars()[proxy_ind_map.loc[igroup,'Proxy_Group']] = np.zeros([len(Lat_01),len(Lon_01),num_years])
-#     vars()[proxy_ind_map.loc[igroup,'Proxy_Group']+'_nongrid'] = np.zeros([num_years])
-#     vars()[proxy_ind_map.loc[igroup,'GHGI_Emi_Group']] = np.zeros([num_years])
 
-# -----------------------------------------------------------------------
+emi_dict = {}
+for mapping_row in proxy_mapping.itertuples():
+    mapping_row
+    emi_name = mapping_row.emi_id
+    proxy_name = mapping_row.proxy_id
 
-# %% 
-# STEP 2: Read In EPA State GHGI Emissions by Year
-
-# read in the ch4_kt values for each state
-# NOTE: Update to the correct sheet name "InvDB" once we have the final data
-EPA_petro_emissions = (
-    # read in the data
-    pd.read_excel(
-        EPA_inputfile,
-        # sheet_name="InvDB",
-        sheet_name="InvDB_HL_Edits",
-        skiprows=15,
-        nrows=457,
-        usecols="A:AO",
+    # STEP 2: Read In EPA State GHGI Emissions by Year
+    # EEM: question -- can we create a script that we can run separately to run all the 
+    #  get_emi and get_proxy functions? Then we can include a comment in this
+    # script that states that those functions need to be run first
+    # Also see comments on the emissions script. The emission values need to be corrected
+    emi_dict[emi_name] = {}
+    emi_path = list(emi_data_dir_path.glob(f"{emi_name}*"))[0]
+    emi_dict[emi_name]["emi_id"] = pd.read_csv(emi_path)
+    
+    # STEP 3: GET AND FORMAT PROXY DATA ---------------------------------------------
+    proxy_path = list(proxy_data_dir_path.glob(f"{proxy_name}*.parquet"))[0]
+    emi_dict[emi_name]["proxy_id"] = gpd.read_parquet(proxy_path)
+    
+    # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES -----------------------
+    emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
+        emi_dict[emi_name]["proxy_id"],
+        emi_dict[emi_name]["emi_id"],
+        proxy_has_year=True,
+        use_proportional=True,
+        proportional_col_name=mapping_row.prop_col_name
+        #proportional_col_name="capacity_kt",
     )
-    # name column names lower
-    .rename(columns=lambda x: str(x).lower())
-    # drop columns we don't need
-    .drop(
-        columns=[
-            "sector",
-            "source",
-            "subsource",
-            "fuel",
-            "subref",
-            "2nd ref",
-            "exclude",
-        ]
+
+    # STEP X: QC ALLOCATION ---------------------------------------------------------
+    emi_dict[emi_name]["allocation_qc"] = QC_proxy_allocation(
+        emi_dict[emi_name]["allocated"], emi_dict[emi_name]["emi_id"]
     )
-    # get just methane emissions
-    .query("ghg == 'CH4'")
-    # remove that column
-    .drop(columns="ghg")
-    # set the index to state
-    .set_index("state")
-    # covert "NO" string to numeric (will become np.nan)
-    .apply(pd.to_numeric, errors="coerce")
-    # drop states that have all nan values
-    .dropna(how="all")
-    # reset the index state back to a column
-    .reset_index()
-    # sum the subreference emissions for one emission per state/year combo
-    .groupby('state').sum()
-    # reset the index state back to a column
-    .reset_index()
-    # make the table long by state/year
-    .melt(id_vars="state", var_name="year", value_name="ch4_tg")
-    .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
-    .drop(columns=["ch4_tg"])
-    # make the columns types correcet
-    .astype({"year": int, "ch4_kt": float})
-    .fillna({"ch4_kt": 0})
-    # # get only the years we need
-    .query("year.between(@min_year, 2021)")
-    # .query("year.between(@min_year, @max_year)")
-)
-EPA_petro_emissions.head()
-
-# %% 
-# QA/QC - check counts of years of state data and plot by state
-display(EPA_petro_emissions["state"].value_counts())
-display(EPA_petro_emissions["year"].min(), EPA_petro_emissions["year"].max())
-
-# a quick plot to verify the values
-sns.relplot(
-    kind="line",
-    data=EPA_petro_emissions,
-    x="year",
-    y="ch4_kt",
-    hue="state",
-    # legend=False,
-)
-# ------------------------------------------------------------------------
-
-# %%
-# STEP 3: GET AND FORMAT PROXY DATA
-# TODO: explore if it makes sense to write a function / task for every proxy.
-# there are about 65 unique ones.
-# EEM: this sounds like a good apprach. I'll leave that decision to RTI
-def task_map_petro_proxy():
-    pass
-
-
-# The facilities have multiple reporting units for each year. This will read in the
-# facilities data and compute the facility level sum of ch4_kt emissions for each
-# year.
-
-subpart_x_df = pd.read_csv(EPA_ghgrp_petrochemical_inputfile, 
-                           usecols=(
-                               "facility_name", 
-                               "facility_id", 
-                               "reporting_year", 
-                               "ghg_quantity", 
-                               "latitude", 
-                               "longitude", 
-                               "state", 
-                               "zip"))
-subpart_x_df
-
-# read in the SUMMARY facilities emissions data
-petro_facilities_df = (
-    pd.read_csv(
-        EPA_ghgrp_petrochemical_inputfile,
-        # 13: facility name, 0: facility_id
-        usecols=("facility_name",
-                 "facility_id",
-                 "reporting_year",
-                 "ghg_quantity",
-                 "latitude",
-                 "longitude",
-                 "state",
-                 "zip"))
-    .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
-    .drop(columns=["ch4_t"])
-    .drop_duplicates(subset=['facility_id', 'year'], keep='last')
-    .astype({"year": int})
-    # .query("year.between(@min_year, @max_year)")
-    .query("year.between(@min_year, 2021)")
-    .reset_index()
-    .drop(columns='index')
-
-)
-
-petro_facilities_df.head()
-
-petro_facilities_gdf = (
-    gpd.GeoDataFrame(
-        petro_facilities_df,
-        geometry=gpd.points_from_xy(
-            petro_facilities_df["longitude"],
-            petro_facilities_df["latitude"],
-            crs=4326,
-        ),
+    # STEP X: GRID EMISSIONS --------------------------------------------------------
+    emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
+        emi_dict[emi_name]["allocated"]
     )
-    .drop(columns=["latitude", "longitude"])
-    .loc[:, ["facility_id", "facility_name", "state", "zip", "geometry", "year", "ch4_kt"]]
-)
-petro_facilities_gdf.head()
-
-
-# %%
-# quick look at the data.
-sns.lineplot(
-    petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_id", legend=False
-)
-# %%
-# EPA_ghgrp_ferro_inputfile = ghgi_path / "SubpartK_Ferroalloy.csv"
-# ferro_subk_emi_df = (
-#     pd.read_csv(EPA_ghgrp_ferro_inputfile)
-#     .rename(columns=lambda x: str(x).split(".")[-1].lower())
-#     .rename(columns={"reporting_year": "year"})
-#     .query("ghg_name == 'Methane'")
-#     .drop(columns="ghg_name")
-# )
-
-# v2_facility_info_df = (
-#     ferro_subk_emi_df.set_index(["facility_id", "year"])
-#     .join(ferro_subk_info_df.set_index(["facility_id", "year"]))
-#     .reset_index()
-# )
-# %% QA/QC
-# make sure the merge gave us the number of results we expected.
-if not (petro_facilities_gdf.shape[0] == petro_facilities_df.shape[0]):
-    print("WARNING the merge shape does not match the original data")
-# %% # save a shapefile of the v3 ferro facilities for reference
-fac_locations = petro_facilities_gdf.dissolve("facility_id")
-fac_locations[fac_locations.is_valid].loc[:, ["geometry"]].to_file(
-    tmp_data_dir_path / "v3_petro_facilities.shp.zip", driver="ESRI Shapefile"
-)
-
-
-# %% QA/QC
-
-# some checks of the data
-# how many na values are there
-print('Number of NaN values:')
-display(petro_facilities_gdf.isna().sum())
-# how many missing locations are there by year
-print("Number of Facilities with Missing Locations Each Year")
-display(petro_facilities_gdf[petro_facilities_gdf["zip"].isna()]["year"].value_counts())
-# how many missing locations are there by facility name
-print("For Each Facility with Missing Data, How Many Missing Years")
-display(
-    petro_facilities_gdf[petro_facilities_gdf["zip"].isna()][
-        "facility_id"
-    ].value_counts()
-)
-# a plot of the timeseries of emission by facility
-sns.lineplot(
-    data=petro_facilities_gdf, x="year", y="ch4_kt", hue="facility_id", legend=False
-)
-
-# %%
-
-# NOTE: checking if the facility values equal the summary values.
-# # check the state/year sums against state summary data
-# for name, data in EPA_ferro_emissions.groupby(["state", "year"]):
-#     emi_sum = data["ch4_kt"].sum()
-#     # fac_sum = data["ch4_kt"].sum()
-
-#     state_facs = ferro_facilities_gdf[
-#         (ferro_facilities_gdf["state"] == name[0]) & (ferro_facilities_gdf["year"] == name[1])
-#     ]
-
-#     fac_sum = state_facs["ch4_kt"].sum()
-#     if state_facs.shape[0] == 0:
-#         print(name, "no facility data")
-#     else:
-#         print(name, np.isclose(emi_sum, fac_sum))
-
-# # check just the year sums against the state summary data
-# for year, data in EPA_ferro_emissions.groupby("year"):
-#     emi_sum = data["ch4_kt"].sum()
-#     fac_sum = ferro_facilities_gdf.query("year == @year")["ch4_kt"].sum()
-#     print(year, np.isclose(fac_sum, emi_sum))
-# ----------------------------------------------------------------------------
-
-# %%
-
-# STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO EACH FACILITY
-#         (BY PROXY FRACTION IN EACH GRIDCELL)
-# For this source, state-level emissions are spatially allocated using the
-#   the fraction of facility-level emissions within each grid cell in each state, 
-#   for each year
-# EEM: question - for sources where we go from the state down to the grid-level, 
-#      will we still have this calculation step, or will we go straight to the 
-#      rasterize step?
-
-# This does the allocation for us in a function by state and year.
-
-# NOTE: HACL - This function breaks in the case of states having facilities in Subpart X, 
-# but no emissions reported in the state inventory. Dummy data for these states has been
-# created to allow this to run correctly, but it may need to be reworked to properly
-# handle this case.
-
-
-def state_year_allocation_emissions(fac_emissions, inventory_df):
-
-    # fac_emissions are the total emissions for the facilities located in that state
-    # and year. It can be one or more facilities. Inventory_df EPA state GHGI summary
-    # emissions table
-
-    # get the target state and year
-    state, year = fac_emissions.name
-
-    # get the total proxy data (e.g., emissions) within that state and year. 
-    # It will be a single value.
-    emi_sum = inventory_df[
-        (inventory_df["state"] == state) & (inventory_df["year"] == year)
-    ]["ch4_kt"].iat[0]
-
-    # allocate the EPA GHGI state emissions to each individual facility based on their
-    # proportion emissions (i.e., the fraction of total state-level emissions occuring at each facility)
-    allocated_fac_emissions = ((fac_emissions / fac_emissions.sum()) * emi_sum).fillna(
-        0
+    # STEP X: QC GRIDDED EMISSIONS --------------------------------------------------
+    emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
+        emi_dict[emi_name]["rasters"], emi_dict[emi_name]["emi_id"]
     )
-    return allocated_fac_emissions
 
 
-# we create a new column that assigns the allocated summary emissions to each facility
-# based on its proportion of emission to the facility totals for that state and year.
-# so for each state and year in the summary emissions we apply the function.
-petro_facilities_gdf["allocated_ch4_kt"] = petro_facilities_gdf.groupby(
-    ["state", "year"]
-)["ch4_kt"].transform(state_year_allocation_emissions, inventory_df=EPA_petro_emissions)
-
-petro_facilities_gdf.head()
-
-# %% QA/QC
-# We now check that the sum of facility emissions equals the EPA GHGI emissions by state
-# and year. The resulting sum_check table shows you where the emissions data DO NOT
-# equal and need more investigation.
-# NOTE: currently we are missing facilities in states, so we also check below that the
-# states that are missing emissions are the ones that are missing facilities.
-sum_check = (
-    petro_facilities_gdf.groupby(["state", "year"])["allocated_ch4_kt"]
-    .sum()
-    .reset_index()
-    .merge(EPA_petro_emissions, on=["state", "year"], how="outer")
-    .assign(
-        check_diff=lambda df: df.apply(
-            lambda x: np.isclose(x["allocated_ch4_kt"], x["ch4_kt"]), axis=1
-        )
-    )
-)
-
-with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-    display(sum_check[~sum_check["check_diff"]])
-
-# NOTE: For now, facilities data are not final / missing. We don't have facilities in
-# all the state summaries that are reporting, and we may be missing facilities even
-# within states that are represented. If these lists match, we have a good idea of
-# what is missing currently due to the preliminary data.
-
-# NOTE: As of May 2024:
-# States in the inventory with no Subpart X facilities: CO, DE, WY
-# States with Subpart X facilities but are not in the inventory: IL, IA, AL, KS, KY, PA
-# Dummy data was created in the inventory spreadsheet for IL, IA, AL, KS, KY, and PA
-# to allow the allocation code to run and should be updated with the final data.
-print(
-    (
-        "states with no facilities in them: "
-        f"{EPA_petro_emissions[~EPA_petro_emissions['state'].isin(petro_facilities_gdf['state'])]['state'].unique()}"
-    )
-)
-
-print(
-    (
-        "states with facilities in them but not accounted in state inventory: "
-        f"{petro_facilities_gdf[~petro_facilities_gdf['state'].isin(EPA_petro_emissions['state'])]['state'].unique()}"
-    )
-)
-
-print(
-    (
-        "states with unaccounted emissions: "
-        f"{sum_check[~sum_check['check_diff']]['state'].unique()}"
-    )
-)
-
-# %%
-
-# STEP 5: RASTERIZE THE CH4 KT AND FLUX
-#         e.g., calculate fluxes and place the facility-level emissions on the CONUS grid
-
-# for each year, grid the adjusted emissions data in kt and do conversion for flux.
-ch4_kt_result_rasters = {}
-ch4_flux_result_rasters = {}
-
-# NOTE: this warning filter is because we currently have facilities with missing
-# geometries.
-# TODO: remove this filter when full locations data are available.
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    for year, data in petro_facilities_gdf.groupby("year"):
-
-        # same results as summing the month days
-        # if calendar.isleap(year):
-        #     year_days = 366
-        # else:
-        #     year_days = 365
-        month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-        year_days = np.sum(month_days)
-
-        # TODO: check that when multiple points fall into the same cell, their values
-        # are added together.
-        ch4_kt_raster = rasterize(
-            shapes=[
-                (shape, value)
-                for shape, value in data[["geometry", "allocated_ch4_kt"]].values
-            ],
-            out_shape=ARR_SHAPE,
-            fill=0,
-            transform=GEPA_PROFILE["transform"],
-            dtype=np.float64,
-            merge_alg=rasterio.enums.MergeAlg.add,
-        )
-
-        conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
-        ch4_flux_raster = ch4_kt_raster * conversion_factor_annual
-
-        ch4_kt_result_rasters[year] = ch4_kt_raster
-        ch4_flux_result_rasters[year] = ch4_flux_raster
-# --------------------------------------------------------------------------
+# %% STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER --------------------------------------
+raster_list = [emi_dict[emi_name]["rasters"] for emi_name in emi_dict.keys()]
+ch4_kt_result_rasters = combine_gridded_emissions(raster_list)
+ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
 
-# %%
-# STEP 6: SAVE THE FILES
-
-# check the sums all together now...
-# TODO: report QC metrics for both kt and flux values
-
-for year, raster in ch4_kt_result_rasters.items():
-    raster_sum = raster.sum()
-    fac_sum = petro_facilities_gdf.query("year == @year")["allocated_ch4_kt"].sum()
-    emi_sum = EPA_petro_emissions.query("year == @year")["ch4_kt"].sum()
-    missing_sum = sum_check[(~sum_check["check_diff"]) & (sum_check["year"] == year)][
-        "ch4_kt"
-    ].sum()
-
-    print(year)
-    print(
-        "does the raster sum equal the facility sum: "
-        f"{np.isclose(raster_sum, fac_sum)}"
-    )
-    print(
-        "does the raster sum equal the national total: "
-        f"{np.isclose(raster_sum, emi_sum)}"
-    )
-    # this shows we are consistent with our missing emissions where the states with no
-    # facilities make up the difference, as we would expect.
-    print(
-        "do the states with no facilities equal the missing amount: "
-        f"{np.isclose((emi_sum - raster_sum), missing_sum)}"
-    )
-    print()
-
-# %% Write files
-
-# EEM: TODO: add netCDF output
+# %% STEP 5.2: QC FLUX AGAINST V2 ------------------------------------------------------
+flux_emi_qc_df = QC_flux_emis(ch4_flux_result_rasters, SOURCE_NAME, v2_name="emi_ch4_2B8_Industry_Petrochemical")
+flux_emi_qc_df
+# %% STEP 6: SAVE THE FILES ------------------------------------------------------------
 write_tif_output(ch4_kt_result_rasters, ch4_kt_dst_path)
 write_tif_output(ch4_flux_result_rasters, ch4_flux_dst_path)
-# ------------------------------------------------------------------------
-# %%
-# STEP 7: PLOT
+write_ncdf_output(
+    ch4_flux_result_rasters,
+    ch4_flux_dst_path,
+    netcdf_title,
+    netcdf_description,
+)
 
-# TODO: add map of output flux data
-
-#%%
-
-# END
+# %% STEP 7: PLOT THE RESULTS AND DIFFERENCE, SAVE FIGURES TO FILES --------------------
+plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME)
+plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME)
