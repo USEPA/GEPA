@@ -38,7 +38,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "industrial_landfills_reporting_pulp_paper_proxy.parquet",
+    / "ind_landfills_pp_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -86,6 +86,9 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
         .reset_index(drop=True)
     )
 
+    reporting_pulp_paper_df['rel_emi'] = reporting_pulp_paper_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_pulp_paper_df = reporting_pulp_paper_df.drop(columns='ch4_kt')
+
     reporting_pulp_paper_gdf = (
         gpd.GeoDataFrame(
             reporting_pulp_paper_df,
@@ -96,7 +99,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
             ),
         )
         .drop(columns=["facility_id", "latitude", "longitude", "city", "zip"])
-        .loc[:, ["facility_name", "state_code", "geometry", "year", "ch4_kt"]]
+        .loc[:, ["facility_name", "state_code", "geometry", "year", "rel_emi"]]
     )
 
     reporting_pulp_paper_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
@@ -110,7 +113,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
             mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
             nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "industrial_landfills_nonreporting_pulp_paper_proxy.parquet",
+            / "ind_landfills_pp_nr_proxy.parquet",
 ):
     """
     The Mills OnLine database of facilities is compared against the Subpart HH 
@@ -257,6 +260,9 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
     # add a column to equally allocate unaccounted for GHGI emissions to all non-reporting mills
     mills_locs["ch4_kt"] = 1.0
 
+    nonreporting_pulp_paper_df['rel_emi'] = nonreporting_pulp_paper_df.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_pulp_paper_df = nonreporting_pulp_paper_df.drop(columns='ch4_kt')
+
     nonreporting_pulp_paper_gdf = (
         gpd.GeoDataFrame(
             mills_locs,
@@ -267,7 +273,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             ),
         )
         .drop(columns=["facility_id", "latitude", "longitude"])
-        .loc[:, ["state_code", "geometry", "ch4_kt"]]
+        .loc[:, ["state_code", "geometry", "rel_emi"]]
     )
 
     nonreporting_pulp_paper_gdf.to_parquet(nonreporting_pulp_paper_proxy_output_path)
@@ -278,7 +284,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "industrial_landfills_reporting_food_beverage_proxy.parquet",
+    / "ind_landfills_fb_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -327,6 +333,9 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
     .reset_index(drop=True)
     )
 
+    reporting_food_beverage_df['rel_emi'] = reporting_food_beverage_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_food_beverage_df = reporting_food_beverage_df.drop(columns='ch4_kt')
+
     reporting_food_beverage_gdf = (
         gpd.GeoDataFrame(
             reporting_food_beverage_df,
@@ -337,7 +346,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
             ),
         )
         .drop(columns=["latitude", "longitude", "city", "zip"])
-        .loc[:, ["facility_id", "facility_name", "state_code", "geometry", "year", "ch4_kt"]]
+        .loc[:, ["facility_id", "facility_name", "state_code", "geometry", "year", "rel_emi"]]
     )
 
     reporting_food_beverage_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
@@ -351,7 +360,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
             frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
             food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
             nonreporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "industrial_landfills_nonreporting_food_beverage_proxy.parquet",
+            / "ind_landfills_fb_nr_proxy.parquet",
 ):
     """
 
@@ -591,6 +600,9 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     
     nonreporting_food_beverage_df = food_beverage_facilities_locs.query('FRS_match == 1 | geo_match == 1')
 
+    nonreporting_food_beverage_df['rel_emi'] = nonreporting_food_beverage_df.groupby(["state_code"])['avg_waste_t'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_food_beverage_df = nonreporting_food_beverage_df.drop(columns='avg_waste_t')
+
     nonreporting_food_beverage_gdf = (
         gpd.GeoDataFrame(
             nonreporting_food_beverage_df,
@@ -604,7 +616,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                        "excessfood_tonyear_lowest", "excessfood_tonyear_highest", 
                        "full_address", "partial_address", "lat", "lon", 
                        "ghgrp_match", "FRS_match", "geo_match"])
-        .loc[:, ["facility_id", "state_code", "geometry", "avg_waste_t"]]
+        .loc[:, ["facility_id", "state_code", "geometry", "rel_emi"]]
     )
 
     nonreporting_food_beverage_gdf.to_parquet(nonreporting_food_beverage_proxy_output_path)

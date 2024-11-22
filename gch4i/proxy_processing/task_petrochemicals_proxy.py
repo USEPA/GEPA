@@ -146,6 +146,9 @@ def task_get_petrochemicals_proxy_data(
         value_vars=list(ghgi_facilities_df.columns.values)[3:14], 
         var_name='year', value_name='capacity_kt')
     
+    ghgi_facilities_w_locations_df['rel_emi'] = ghgi_facilities_w_locations_df.groupby(["state_code", "year"])['capacity_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    ghgi_facilities_w_locations_df = ghgi_facilities_w_locations_df.drop(columns='capacity_kt')
+    
     # Create proxy gdf
     proxy_gdf = (
     gpd.GeoDataFrame(
@@ -157,7 +160,7 @@ def task_get_petrochemicals_proxy_data(
         ),
     )
     .drop(columns=["lat", "lon"])
-    .loc[:, ["facility_name", "state_code", "geometry", "year", "capacity_kt"]]
+    .loc[:, ["facility_name", "state_code", "geometry", "year", "rel_emi"]]
     )
 
     proxy_gdf.to_parquet(output_path)

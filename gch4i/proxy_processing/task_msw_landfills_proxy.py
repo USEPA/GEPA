@@ -38,7 +38,7 @@ def task_get_reporting_msw_landfills_proxy_data(
     subpart_hh_path = "https://data.epa.gov/efservice/hh_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_reporting_proxy.parquet",
+    / "msw_landfills_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -79,6 +79,9 @@ def task_get_reporting_msw_landfills_proxy_data(
     .reset_index(drop=True)
     )
 
+    reporting_facility_df['rel_emi'] = reporting_facility_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_facility_df = reporting_facility_df.drop(columns='ch4_kt')
+
     reporting_facility_gdf = (
         gpd.GeoDataFrame(
             reporting_facility_df,
@@ -89,7 +92,7 @@ def task_get_reporting_msw_landfills_proxy_data(
             ),
         )
         .drop(columns=["latitude", "longitude", "zip"])
-        .loc[:, ["facility_id", "facility_name", "state_code", "geometry", "year", "ch4_kt"]]
+        .loc[:, ["facility_id", "facility_name", "state_code", "geometry", "year", "rel_emi"]]
     )
 
     reporting_facility_gdf.to_parquet(reporting_proxy_output_path)
@@ -104,7 +107,7 @@ def get_nonreporting_msw_landfills_proxy_data(
     MSW_FRS_NAICS_CODE = 562219,
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     nonreporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_nonreporting_proxy.parquet",
+    / "msw_landfills_nr_proxy.parquet",
     ):
 
     # Non-reporting facilities from LMOP and WBJ
@@ -344,6 +347,9 @@ def get_nonreporting_msw_landfills_proxy_data(
     nonreporting_facility_all_years_df = pd.concat([nonreporting_facility_all_years_df, nr_year0_facilities_expanded_years, nr_otheryears_facilities_expanded_years]).drop(columns="Last_GHGRP_Year")
     nonreporting_facility_all_years_df = nonreporting_facility_all_years_df.rename(columns={"NR ID":"facility_id", "Name": "facility_name", "State": "state_code", "WIP_MT": "wip_mt", "Year": "year"})
 
+    nonreporting_facility_all_years_df['rel_emi'] = nonreporting_facility_all_years_df.groupby(["state_code", "year"])['wip_mt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_facility_all_years_df = nonreporting_facility_all_years_df.drop(columns='wip_mt')
+
     nonreporting_facility_gdf = (
     gpd.GeoDataFrame(
         nonreporting_facility_all_years_df,
@@ -354,7 +360,7 @@ def get_nonreporting_msw_landfills_proxy_data(
             ),
             )
     .drop(columns=["facility_id", "LAT", "LON", "WBJ Location", "WBJ City", "Full_Address", "Partial_Address", "found"])
-    .loc[:, ["facility_name", "state_code", "year", "geometry", "wip_mt"]]
+    .loc[:, ["facility_name", "state_code", "year", "geometry", "rel_emi"]]
     )
 
     nonreporting_facility_gdf.to_parquet(nonreporting_proxy_output_path)
