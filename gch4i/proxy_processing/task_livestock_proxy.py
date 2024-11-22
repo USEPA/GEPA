@@ -2,30 +2,36 @@
 # %load_ext autoreload
 # %autoreload 2
 
-import re
+import multiprocessing
 from pathlib import Path
 from typing import Annotated
-from zipfile import ZipFile
 
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
-import seaborn as sns
-import xarray as xr
+import rioxarray
 from geocube.api.core import make_geocube
-from IPython.display import display
 from pytask import Product, mark, task
 from rasterio.features import rasterize
 from tqdm import tqdm
 
-from gch4i.config import global_data_dir_path, proxy_data_dir_path, sector_data_dir_path
-from gch4i.gridding import GEPA_spatial_profile
+from gch4i.config import (
+    global_data_dir_path,
+    proxy_data_dir_path,
+    sector_data_dir_path,
+    years,
+)
+from gch4i.gridding import GEPA_spatial_profile, warp_to_gepa_grid
+
+# import re
+# from zipfile import ZipFile
+
 
 pd.set_option("future.no_silent_downcasting", True)
 pd.set_option("float_format", "{:f}".format)
 # %%
+NUM_WORKERS = multiprocessing.cpu_count()
 
 
 # define a function to normalize the data by the grouping variable(s)
@@ -33,11 +39,32 @@ def normalize(x):
     return x / x.sum() if x.sum() > 0 else 0
 
 
+# luus_crfldcrp.shp       field crops
+# luus_crirrlnd.shp       irrigated land
+# luus_crlndfrm.shp       land in farms
+# luus_crnursry.shp       nurseries
+# luus_crpastur.shp       pasture
+# luus_crtotcrp.shp       total crops
+# luus_crvgfrnt.shp       vegetables/fruits/nuts
+# luus_ecallfrm.shp       all farms
+# luus_lvanimal.shp       all animals
+# luus_lvbeehny.shp       bees/honey
+# luus_lvbrltrk.shp       chickens/turkeys
+# luus_lvctlfed.shp       cattle on feed
+# luus_lvctlinv.shp       cattle inventory
+# luus_lvfish.shp         fish
+# luus_lvgoat.shp         goats
+# luus_lvhogpig.shp       hogs & pigs
+# luus_lvhrspny.shp       horses/ponies
+# luus_lvlyrplt.shp       layers & pullets
+# luus_lvmlkcow.shp       milk cows
+# luus_lvshplmb.shp       sheep & lambs
+
 # %%
 # define the mapping between the proxy names and the USDA NASS layer names
 proxy_usda_dict = {
     "broiler": "luus_lvbrltrk.shp",
-    # "chicken": all of layers, pullets, briolers, roosters
+    "chickens": "luus_lvbrltrk.shp",
     "layers": "luus_lvlyrplt.shp",
     "pullets": "luus_lvlyrplt.shp",
     "turkeys": "luus_lvbrltrk.shp",
@@ -53,7 +80,11 @@ proxy_usda_dict = {
     "swine": "luus_lvhogpig.shp",
 }
 
-usda_layer_name_list = list(set(proxy_usda_dict.values()))
+# get the unique list of usda data we're going to process
+usda_layer_name_list = list(set(list(proxy_usda_dict.values())))
+usda_layer_name_list
+
+# usda_layer_name_list = list(set(proxy_usda_dict.values()))
 proxy_name_list = list(set(proxy_usda_dict.keys()))
 
 # the rank to dot liklihood values provided by the USDA NASS
@@ -69,7 +100,8 @@ recode_rank_dict = {
 
 livestock_dir_path = sector_data_dir_path / "USDA_NASS"
 # the paths to the output files
-dst_paths = [proxy_data_dir_path / f"{x}_proxy.nc" for x in proxy_name_list]
+
+dst_paths = [proxy_data_dir_path / f"livestock_{x}_proxy.nc" for x in proxy_name_list]
 
 
 @mark.persist
@@ -78,16 +110,28 @@ def task_livestock_proxy() -> None:
     pass
 
 
+# USDA data that holds the animal rank shapefiles
 luc_input_path: Path = livestock_dir_path / "LUC_ranked_US48_HI_AK.zip"
-area_input_path: Path = global_data_dir_path / "gridded_area_001_cm2.tif"
-# state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+# the high res gridded path we'll use to first calculate the rank probability
+high_res_area_input_path: Path = global_data_dir_path / "gridded_area_001_cm2.tif"
+# the low res area path used as a referenc to build xarray datasett
+area_input_path: Path = global_data_dir_path / "gridded_area_01_cm2.tif"
+# the county shapefile which is used to normalize data to the right geographic level
 county_path: str = global_data_dir_path / "tl_2020_us_county.zip"
+# the outputs paths for all the proxies
 output_paths: Annotated[list[Path], Product] = dst_paths
 
 # %%
 high_res_profile = GEPA_spatial_profile(0.01)
 
-# %%
+# create xarray dataset with the area array and county geoids
+area_xr = rioxarray.open_rasterio(area_input_path)
+
+# get the high res area array
+with rasterio.open(high_res_area_input_path) as src:
+    area_arr = src.read(1)
+    area_arr = np.where(area_arr == src.nodata, 0, area_arr)
+
 county_gdf = (
     gpd.read_file(county_path, columns=["GEOID", "NAME", "STATEFP", "geometry"])
     .rename(columns=str.lower)
@@ -95,12 +139,14 @@ county_gdf = (
     .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
     .to_crs(4326)
 )
-county_gdf.boundary.plot()
+
+cnty_grid = make_geocube(
+    vector_data=county_gdf, measurements=["geoid"], like=area_xr, fill=99
+)
+cnty_grid
 
 # %%
-
-# get the layers in the zipfile
-
+# # get the layers in the zipfile
 # # used to search the zipfile for the lower48 shapfiles
 # shp_pat = re.compile(r"luus.*\.shp")
 
@@ -108,131 +154,94 @@ county_gdf.boundary.plot()
 #     all_layers_list = [x for x in zip_ref.namelist() if shp_pat.match(x)]
 # all_layers_list
 
-# # we take the full layers list and get out only the ones we need.
-# proxy_layer_list = [
-#     x for x in all_layers_list if any([y in x for y in usda_layer_name_list])
-# ]
-# # if we didn't get all the layers we wanted, raise an error
-# if not len(proxy_layer_list) == len(usda_layer_name_list):
-#     raise ValueError("Not all layers are present")
-
-
 # %%
-# get the area array
-with rasterio.open(area_input_path) as src:
-    area_arr = src.read(1)
-    area_arr = np.where(area_arr == src.nodata, 0, area_arr)
-
-# create xarray dataset with the area array and county geoids
-area_xr = xr.DataArray(
-    area_arr,
-    coords={"y": np.flip(high_res_profile.y), "x": high_res_profile.x},
-    dims=["y", "x"],
-).rio.write_crs(high_res_profile.profile["crs"])
-
-cnty_grid = make_geocube(
-    vector_data=county_gdf, measurements=["geoid"], like=area_xr, fill=99
-)
-cnty_grid
-# %%
-# loop over each of the layers of interest and read them in, assign the rank prob
-usda_gdf_dict = dict()
-for usda_name in tqdm(usda_layer_name_list, desc="reading in layers"):
-    gdf = (
-        gpd.read_file(
-            f"{luc_input_path}!{usda_name}",
-            columns=["RANK", "Stcopoly", "atlas_stco", "geometry"],
-        )
-        .rename(columns=str.lower)
-        .astype({"stcopoly": int})
-        # .to_crs(4326)
-        # .sjoin(state_gdf[["geometry"]])
-        .assign(
-            area=lambda df: df.area,
-            # as in v2, we calculate the recoded rank by replacing the dot rank with
-            # the given probabilities, multiplied by area.
-            recode_rank=lambda df: df["rank"].replace(recode_rank_dict),
-        )
-        .rename(columns={"stcopoly": "poly_id"})
-        .set_index("poly_id")
-    ).to_crs(4326)
-    usda_gdf_dict[usda_name] = gdf
-
-
-# %%
-
-# loop over the geodataframes and rasterize the rank prob values
 var_to_grid = "recode_rank"
+out_prop = high_res_profile.profile.copy()
+out_prop.update(count=1)
 
-usda_arr_dict = dict()
-for name, gdf in tqdm(usda_gdf_dict.items(), desc=f"rasterizing {var_to_grid}"):
-    gdf = usda_gdf_dict[usda_name]
-    animal_arr = rasterize(
-        shapes=[
-            (shape, value) for shape, value in gdf[["geometry", var_to_grid]].values
-        ],
-        out_shape=high_res_profile.arr_shape,
-        # fill=0.0,
-        transform=high_res_profile.profile["transform"],
-        dtype=np.float64,
-        # merge_alg=rasterio.enums.MergeAlg.add,
-    )
-    # multiply the rank prob by the area to get the animal proxy values
-    arr = animal_arr * area_arr
-    arr_xr = xr.DataArray(
-        arr,
-        coords={"y": np.flip(high_res_profile.y), "x": high_res_profile.x},
-        dims=["y", "x"],
-    ).rio.write_crs(high_res_profile.profile["crs"])
-    arr_xr
+paths_to_warp = []
+for usda_name in tqdm(usda_layer_name_list, desc="reading in layers"):
 
-    # assign the county grid as a new variable in the rank dataset
+    intermediate_path_1 = livestock_dir_path / f"{usda_name.split('.')[0]}.tif"
+    paths_to_warp.append(intermediate_path_1)
+    if not intermediate_path_1.exists():
+        # read in the area rank vector data
+        gdf = (
+            gpd.read_file(
+                f"{luc_input_path}!{usda_name}",
+                columns=["RANK", "Stcopoly", "atlas_stco", "geometry"],
+            )
+            .rename(columns=str.lower)
+            .astype({"stcopoly": int})
+            .assign(
+                area=lambda df: df.area,
+                # as in v2, we calculate the recoded rank by replacing the dot rank with
+                # the given probabilities.
+                recode_rank=lambda df: df["rank"].replace(recode_rank_dict),
+            )
+            .rename(columns={"stcopoly": "poly_id"})
+            .set_index("poly_id")
+        ).to_crs(4326)
+
+        # turn the vector data into rasters
+        animal_arr = rasterize(
+            shapes=[
+                (shape, value) for shape, value in gdf[["geometry", var_to_grid]].values
+            ],
+            out_shape=high_res_profile.arr_shape,
+            transform=high_res_profile.profile["transform"],
+            dtype=np.float64,
+        )
+        # multiply the rank prob by the area to get the animal proxy values
+        arr = animal_arr * area_arr
+        # save these files to disk
+        with rasterio.open(intermediate_path_1, "w", **out_prop) as dst:
+            dst.write(arr, 1)
+
+
+# %%
+
+# for each of the high res raster data, warp it to the gepa grid
+gepa_paths = []
+for warp_path in tqdm(paths_to_warp, desc="warping to gepa grid"):
+    out_path = warp_path.with_name(warp_path.stem + "_gepa.tif")
+    gepa_paths.append(out_path)
+    if not out_path.exists():
+        warp_to_gepa_grid(warp_path, out_path, num_threads=NUM_WORKERS)
+
+
+# %%
+# for each of the raster files, normalize the data by the county level, expand the dims
+# to include the years, and save the data to disk by proxy mapping
+for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
+    # gepa_path = gepa_paths[0]
+    arr_xr = rioxarray.open_rasterio(gepa_path).squeeze("band").drop_vars("band")
     arr_xr["geoid"] = (cnty_grid.dims, cnty_grid["geoid"].values)
-    # arr_xr["geoid"] = cnty_grid
-    np.isnan(arr_xr["geoid"]).any()
-
-    # apply the normalization function to the data
     out_ds = (
         arr_xr.groupby("geoid")
         .apply(normalize)
         .sortby(["y", "x"])
-        .to_dataset(name=name)
+        .to_dataset(name="rel_emi")
+        .expand_dims(year=years)
     )
-    out_ds[name].shape
+    out_ds["rel_emi"].shape
 
-    # check that the normalization worked
     all_eq_df = (
-        out_ds[name]
+        out_ds["rel_emi"]
         .groupby(["geoid"])
         .sum()
         .rename("sum_check")
         .to_dataframe()
         .drop(columns="spatial_ref")
     )
-
-    # NOTE: Due to floating point rouding, we need to check if the sum is close to 1,
-    # not exactly 1.
     vals_are_one = np.isclose(all_eq_df["sum_check"], 1).all()
     print(f"are all county/year norm sums equal to 1? {vals_are_one}")
     if not vals_are_one:
         raise ValueError("not all values are normed correctly!")
-    usda_arr_dict[name] = out_ds
+
+    for proxy_name, usda_name in proxy_usda_dict.items():
+        if usda_name.split(".")[0] in gepa_path.stem:
+            out_path = proxy_data_dir_path / f"livestock_{proxy_name}_proxy.nc"
+            out_ds.rio.write_crs(high_res_profile.profile["crs"]).to_netcdf(out_path)
 
 # %%
-# loop over the arrays, normalize the values by county, save the output
-for output_path, (name, arr) in zip(output_paths, usda_arr_dict.items()):
-    print(name, output_path.name)
-    if name not in output_path.name:
-        raise ValueError(f"name does not match output path: {name}, {output_path.name}")
-    # %%
-
-
-# %%
-for proxy_name, usda_name in proxy_usda_dict.items():
-    print(proxy_name, usda_name)
-    if usda_name is None:
-        continue
-    print(proxy_name, usda_name)
-    out_ds = usda_arr_dict[usda_name]
-    gdf.plot(column="recode_rank", legend=True)
-    plt.show()

@@ -169,16 +169,16 @@ def mask_raster_parallel(
 def warp_to_gepa_grid(
     input_path: Path,
     output_path: Path,
-    target_path: Path,
+    target_path: Path = None,
     resampling: str = "average",
     num_threads: int = 1,
 ):
 
     if target_path is None:
-        print("warping to GEPA grid")
-        profile = GEPA_spatial_profile(0.1).profile
+        # print("warping to GEPA grid")
+        profile = GEPA_spatial_profile().profile
     else:
-        print("warping to other raster")
+        # print("warping to other raster")
         with rasterio.open(target_path) as src:
             profile = src.profile
 

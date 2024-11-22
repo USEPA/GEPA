@@ -37,15 +37,6 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 t_to_kt = 1000  # conversion factor, tonnes to kilotonnes
 
 
-def calc_conversion_factor(days_in_year: int, cell_area_matrix: np.array) -> float:
-    return (
-        10**9
-        * Avogadro
-        / float(Molarch4 * days_in_year * 24 * 60 * 60)
-        / cell_area_matrix
-    )
-
-
 # TODO: a REVERSE FLUX CALCULATION FUNCTION
 # def reverse_flux_calculation():               # This function will take the flux and convert it back to emissions (in kt) for a given area
 #     pass
@@ -312,6 +303,7 @@ def calculate_flux(
     ch4_flux_result_rasters = {}
     if timestep == "year":
         for time_var, data in raster_dict.items():
+            time_var = int(time_var)
             month_days = [calendar.monthrange(time_var, x)[1] for x in range(1, 13)]
             year_days = np.sum(month_days)
             conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
