@@ -1,4 +1,6 @@
 # %%
+# TODO: pytask this file
+
 # %load_ext autoreload
 # %autoreload 2
 
@@ -22,22 +24,15 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
-from gch4i.gridding import GEPA_spatial_profile, warp_to_gepa_grid
+from gch4i.utils import GEPA_spatial_profile, warp_to_gepa_grid, normalize
 
 # import re
 # from zipfile import ZipFile
-
+NUM_WORKERS = multiprocessing.cpu_count()
 
 pd.set_option("future.no_silent_downcasting", True)
 pd.set_option("float_format", "{:f}".format)
 # %%
-NUM_WORKERS = multiprocessing.cpu_count()
-
-
-# define a function to normalize the data by the grouping variable(s)
-def normalize(x):
-    return x / x.sum() if x.sum() > 0 else 0
-
 
 # luus_crfldcrp.shp       field crops
 # luus_crirrlnd.shp       irrigated land

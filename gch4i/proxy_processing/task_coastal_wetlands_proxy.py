@@ -22,7 +22,7 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
-from gch4i.gridding import make_raster_binary, mask_raster_parallel, warp_to_gepa_grid
+from gch4i.utils import make_raster_binary, mask_raster_parallel, warp_to_gepa_grid
 
 NUM_WORKERS = multiprocessing.cpu_count()
 

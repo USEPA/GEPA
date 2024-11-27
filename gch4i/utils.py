@@ -1,4 +1,6 @@
 import calendar
+import concurrent
+import threading
 from pathlib import Path
 
 import cartopy.crs as ccrs
@@ -14,12 +16,20 @@ import requests
 import rioxarray  # noqa f401
 import seaborn as sns
 import xarray as xr
+from geocube.api.core import make_geocube
 from IPython.display import display
+from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
 from rasterio.plot import show
+from rasterio.profiles import default_gtiff_profile
+from rasterio.warp import reproject
 
-from gch4i.config import V3_DATA_PATH, figures_data_dir_path, global_data_dir_path
-from gch4i.gridding import GEPA_spatial_profile
+from gch4i.config import (
+    V3_DATA_PATH,
+    figures_data_dir_path,
+    global_data_dir_path,
+    years,
+)
 
 # import warnings
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
@@ -28,22 +38,28 @@ tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (
 #    0.001  # Tg conversion factor
 # )
-GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass to CO2e units, from IPPC AR4)
-GWP_CH4 = 25  # global warming potential of CH4 relative to CO2 (used to convert mass
-# to CO2e units, from IPPC AR4)
+
+# global warming potential of CH4 relative to CO2
+# (used to convert mass to CO2e units, from IPPC AR4)
+GWP_CH4 = 25
 # EEM: add constants (note, we should try to do conversions using variable names, so
 #      that we don't have constants hard coded into the scripts)
-tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
-t_to_kt = 1000  # conversion factor, tonnes to kilotonnes
-
 
 # TODO: a REVERSE FLUX CALCULATION FUNCTION
-# def reverse_flux_calculation():               # This function will take the flux and convert it back to emissions (in kt) for a given area
+# This function will take the flux and convert it back to emissions (in kt) for a given
+# area
+# def reverse_flux_calculation():
 #     pass
+
 
 # TODO: write state / year inventory to GRID allocation, probably using geocube
 # EEM: question - for sources where we go from the state down to the grid-level, will
 # we still have this calculation step, or will we go straight to the rasterize step?
+
+
+# define a function to normalize the population data by state and year
+def normalize(x):
+    return x / x.sum() if x.sum() > 0 else 0
 
 
 def allocate_emissions_to_proxy(
@@ -738,8 +754,8 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
 
 def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
     """
-    Function to compare and plot the difference between v2 and v3 for each year of the raster data
-    for each sector.
+    Function to compare and plot the difference between v2 and v3 for each year of the
+    raster data for each sector.
     """
     if v2_name is None:
         Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
@@ -770,7 +786,8 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # percent difference between v2 and v3
                 percent_dif = 100 * (v3_sum - v2_sum) / ((v3_sum + v2_sum) / 2)
                 print(
-                    f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, percent difference: {percent_dif}"
+                    f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, "
+                    f"percent difference: {percent_dif}"
                 )
                 # descriptive statistics on the difference raster
                 result_list.append(
@@ -803,7 +820,9 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     / ((v3_mass_sum + v2_mass_sum) / 2)
                 )
                 print(
-                    f"year: {year}, v2 mass sum: {v2_mass_sum}, v3 mass sum: {v3_mass_sum}, percent difference: {percent_dif_mass}"
+                    f"year: {year}, v2 mass sum: {v2_mass_sum}, "
+                    f"v3 mass sum: {v3_mass_sum}, "
+                    f"percent difference: {percent_dif_mass}"
                 )
 
                 # Set all raster values == 0 to nan so they are not plotted
@@ -833,9 +852,9 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 )
                 # Set extent to the continental US
                 ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-                # This is a "background map" workaround that allows us to add plot features like
-                # the colorbar and then use rasterio to plot the raster data on top of the
-                # background map.
+                # This is a "background map" workaround that allows us to add plot
+                # features like the colorbar and then use rasterio to plot the raster
+                # data on top of the background map.
                 background_map = ax.imshow(
                     yearly_dif,
                     cmap=custom_colormap,
@@ -845,7 +864,8 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 ax.add_feature(cfeature.OCEAN)
                 ax.add_feature(cfeature.COASTLINE)
                 ax.add_feature(cfeature.STATES)
-                # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
+                # Plot the raster data using rasterio (this uses matplotlib imshow
+                # under the hood)
                 show(
                     yearly_dif,
                     transform=profile.profile["transform"],
@@ -861,7 +881,10 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
                 )
                 # Add a title
-                difference_plot_title = f"{year} Difference between v2 and v3 methane emissions from {SOURCE_NAME}"
+                difference_plot_title = (
+                    f"{year} Difference between v2 and v3 methane "
+                    f"emissions from {SOURCE_NAME}"
+                )
                 plt.title(difference_plot_title, fontsize=14)
                 # Save the plot as a PNG file
                 plt.savefig(
@@ -873,13 +896,17 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # Close the plot
                 plt.close()
 
-                # Plot the grid cell level frequencies of v2 and v3 methane emissions for each year
+                # Plot the grid cell level frequencies of v2 and v3 methane emissions
+                # for each year
                 fig, (ax1, ax2) = plt.subplots(2)
                 fig.tight_layout()
                 ax1.hist(v2_data_dict[year].ravel(), bins=100)
                 ax2.hist(v3_data[year].ravel(), bins=100)
                 # Add a title
-                histogram_plot_title = f"{year} Frequency of methane emissions from {SOURCE_NAME} at the grid cell level"
+                histogram_plot_title = (
+                    f"{year} Frequency of methane emissions from "
+                    f"{SOURCE_NAME} at the grid cell level"
+                )
                 ax1.set_title(histogram_plot_title)
                 # Add axis labels
                 ax2.set_xlabel("Methane emissions (Mg a$^{-1}$ km$^{-2}$)")
@@ -970,8 +997,293 @@ def us_state_to_abbrev(state_name: str) -> str:
 
 
 def download_url(url, output_path):
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open(output_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+    try:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        # print("File downloaded successfully!")
+    except requests.exceptions.RequestException as e:
+        # print("Error downloading the file:", e)
+        raise e
+
+
+# %%
+class GEPA_spatial_profile:
+    lon_left = -130  # deg
+    lon_right = -60  # deg
+    lat_up = 55  # deg
+    lat_low = 20  # deg
+    valid_resolutions = [0.1, 0.01]
+
+    def __init__(self, resolution: float = 0.1):
+        self.resolution = resolution
+        self.check_resolution(self.resolution)
+        self.x = np.arange(self.lon_left, self.lon_right, self.resolution)
+        self.y = np.arange(self.lat_low, self.lat_up, self.resolution)
+        self.height, self.width = self.arr_shape = (len(self.y), len(self.x))
+        self.profile = self.get_profile(self.resolution)
+
+    def check_resolution(self, resolution):
+        if resolution not in self.valid_resolutions:
+            raise ValueError(
+                f"resolution must be one of {', '.join(self.valid_resolutions)}"
+            )
+
+    def get_profile(self, resolution):
+        base_profile = default_gtiff_profile.copy()
+        base_profile.update(
+            transform=rasterio.Affine(
+                resolution, 0.0, self.lon_left, 0.0, -resolution, self.lat_up
+            ),
+            height=self.height,
+            width=self.width,
+            crs=4326,
+            dtype="float32",
+        )
+        return base_profile
+
+
+# %%
+def make_raster_binary(
+    input_path: Path, output_path: Path, true_vals: np.array, num_workers: int = 1
+):
+    """take a raster file and convert it to a binary raster file based on the true_vals
+    array"""
+    with rasterio.open(input_path) as src:
+
+        # Create a destination dataset based on source params. The
+        # destination will be tiled, and we'll process the tiles
+        # concurrently.
+        profile = src.profile
+        profile.update(nodata=-99, dtype="int8")
+
+        with rasterio.open(output_path, "w", **profile) as dst:
+            windows = [window for ij, window in dst.block_windows()]
+
+            # We cannot write to the same file from multiple threads
+            # without causing race conditions. To safely read/write
+            # from multiple threads, we use a lock to protect the
+            # DatasetReader/Writer
+            read_lock = threading.Lock()
+            write_lock = threading.Lock()
+
+            def process(window):
+                with read_lock:
+                    src_array = src.read(window=window)
+
+                # result = np.where((src_array >= 1) & (src_array <= 60), 1, 0)
+                result = np.isin(src_array, true_vals)
+
+                with write_lock:
+                    dst.write(result, window=window)
+
+            # We map the process() function over the list of
+            # windows.
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=num_workers
+            ) as executor:
+                executor.map(process, windows)
+
+
+def mask_raster_parallel(
+    input_path: Path, output_path: Path, mask_path: Path, num_workers: int = 1
+):
+    """take a raster file and convert it to a binary raster file based on the true_vals
+    array
+
+    alpha version of the function. Not fully tested yet. Use with caution.
+
+    This does not check if the mask raster is the same size as the input raster. It
+    assumes that the mask raster is the same size as the input raster. If not, you will
+    need to run the warp function with the input_path as the target_path to get the mask
+    aligned correctly. Otherwise this will throw and error.
+    """
+    with rasterio.open(input_path) as src:
+        with rasterio.open(mask_path) as msk:
+
+            # Create a destination dataset based on source params. The
+            # destination will be tiled, and we'll process the tiles
+            # concurrently.
+            # profile = src.profile
+            # profile.update(
+            #     blockxsize=128, blockysize=128, tiled=True, nodata=0, dtype="float32"
+            # )
+
+            with rasterio.open(output_path, "w", **src.profile) as dst:
+                windows = [window for ij, window in dst.block_windows()]
+
+                # We cannot write to the same file from multiple threads
+                # without causing race conditions. To safely read/write
+                # from multiple threads, we use a lock to protect the
+                # DatasetReader/Writer
+                read_lock = threading.Lock()
+                write_lock = threading.Lock()
+
+                def process(window):
+                    with read_lock:
+                        src_array = src.read(window=window)
+                        msk_array = msk.read(window=window)
+
+                    # result = np.where((src_array >= 1) & (src_array <= 60), 1, 0)
+                    result = np.where(msk_array == 1, src_array, 0)
+
+                    with write_lock:
+                        dst.write(result, window=window)
+
+                # We map the process() function over the list of
+                # windows.
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=num_workers
+                ) as executor:
+                    executor.map(process, windows)
+
+
+# take any input raster file and warp it to match the GEPA_PROFILE
+def warp_to_gepa_grid(
+    input_path: Path,
+    output_path: Path,
+    target_path: Path = None,
+    resampling: str = "average",
+    num_threads: int = 1,
+):
+
+    if target_path is None:
+        # print("warping to GEPA grid")
+        profile = GEPA_spatial_profile().profile
+    else:
+        # print("warping to other raster")
+        with rasterio.open(target_path) as src:
+            profile = src.profile
+
+    try:
+        resamp_method = getattr(Resampling, resampling)
+    except AttributeError as ex:
+        raise ValueError(
+            f"resampling method {resampling} not found in rasterio.Resampling"
+        ) from ex
+
+    with rasterio.open(input_path) as src:
+        profile.update(count=src.count, dtype="float32")
+        with rasterio.open(output_path, "w", **profile) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=profile["transform"],
+                    dst_crs=profile["crs"],
+                    dst_nodata=0.0,
+                    resampling=resamp_method,
+                    num_threads=num_threads,
+                )
+
+
+# take any vector data input and grid it to the standard GEPA grid
+def vector_to_gepa_grid():
+    pass
+
+
+# %%
+def stack_rasters(input_paths: list[Path], output_path: Path):
+    profile = GEPA_spatial_profile().profile
+    raster_list = []
+    years = [int(x.name.split("_")[2]) for x in input_paths]
+    for in_file in input_paths:
+        if not in_file.exists():
+            continue
+        with rasterio.open(in_file) as src:
+            raster_list.append(src.read(1))
+
+    output_data = np.stack(raster_list, axis=0)
+
+    profile.update(count=len(raster_list))
+
+    with rasterio.open(output_path, "w", **profile) as dst:
+        dst.write(output_data)
+        dst.descriptions = tuple([str(x) for x in years])
+
+
+def proxy_from_stack(
+    input_path: Path,
+    state_geo_path: Path,
+    output_path: Path,
+):
+
+    # read in the state file and filter to lower 48 + DC
+    state_gdf = (
+        gpd.read_file(state_geo_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
+    )
+
+    # read in the raw population data raster stack as a xarray dataset
+    # masked will read the nodata value and set it to NA
+    xr_ds = rioxarray.open_rasterio(input_path, masked=True).rename({"band": "year"})
+
+    with rasterio.open(input_path) as src:
+        ras_crs = src.crs
+
+    # assign the band as our years so the output raster data has year band names
+    xr_ds["year"] = years
+    # remove NA values
+    # pop_ds = pop_ds.where(pop_ds != -99999)
+
+    # create a state grid to match the input population array
+    # we use fill here to fill in the nodata values with 99 so that when we do the
+    # groupby, the nodata area is not collapsed, and the resulting dimensions align
+    # with the v3 gridded data.
+    state_grid = make_geocube(
+        vector_data=state_gdf, measurements=["statefp"], like=xr_ds, fill=99
+    )
+    state_grid
+    # assign the state grid as a new variable in the population dataset
+    xr_ds["statefp"] = state_grid["statefp"]
+    xr_ds
+
+    # plot the data to check
+    xr_ds["statefp"].plot()
+
+    # apply the normalization function to the population data
+    out_ds = (
+        xr_ds.groupby(["year", "statefp"])
+        .apply(normalize)
+        .sortby(["year", "y", "x"])
+        .to_dataset(name="rel_emi")
+    )
+    out_ds["rel_emi"].shape
+
+    # check that the normalization worked
+    all_eq_df = (
+        out_ds["rel_emi"]
+        .groupby(["statefp", "year"])
+        .sum()
+        .rename("sum_check")
+        .to_dataframe()
+        .drop(columns="spatial_ref")
+        .assign(
+            # NOTE: Due to floating point rouding, we need to check if the sum is
+            # close to 1, not exactly 1.
+            is_close=lambda df: (np.isclose(df["sum_check"], 1))
+            | (np.isclose(df["sum_check"], 0))
+        )
+    )
+
+    vals_are_one = all_eq_df["is_close"].all()
+    print(f"are all state/year norm sums equal to 1? {vals_are_one}")
+    if not vals_are_one:
+        raise ValueError("not all values are normed correctly!")
+
+    # plot. Not hugely informative, but shows the data is there.
+    out_ds["rel_emi"].sel(year=2020).plot.imshow()
+
+    out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
+        ras_crs
+    ).to_netcdf(output_path)

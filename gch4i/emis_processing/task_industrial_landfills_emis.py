@@ -29,8 +29,8 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
-t_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
-mmt_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
+tg_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
+mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 
 
 # %%
@@ -80,7 +80,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_mmt")
-        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmt_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmtg_to_kt)
         .drop(columns=["ch4_mmt"])
         # make the columns types correct
         .astype({"year": int, "ch4_kt": float})
@@ -109,7 +109,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
                         "naics_code"))
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-        .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
@@ -271,7 +271,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_mmt")
-        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmt_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmtg_to_kt)
         .drop(columns=["ch4_mmt"])
         # make the columns types correct
         .astype({"year": int, "ch4_kt": float})
@@ -300,7 +300,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
                     "naics_code"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})

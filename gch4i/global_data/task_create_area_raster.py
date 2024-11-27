@@ -10,7 +10,7 @@ from pytask import Product, mark, task
 from rasterio.features import shapes
 
 from gch4i.config import global_data_dir_path
-from gch4i.gridding import GEPA_spatial_profile
+from gch4i.utils import GEPA_spatial_profile
 
 
 def _create_params(resolution_list):

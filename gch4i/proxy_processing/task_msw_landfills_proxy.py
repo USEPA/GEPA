@@ -26,7 +26,7 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
-t_to_kt = 0.001
+tg_to_kt = 0.001
 year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
 num_years = len(year_range)
@@ -70,7 +70,7 @@ def task_get_reporting_msw_landfills_proxy_data(
                  "zip"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='last')
     .astype({"year": int})

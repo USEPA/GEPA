@@ -29,8 +29,8 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
-t_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
-mmt_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
+tg_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
+mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
 num_years = len(year_range)

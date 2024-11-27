@@ -1,13 +1,26 @@
+"""
+Author:     Nick Kruskamp
+Date:       2024-11-27
+exsum:      This script is used to process the nass Cropland Data Layer data into the
+            proxy data. This covers all proxies that are derived from these input data.
+TODO:       1. pytask this
+            2. add the other crop types
+            3. download all the years of data
+"""
+
+# %%
+# %load_ext autoreload
+# %autoreload 2
+
+
 import multiprocessing
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
 
-import osgeo  # noqa
 import geopandas as gpd
 import numpy as np
 import rasterio
-
 import rioxarray
 from geocube.api.core import make_geocube
 from pytask import Product, mark, task
@@ -18,12 +31,14 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
+from gch4i.utils import (
+    GEPA_spatial_profile,
+    download_url,
+    make_raster_binary,
+    warp_to_gepa_grid,
+)
 
-from gch4i.utils import download_url
-
-from gch4i.gridding import GEPA_spatial_profile, make_raster_binary, warp_to_gepa_grid
-
-
+NUM_WORKERS = multiprocessing.cpu_count()
 
 nass_cdl_path = sector_data_dir_path / "nass_cdl"
 
@@ -108,12 +123,25 @@ calc_crop_perc
 for _id, kwargs in calc_crop_perc.items():
 
     @mark.persist
+    @task(id=_id, kwargs=kwargs)
     def task_calc_cdl_perc(
-        cdl_input_path, output_path_binary, output_path_perc, crop_vals
+        cdl_input_path: Path,
+        output_path_binary: Annotated[Path, Product],
+        output_path_perc: Annotated[Path, Product],
+        crop_vals: np.array,
     ):
 
-        make_raster_binary(cdl_input_path, output_path_binary, crop_vals, num_workers)
-        warp_to_gepa_grid(output_path_binary, output_path_perc)
+        make_raster_binary(
+            input_path=cdl_input_path,
+            output_path=output_path_binary,
+            true_vals=crop_vals,
+            num_workers=NUM_WORKERS,
+        )
+        warp_to_gepa_grid(
+            input_path=output_path_binary,
+            output_path=output_path_perc,
+            num_threads=NUM_WORKERS,
+        )
 
 
 # %%
