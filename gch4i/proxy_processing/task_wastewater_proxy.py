@@ -1,10 +1,12 @@
 # %%
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, List, Dict
 from zipfile import ZipFile
 import calendar
 import datetime
 
+import requests
+import time
 from pyarrow import parquet
 from io import StringIO
 import pandas as pd
@@ -15,6 +17,8 @@ import numpy as np
 import seaborn as sns
 from pytask import Product, task, mark
 from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -40,52 +44,7 @@ from gch4i.utils import name_formatter
 # import time
 # import pandas as pd
 
-# def geocode_address(df, address_column):
-#     """
-#     Geocode addresses using Nominatim
-    
-#     Parameters:
-#     df: DataFrame containing addresses
-#     address_column: Name of column containing addresses
-    
-#     Returns:
-#     DataFrame with added latitude and longitude columns
-#     """
-#     # Initialize geocoder
-#     geolocator = Nominatim(user_agent="my_app")
-    
-#     # Create cache dictionary
-#     geocode_cache = {}
-    
-#     def get_lat_long(address):
-#         # Check cache first
-#         if address in geocode_cache:
-#             return geocode_cache[address]
-        
-#         try:
-#             # Add delay to respect Nominatim's usage policy
-#             time.sleep(1)
-#             location = geolocator.geocode(address)
-#             if location:
-#                 result = (location.latitude, location.longitude)
-#                 geocode_cache[address] = result
-#                 return result
-#             return (None, None)
-            
-#         except (GeocoderTimedOut, GeocoderServiceError):
-#             return (None, None)
-    
-#     # Apply geocoding to address column
-#     df['lat_long'] = df[address_column].apply(get_lat_long)
-    
-#     # Split tuple into separate columns
-#     df['latitude'] = df['lat_long'].apply(lambda x: x[0] if x else None)
-#     df['longitude'] = df['lat_long'].apply(lambda x: x[1] if x else None)
-    
-#     # Drop temporary column
-#     df = df.drop('lat_long', axis=1)
-    
-#     return df
+
 
 
 
@@ -109,47 +68,6 @@ industrial_emis = pd.concat(industrial_emi_dfs, axis=0, ignore_index=True)
 ghgrp_emi_ii_inputfile = proxy_data_dir_path / "wastewater/ghgrp_subpart_ii.csv"
 
 ghgrp_facility_ii_inputfile = proxy_data_dir_path / "wastewater/SubpartII_Facilities.csv"
-
-# %% 
-# Exploring the NPDES data
-
-# npdes_2012 = pd.read_csv("/Users/ccoxen/Downloads/NPDES_DMRS_FY2012.csv")
-# npdes_metadata = pd.read_csv("/Users/ccoxen/Downloads/npdes_outfalls_layer.csv")
-
-# # %%
-# npdes_2022 = pd.read_csv("/Users/ccoxen/Downloads/NPDES_DMRS_FY2022.csv")
-# # %%
-
-# npdes_pp = npdes_metadata[
-#         (npdes_metadata['NAICS_CODES'].str.startswith('3221')) |
-#         (npdes_metadata['SIC_CODES'].str.contains('|'.join(['2661', '2621', '2631'])))
-#     ].copy()
-
-# npdes_pp_2022 = pd.merge(npdes_2022, npdes_pp, on='EXTERNAL_PERMIT_NMBR')
-
-# npdes_pp_2012 = pd.merge(npdes_2012, npdes_pp, on='EXTERNAL_PERMIT_NMBR')
-
-# %% 
-# industries = {
-#     'pp': ('3221', ['2611', '2621', '2631']),
-#     'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
-#     'fv': ('3114', ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
-#     'eth': ('325193', ['2869']),
-#     'brew': ('312120', ['2082']),
-#     'petrref': ('32411', ['2911'])
-# }
-
-# # Process all industries
-# for industry_name, (naics_prefix, sic_codes) in industries.items():
-#     result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
-#     exec(f"echo_{industry_name.lower()} = result_df")
-
-# %%
-def find_mgal_values(df, column_name):
-    # Convert the column to lowercase and filter rows where the column contains 'mgal'
-    mgal_values = df[df[column_name].str.lower().str.contains('mgal/yr', na=False)]
-    return mgal_values
-
 
 # %% Functions
 def read_combined_file(file_path):
@@ -176,23 +94,32 @@ def read_and_combine_csv_files(directory):
     combined_df.to_csv(combined_echo_file_path, index=False)
     return combined_df
 
-def extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes):
+
+def extract_industry_facilities(echo_nonpotw, industry_name, naics_codes, sic_codes):
     """
     Extract industry-specific facilities from the non-POTW list.
     
     Parameters:
     echo_nonpotw (pd.DataFrame): The input DataFrame containing non-POTW facilities.
     industry_name (str): The name of the industry (used for the output variable name).
-    naics_prefix (str): The NAICS code prefix for the industry.
+    naics_codes (str or list): Single NAICS code/prefix or list of NAICS codes.
     sic_codes (list): A list of SIC codes for the industry.
     
     Returns:
     pd.DataFrame: A DataFrame containing the extracted industry-specific facilities.
     """
-    industry_df = echo_nonpotw[
-        (echo_nonpotw['NAICS Code'].str.startswith(naics_prefix)) |
-        (echo_nonpotw['SIC Code'].str.contains('|'.join(sic_codes)))
-    ].copy()
+    # Convert single NAICS code to list for consistency
+    if isinstance(naics_codes, str):
+        naics_codes = [naics_codes]
+    
+    # Create NAICS filter condition
+    naics_condition = echo_nonpotw['NAICS Code'].str.startswith(tuple(naics_codes))
+    
+    # Create SIC filter condition
+    sic_condition = echo_nonpotw['SIC Code'].str.contains('|'.join(sic_codes))
+    
+    # Apply both conditions
+    industry_df = echo_nonpotw[naics_condition | sic_condition].copy()
     
     industry_df.reset_index(inplace=True, drop=True)
     
@@ -214,7 +141,7 @@ def convert_state_names_to_codes(df, state_column):
     # Dictionary mapping full state names to their two-letter codes
     state_name_to_code = {
         'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
-        'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
+        'Colorado': 'CO', 'Connecticut': 'CT', 'District of Columbia': 'DC', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
         'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA', 'Kansas': 'KS',
         'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD', 'Massachusetts': 'MA',
         'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO', 'Montana': 'MT',
@@ -231,6 +158,7 @@ def convert_state_names_to_codes(df, state_column):
     df[state_column] = df[state_column].map(state_name_to_code)
     
     return df
+
 
 def calculate_potw_emissions_proxy(emi_df, echo_df, year_range):
     """
@@ -301,20 +229,14 @@ def check_facility_distance_then_add(echo_df, frs_df, filter_distance=1.0):
     """
     # Add data source columns
     echo_df['data_source'] = 'echo'
-    frs_df['data_source'] = 'frs'
 
     echo_df = echo_df[['Year', 'State', 'Facility Latitude', 'Facility Longitude', 'Wastewater Flow (MGal/yr)', 'data_source']]
-    
+  
     echo_df = echo_df.rename(columns={
         'Facility Latitude': 'latitude',
         'Facility Longitude': 'longitude',
         'State': 'state_code',
         'Year': 'year'
-        })
-
-    frs_df = frs_df[['year_created', 'state_code', 'latitude', 'longitude', 'data_source']]
-    frs_df = frs_df.rename(columns={
-        'year_created': 'year'
         })
 
     # Extract coordinates
@@ -344,6 +266,11 @@ def check_facility_distance_then_add(echo_df, frs_df, filter_distance=1.0):
     
     # Filter FRS facilities and combine with ECHO data
     new_rows = frs_df[mask]
+
+    # duplicate filtered facilities to create a full FRS time series instead of a single entry
+    new_rows = expand_years(new_rows)
+    new_rows = new_rows[new_rows['year'] >= min_year]
+
     result_df = pd.concat([echo_df, new_rows], ignore_index=True)
     
     return result_df
@@ -371,7 +298,7 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
 
     # Find states that are in emi_df but missing in echo_df
     ghgi_states = set(emi_df['state_code'].unique())
-    echo_states = set(echo_df[echo_df['data_source'] != 'frs']['State'].unique())
+    echo_states = set(echo_df[echo_df['data_source'] != 'frs']['state_code'].unique())
     states_without_echo_data = ghgi_states - echo_states
 
     for year in year_range:
@@ -386,7 +313,7 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
         year_national_emis_available = year_emi['ghgi_ch4_kt'].sum() - year_total_ghgrp_emis
 
         # Filter echo_df for the current year
-        year_echo = echo_df[echo_df['Year'] == year].copy() 
+        year_echo = echo_df[echo_df['year'] == year].copy() 
 
         # Calculate the proportion of each state's GHGI methane emissions for the current year
         year_emi.loc[:, 'state_proportion'] = year_emi['ghgi_ch4_kt'] / year_emi['ghgi_ch4_kt'].sum()
@@ -403,10 +330,10 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
             
             if state in echo_states:
         
-                year_state_echo = year_echo[year_echo['State'] == state].copy()
+                year_state_echo = year_echo[year_echo['state_code'] == state].copy()
 
                 # FRS data calculation
-                year_state_frs = year_state_echo[year_state_echo['data_source'] == 'frs'].copy()
+                year_state_frs = year_state_echo[year_state_echo['data_source'] != 'echo'].copy() #account for frs and brewerydb data
 
                 frs_emis_to_allocate = year_emi[year_emi['state_code'] == state]['frs_emis'].values[0]
                 
@@ -420,7 +347,7 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
 
                 # ECHO with no GHGRP matches and no FRS data
                 year_state_echo_no_ghgrp = year_state_echo[(year_state_echo['ghgrp_match'] == 0) 
-                    & (year_state_echo['data_source'] != 'frs')].copy()  
+                    & (year_state_echo['data_source'] != 'frs') & (year_state_echo['data_source'] != 'brewerydb')].copy()  
                 
                 # Calculate the proportional flow at each facility
                 year_state_echo_no_ghgrp.loc[:, 'flow_proportion'] = (
@@ -445,7 +372,7 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
             
                 print(f"When calculating proportional GHGI emis, State {state} is missing from the ECHO data. Applying all emis to FRS facilities.")
 
-                year_state_frs = year_echo[year_echo['State'] == state].copy()
+                year_state_frs = year_echo[year_echo['state_code'] == state].copy()
 
                 state_ghgi_emis_value = year_emi[year_emi['state_code'] == state]['state_ghgi_emis'].values[0]
                 
@@ -458,15 +385,14 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
     return final_proxy_df
 
 
-def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, frs_df, year_range, industry='Pulp and Paper'):
+def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, industry='Pulp and Paper'):
     """
     Process facilities data, match with GHGRP data, and distribute emissions.
     
     Parameters:
-    echo_df (pd.DataFrame): ECHO dataset 
+    echo_df (pd.DataFrame): ECHO dataset (this will contain ECHO, FRS, and brewerydb data, depending on the industry)
     ghgrp_df (pd.DataFrame): GHGRP dataset
     emi_df (pd.DataFrame): EPA GHGI emissions data
-    frs_df (pd.DataFrame): FRS dataset
     year_range (list): List of years to process
     industry (str): Industry name for EPA emissions filtering
     
@@ -479,9 +405,7 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, frs_df, year_ran
     echo_df['emis_kt'] = 0
     ghgrp_df['found'] = 0
 
-    echo_df['data_source'] = 'echo'
     ghgrp_df['data_source'] = 'ghgrp'
-    frs_df['data_source'] = 'frs'
     
     # Step 1.1 Data wrangling
     # convert int to float to avoid potential math / dtype errors
@@ -490,16 +414,13 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, frs_df, year_ran
 
     ghgrp_df = convert_state_names_to_codes(ghgrp_df, 'State')
 
-    # reduce echo datasets to only the columns we need 
-    echo_df = echo_df[['Year', 'State', 'Facility Latitude', 'Facility Longitude', 'Wastewater Flow (MGal/yr)', 'emis_kt', 'data_source']]
-
     # Some GHGRP data are empty after trying to join the GHGRP emi and facility data and have len == 0
     if len(ghgrp_df) != 0:
         for idx, echo_row in echo_df.iterrows():
             for _, ghgrp_row in ghgrp_df.iterrows():
-                dist = np.sqrt((ghgrp_row['latitude'] - echo_row['Facility Latitude'])**2 +
-                            (ghgrp_row['longitude'] - echo_row['Facility Longitude'])**2)
-                if dist < 0.025 and ghgrp_row['Year'] == echo_row['Year']:
+                dist = np.sqrt((ghgrp_row['latitude'] - echo_row['latitude'])**2 +
+                            (ghgrp_row['longitude'] - echo_row['longitude'])**2)
+                if dist < 0.025 and ghgrp_row['Year'] == echo_row['year']:
                     ghgrp_df.loc[ghgrp_row.name, 'found'] = 1
                     echo_df.loc[idx, 'ghgrp_match'] = 1
                     echo_df.loc[idx, 'emis_kt'] = ghgrp_row['emis_kt_tot']
@@ -511,13 +432,12 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, frs_df, year_ran
         print(f"Total Emis (kt): {echo_df['emis_kt'].sum():.2f}")
 
         # Step 2: Add GHGRP facilities not found in ECHO to the "master" ECHO dataframe
-
         ghgrp_to_add = ghgrp_df[ghgrp_df['found'] == 0][['Year', 'State', 'latitude', 'longitude', 'emis_kt_tot']]
 
         # Rename columns to match the desired output
         ghgrp_to_add = ghgrp_to_add.rename(columns={
-            'latitude': 'Facility Latitude',
-            'longitude': 'Facility Longitude',
+            'Year': 'year',
+            'State': 'state_code',
             'emis_kt_tot': 'emis_kt'
         })
 
@@ -531,18 +451,12 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, frs_df, year_ran
         # Set the 'found' column to 2 for GHGRP facilities not location matched with ECHO but added to ECHO
         ghgrp_df.loc[ghgrp_df['found'] == 0, 'found'] = 2
         
-        # Step 3: Add the FRS data to the ECHO df that now also contains GHGRP data
-        echo_df = check_facility_distance_then_add(echo_df, frs_df)
-
-        # Step 4: Distribute remaining emissions difference
+        # Step 3: Distribute remaining emissions difference
         final_proxy_df = calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range)
 
     # If no GHGRP data is found, assign all emissions to ECHO data
     else:
         print(f"GHGRP data not found for {industry}, assigning all emissions to ECHO data.")
-        
-        # Add the FRS data to the ECHO df
-        echo_df = check_facility_distance_then_add(echo_df, frs_df)
         
         final_proxy_df = calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range)
     
@@ -596,9 +510,23 @@ def merge_facility_and_emissions_data(facility_info, facility_emis):
     ghgrp_ind['emis_kt_tot'] = ghgrp_ind['ghg_quantity'] / 1e3  # convert to kt
     return ghgrp_ind
 
-def filter_by_naics(df, naics_prefix):
-    """Filter dataframe by NAICS code prefix."""
-    return df[df['NAICS Code'].str.startswith(naics_prefix)].copy().reset_index(drop=True)
+def filter_by_naics(df, naics_codes):
+    """
+    Filter dataframe by NAICS code prefix(es).
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame containing NAICS codes
+    naics_codes (str or list): Single NAICS code/prefix or list of NAICS codes
+    
+    Returns:
+    pd.DataFrame: Filtered DataFrame containing only rows matching NAICS code(s)
+    """
+    # Convert single NAICS code to list for consistency
+    if isinstance(naics_codes, str):
+        naics_codes = [naics_codes]
+        
+    # Filter using tuple of NAICS codes
+    return df[df['NAICS Code'].str.startswith(tuple(naics_codes))].copy().reset_index(drop=True)
 
 def compare_state_sets(df1, df2, state_column1, state_column2):
     """
@@ -671,221 +599,110 @@ def subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, nai
     
     frs_df = duckdb.query(query).df()
     
-    # Rest of the processing remains the same
+    # Process the data
     frs_df = frs_df.dropna(subset=['latitude', 'longitude'])
     frs_df = frs_df.drop_duplicates(subset=['latitude', 'longitude'])
-    frs_df['year_created'] = pd.to_datetime(frs_df['create_date'], format='%d-%b-%y').dt.year
+    frs_df['year'] = pd.to_datetime(frs_df['create_date'], format='%d-%b-%y').dt.year # create a "start year" from the create date
+    frs_df['data_source'] = 'frs'
+    frs_df = frs_df[['year', 'state_code', 'latitude', 'longitude', 'data_source']]
 
     return frs_df
 
-# %% Step 2.1 Read in and process FRS data
 
-# Subset the FRS data to only those sectors we need 
-
-frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
-frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
-
-# Example usage:
-naics_codes = {
-    'pp': '3221',
-    'mp': '3116',
-    'fv': ['3114', '311421', '311991', '311340', '312130'],
-    'ethanol': '325193',
-    'brew': '312120',
-    'petrref': '32411'
-}
-
-sector_dataframes = {}
-for sector_name, naics_prefix in naics_codes.items():
-    sector_df = subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, naics_prefix)
-    sector_dataframes[sector_name] = sector_df
-    print(f"Processed {sector_name} sector. Shape: {sector_df.shape}")
-
-# Access individual sector dataframes
-frs_pp = sector_dataframes['pp']
-frs_mp = sector_dataframes['mp']
-frs_fv = sector_dataframes['fv']
-frs_ethanol = sector_dataframes['ethanol']
-frs_brew = sector_dataframes['brew']
-frs_petrref = sector_dataframes['petrref']
-
-# %%
-# Step 2.2 Read in full ECHO dataset
-
-echo_file_directory = proxy_data_dir_path / "wastewater/ECHO"
-combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
-
-# Check if the combined CSV already exists, read it if it does, otherwise create it
-if combined_echo_file_path.exists():
-    echo_full = read_combined_file(combined_echo_file_path)
-else:
-    echo_full = read_and_combine_csv_files(echo_file_directory)
-
-
-# %%
-
-# Step 2.3 Process the potw and non-potw facilities
-
-# Process POTW facilities
-echo_potw = clean_and_group_echo_data(echo_full, 'POTW')
-
-# Process NON-POTW facilities
-echo_nonpotw = clean_and_group_echo_data(echo_full, 'NON-POTW')
-
-
-# %%
-
-# Step 2.4 Create dataframes for each non-potw industry
-
-echo_nonpotw['NAICS Code'] = echo_nonpotw['NAICS Code'].astype(str)
-echo_nonpotw['SIC Code'] = echo_nonpotw['SIC Code'].astype(str)
-
-# Define the industries and their corresponding NAICS prefixes and SIC codes
-industries = {
-    'pp': ('3221', ['2611', '2621', '2631']),
-    'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
-    'fv': ('3114', ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
-    'eth': ('325193', ['2869']),
-    'brew': ('312120', ['2082']),
-    'petrref': ('32411', ['2911'])
-}
-
-# Process all industries
-for industry_name, (naics_prefix, sic_codes) in industries.items():
-    result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
-    exec(f"echo_{industry_name.lower()} = result_df")
-
-# Check if there are missing states between the ECHO and GHGI emi data
-print("Comparing Pulp and Paper")
-print(compare_state_sets(ww_pp_emi, echo_pp, 'state_code', 'State'))
-
-print("Comparing Meat and Poultry")
-print(compare_state_sets(ww_mp_emi, echo_mp, 'state_code', 'State'))
-
-print("Comparing Fruits and Vegetables")
-print(compare_state_sets(ww_fv_emi, echo_fv, 'state_code', 'State'))
-
-print("Comparing Ethanol")
-print(compare_state_sets(ww_ethanol_emi, echo_eth, 'state_code', 'State'))
-
-print("Comparing Breweries")
-print(compare_state_sets(ww_brew_emi, echo_brew, 'state_code', 'State'))
-
-print("Comparing Petroleum Refining")
-print(compare_state_sets(ww_petrref_emi, echo_petrref, 'state_code', 'State'))
-
-# %% Step 2.5 Add the FRS data to the ECHO data
-
-def check_facility_distance_then_add(echo_df, frs_df, filter_distance=1.0):
+def expand_years(df, end_year=2022):
     """
-    Vectorized function to check facility distances and add FRS facilities 
-    that are at least 1 km away from any ECHO facility.
+    Duplicate rows for each year between year and end_year. This creates a time series for a single facility entry.
     
     Parameters:
-    - echo_df: DataFrame with ECHO facility data
-    - frs_df: DataFrame with FRS facility data
-    - filter_distance: Distance in kilometers (default 1.0 km)
+    df (pd.DataFrame): Facility DataFrame with 'year' column that represents when the proxy time series starts
+    end_year (int): Final year to generate data for (default 2022)
     
     Returns:
-    - DataFrame with ECHO data plus filtered FRS data
+    pd.DataFrame: Expanded DataFrame with rows for each year
     """
-    # Add data source columns
-    echo_df['data_source'] = 'echo'
-    frs_df['data_source'] = 'frs'
-
-    echo_df = echo_df[['Year', 'State', 'Facility Latitude', 'Facility Longitude', 'Wastewater Flow (MGal/yr)', 'data_source']]
+    # Create empty list to store expanded DataFrames
+    expanded_dfs = []
     
-    echo_df = echo_df.rename(columns={
-        'Facility Latitude': 'latitude',
-        'Facility Longitude': 'longitude',
-        'State': 'state_code',
-        'Year': 'year'
-        })
-
-    frs_df = frs_df[['year_created', 'state_code', 'latitude', 'longitude', 'data_source']]
-    frs_df = frs_df.rename(columns={
-        'year_created': 'year'
-        })
-
-    # Extract coordinates
-    echo_coords = np.array([(lat, lon) for lat, lon in 
-                           zip(echo_df['latitude'], 
-                               echo_df['longitude'])])
+    # Process each facility
+    for _, row in df.iterrows():
+        # Create date range from year (starting year of data) to end_year
+        years = pd.date_range(
+            start=str(row['year']), 
+            end=str(end_year + 1), 
+            freq='YE'
+        ).year
+        
+        # Create duplicate rows for each year
+        temp_df = pd.DataFrame([row.to_dict() for _ in range(len(years))])
+        temp_df['year'] = years
+        
+        expanded_dfs.append(temp_df)
     
-    frs_coords = np.array([(lat, lon) for lat, lon in 
-                          zip(frs_df['latitude'], 
-                              frs_df['longitude'])])
-    
-    # Calculate distances using broadcasting
-    lat1 = echo_coords[:, 0][:, np.newaxis]
-    lon1 = echo_coords[:, 1][:, np.newaxis]
-    lat2 = frs_coords[:, 0]
-    lon2 = frs_coords[:, 1]
-    
-    # Haversine formula components
-    R = 6371  # Earth's radius in kilometers
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = np.sin(dlat/2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon/2)**2
-    distances = 2 * R * np.arcsin(np.sqrt(a))
-    
-    # Create mask where facility is far enough from all ECHO facilities
-    mask = ~(distances <= filter_distance).any(axis=0)
-    
-    # Filter FRS facilities and combine with ECHO data
-    new_rows = frs_df[mask]
-    result_df = pd.concat([echo_df, new_rows], ignore_index=True)
+    # Combine all expanded DataFrames
+    result_df = pd.concat(expanded_dfs, ignore_index=True)
     
     return result_df
 
-echo_pp = check_facility_distance_then_add(echo_pp, frs_pp)
-echo_mp = check_facility_distance_then_add(echo_mp, frs_mp)
-echo_fv = check_facility_distance_then_add(echo_fv, frs_fv)
-echo_eth = check_facility_distance_then_add(echo_eth, frs_ethanol)
-echo_brew = check_facility_distance_then_add(echo_brew, frs_brew)
-echo_petrref = check_facility_distance_then_add(echo_petrref, frs_petrref)
 
-print("Comparing Pulp and Paper")
-print(compare_state_sets(ww_pp_emi, echo_pp, 'state_code', 'state_code'))
+def geocode_address(df, address_column):
+    """
+    Geocode addresses using Nominatim, handling missing values
+    
+    Parameters:
+    df: DataFrame containing addresses
+    address_column: Name of column containing addresses
+    
+    Returns:
+    DataFrame with added latitude and longitude columns
+    """
+    # Check if address column exists
+    if address_column not in df.columns:
+        raise ValueError(f"Column {address_column} not found in DataFrame")
+        
+    # Initialize geocoder
+    geolocator = Nominatim(user_agent="my_app")
+    
+    # Create cache dictionary
+    geocode_cache = {}
+    
+    def get_lat_long(address):
+        # Handle missing values
+        if pd.isna(address) or str(address).strip() == '':
+            return (None, None)
+            
+        # Check cache first
+        if address in geocode_cache:
+            return geocode_cache[address]
+        
+        try:
+            # Add delay to respect Nominatim's usage policy
+            time.sleep(1)
+            location = geolocator.geocode(str(address))
+            if location:
+                result = (location.latitude, location.longitude)
+                geocode_cache[address] = result
+                return result
+            return (None, None)
+            
+        except (GeocoderTimedOut, GeocoderServiceError):
+            return (None, None)
+    
+    # Create lat_long column
+    df['lat_long'] = None
+    
+    # Only geocode where we need coordinates
+    mask = (df['longitude'].isna() | (df['longitude'] == '')) & df[address_column].notna()
+    df.loc[mask, 'lat_long'] = df.loc[mask, address_column].apply(get_lat_long)
+    
+    # Split tuple into separate columns
+    df['latitude'] = df['lat_long'].apply(lambda x: x[0] if x else None)
+    df['longitude'] = df['lat_long'].apply(lambda x: x[1] if x else None)
+    
+    # Drop temporary column
+    df = df.drop('lat_long', axis=1)
+    
+    return df
 
-print("Comparing Meat and Poultry")
-print(compare_state_sets(ww_mp_emi, echo_mp, 'state_code', 'state_code'))
-
-print("Comparing Fruits and Vegetables")
-print(compare_state_sets(ww_fv_emi, echo_fv, 'state_code', 'state_code'))
-
-print("Comparing Ethanol")
-print(compare_state_sets(ww_ethanol_emi, echo_eth, 'state_code', 'state_code'))
-
-print("Comparing Breweries")
-print(compare_state_sets(ww_brew_emi, echo_brew, 'state_code', 'state_code'))
-
-print("Comparing Petroleum Refining")
-print(compare_state_sets(ww_petrref_emi, echo_petrref, 'state_code', 'state_code'))
-# %%
-import requests
-# https://www.openbrewerydb.org/documentation
-
-url = 'https://api.openbrewerydb.org/v1/breweries?'
-params = {'by_state': 'alaska', "by_type": "micro", "per_page": 200}
-# params = {'by_country': 'united_states', "by_type": "micro", "per_page": 200}
-
-response = requests.get(url, params=params)
-
-print(response.url)
-
-if response.status_code == 200:
-    json_data = response.json()
-    print(json_data)
-else:
-    print('Failed to retrieve JSON data')
-
-# %%
-
-import requests
-import pandas as pd
-import time
-from typing import List, Dict
 
 def get_brewery_data(states: List[str], brewery_types: List[str]) -> pd.DataFrame:
     """
@@ -897,6 +714,8 @@ def get_brewery_data(states: List[str], brewery_types: List[str]) -> pd.DataFram
     
     Returns:
     DataFrame containing combined brewery data
+
+    # api info: https://www.openbrewerydb.org/documentation
     """
     url = 'https://api.openbrewerydb.org/v1/breweries?'
     all_data = []
@@ -932,10 +751,53 @@ def get_brewery_data(states: List[str], brewery_types: List[str]) -> pd.DataFram
     else:
         return pd.DataFrame()
 
-# List of all US states
+# %% Step 2.1 Read in and process FRS data
+
+# Subset the FRS data to only those sectors we need 
+
+frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
+frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
+
+# Example usage:
+naics_codes = {
+    'pp': '3221',
+    'mp': '3116',
+    'fv': ['3114', '311421', '311991', '311340', '312130'],
+    'ethanol': '325193',
+    'brew': '312120',
+    'petrref': '32411'
+}
+
+sector_dataframes = {}
+for sector_name, naics_prefix in naics_codes.items():
+    sector_df = subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, naics_prefix)
+    sector_dataframes[sector_name] = sector_df
+    print(f"Processed {sector_name} sector. Shape: {sector_df.shape}")
+
+# Access individual sector dataframes
+frs_pp = sector_dataframes['pp']
+frs_mp = sector_dataframes['mp']
+frs_fv = sector_dataframes['fv']
+frs_ethanol = sector_dataframes['ethanol']
+frs_brew = sector_dataframes['brew']
+frs_petrref = sector_dataframes['petrref']
+
+# %% Step 2.1.1 Add missing MT fruit and veg data to the FRS data
+# add a found MT fruit and vegetable processing location to the frs_fv dataset because there are no data for MT from FRS, GHGRP, or ECHO
+# https://abundantmontana.com/amt-lister/mission-mountain-food-enterprise-center/
+MT_fv_site = [min_year, 'MT', 47.528500, -114.103880, 'frs']
+new_fv_row = pd.DataFrame([MT_fv_site], columns=frs_fv.columns)
+
+# Concatenate the existing DataFrame with the new row
+frs_fv = pd.concat([frs_fv, new_fv_row], ignore_index=True)
+
+# %% Step 2.2 Read in and process brewery db data - these data fill in missing brewery proxy data from FRS, ECHO, and GHGRP
+# We assume that these breweries exist throughout the full time series 
+
+# List of all US states to push through the brewery data fetch function
 us_states = [
     'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 
-    'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 
+    'Delaware', 'District_of_Columbia', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 
     'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 
     'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New_Hampshire',
     'New_Jersey', 'New_Mexico', 'New_York', 'North_Carolina', 'North_Dakota', 'Ohio', 
@@ -945,20 +807,186 @@ us_states = [
 ]
 
 brewery_df_path = proxy_data_dir_path / "wastewater"
-if "openbrewerydb_data.csv" in os.listdir(brewery_df_path):
-    brewery_df = pd.read_csv(brewery_df_path / "openbrewerydb_data.csv")
-    else:
-        # Brewery types to fetch
-        brewery_types = ['micro', 'regional', 'large']
+brewery_file = brewery_df_path / "openbrewerydb_geolocated.csv"
 
-        # Fetch data
-        brewery_df = get_brewery_data(us_states, brewery_types)
+if brewery_file.exists():
+    print("Reading existing brewery data from file...")
+    brewery_df = pd.read_csv(brewery_file)
+else:
+    print("Fetching brewery data from API...")
+    # Brewery types to fetch
+    brewery_types = ['micro', 'regional', 'large']
 
-        # Display results
-        print(f"Total breweries found: {len(brewery_df)}")
+    # Fetch data
+    brewery_df = get_brewery_data(us_states, brewery_types)
+    
+    # Display results
+    print(f"Total breweries found: {len(brewery_df)}")
 
-# drop breweries with missing lat/long values
-brewery_df = brewery_df.dropna(subset=['latitude', 'longitude'])
+    # Create a full address from the address components to allow for geocoding missing lat/long values
+    # Convert long zips to standard 5 digit zips since nominatim doesn't recognize long zips
+    brewery_df['postal_code'] = brewery_df['postal_code'].fillna('').str.split('-').str[0]
+
+    brewery_df['address_1'] = (
+        brewery_df['address_1'].fillna('') + ', ' + 
+        brewery_df['city'].fillna('') + ', ' + 
+        brewery_df['state_province'].fillna('') + ' ' + 
+        brewery_df['postal_code'].fillna('')
+    ).str.strip(', ')
+
+    # Clean up any double commas or spaces from missing values
+    brewery_df['address_1'] = (
+        brewery_df['address_1']
+        .str.replace(r',\s*,', ',', regex=True)
+        .str.strip()
+    )
+
+    # Subset to only those records missing lat long data
+    brewery_df_missing_latlongs = brewery_df[brewery_df['latitude'].isna() | brewery_df['longitude'].isna()]
+
+    # Geocode the missing lat longs (this can take a long time)
+    added_lat_longs = geocode_address(brewery_df_missing_latlongs, 'address_1')
+
+    # Remove any rows that still have missing lat longs
+    added_lat_longs = added_lat_longs.dropna(subset=['latitude', 'longitude'])
+
+    # Combine the original data with the newly geocoded data
+    brewery_df = pd.concat([brewery_df[~brewery_df['latitude'].isna()], added_lat_longs])
+
+    # Change state names to state codes
+    brewery_df = convert_state_names_to_codes(brewery_df, 'state')
+
+    # Rename columns to match the FRS data
+    brewery_df = brewery_df.rename(columns={'state': 'state_code'})
+
+    # Change data to match the FRS data
+    brewery_df['year'] = min_year 
+    brewery_df['data_source'] = 'brewerydb'
+    brewery_df = brewery_df[['year', 'state_code', 'latitude', 'longitude', 'data_source']]
+
+    # Save data to CSV
+    brewery_df.to_csv(brewery_file, index=False)
+
+
+# %% Step 2.2.2 Deduplicate by latitude and longitude - breweries will be removed if they occur within 0.25 km of each other
+filter_distance = 0.25 # 0.25 km
+
+# Extract coordinates
+frs_brew_coords = np.array([(lat, lon) for lat, lon in 
+                        zip(frs_brew['latitude'], 
+                            frs_brew['longitude'])])
+
+brewery_df_coords = np.array([(lat, lon) for lat, lon in 
+                        zip(brewery_df['latitude'], 
+                            brewery_df['longitude'])])
+
+# Calculate distances using broadcasting
+lat1 = frs_brew_coords[:, 0][:, np.newaxis]
+lon1 = frs_brew_coords[:, 1][:, np.newaxis]
+lat2 = brewery_df_coords[:, 0]
+lon2 = brewery_df_coords[:, 1]
+
+# Haversine formula components
+R = 6371  # Earth's radius in kilometers
+dlat = np.radians(lat2 - lat1)
+dlon = np.radians(lon2 - lon1)
+a = np.sin(dlat/2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon/2)**2
+distances = 2 * R * np.arcsin(np.sqrt(a))
+
+# Create mask where facility is far enough from all ECHO facilities
+mask = ~(distances <= filter_distance).any(axis=0)
+
+# Filter FRS facilities and combine with ECHO data
+new_rows = brewery_df[mask]
+
+frs_brew = pd.concat([frs_brew, new_rows], ignore_index=True)
+
+# %% Step 2.3 ECHO data processing
+
+echo_file_directory = proxy_data_dir_path / "wastewater/ECHO"
+combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
+
+# Check if the combined CSV already exists, read it if it does, otherwise create it
+if combined_echo_file_path.exists():
+    echo_full = read_combined_file(combined_echo_file_path)
+else:
+    echo_full = read_and_combine_csv_files(echo_file_directory)
+
+
+# %% Step 2.3.1 Process the potw and non-potw facilities
+
+# Process POTW facilities
+echo_potw = clean_and_group_echo_data(echo_full, 'POTW')
+
+# Process NON-POTW facilities
+echo_nonpotw = clean_and_group_echo_data(echo_full, 'NON-POTW')
+
+# %% Step 2.3.2 Create dataframes for each non-potw industry
+
+echo_nonpotw['NAICS Code'] = echo_nonpotw['NAICS Code'].astype(str)
+echo_nonpotw['SIC Code'] = echo_nonpotw['SIC Code'].astype(str)
+
+# Define the industries and their corresponding NAICS prefixes and SIC codes
+industries = {
+    'pp': ('3221', ['2611', '2621', '2631']),
+    'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
+    'fv': (['3114', '311421', '311991', '311340', '312130'], ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
+    'eth': ('325193', ['2869']),
+    'brew': ('312120', ['2082']),
+    'petrref': ('32411', ['2911'])
+}
+
+# Process all industries
+for industry_name, (naics_prefix, sic_codes) in industries.items():
+    result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
+    exec(f"echo_{industry_name.lower()} = result_df")
+
+# Check if there are missing states between the ECHO and GHGI emi data
+print("Comparing Pulp and Paper")
+print(compare_state_sets(ww_pp_emi, echo_pp, 'state_code', 'State'))
+
+print("Comparing Meat and Poultry")
+print(compare_state_sets(ww_mp_emi, echo_mp, 'state_code', 'State'))
+
+print("Comparing Fruits and Vegetables")
+print(compare_state_sets(ww_fv_emi, echo_fv, 'state_code', 'State'))
+
+print("Comparing Ethanol")
+print(compare_state_sets(ww_ethanol_emi, echo_eth, 'state_code', 'State'))
+
+print("Comparing Breweries")
+print(compare_state_sets(ww_brew_emi, echo_brew, 'state_code', 'State'))
+
+print("Comparing Petroleum Refining")
+print(compare_state_sets(ww_petrref_emi, echo_petrref, 'state_code', 'State'))
+
+# %% Step 2.5 Add the FRS data to the ECHO data
+
+echo_pp = check_facility_distance_then_add(echo_pp, frs_pp)
+echo_mp = check_facility_distance_then_add(echo_mp, frs_mp)
+echo_fv = check_facility_distance_then_add(echo_fv, frs_fv)
+echo_eth = check_facility_distance_then_add(echo_eth, frs_ethanol)
+echo_brew = check_facility_distance_then_add(echo_brew, frs_brew)
+echo_petrref = check_facility_distance_then_add(echo_petrref, frs_petrref)
+
+print("Comparing Pulp and Paper")
+print(compare_state_sets(ww_pp_emi, echo_pp, 'state_code', 'state_code'))
+
+print("Comparing Meat and Poultry")
+print(compare_state_sets(ww_mp_emi, echo_mp, 'state_code', 'state_code'))
+
+print("Comparing Fruits and Vegetables")
+print(compare_state_sets(ww_fv_emi, echo_fv, 'state_code', 'state_code'))
+
+print("Comparing Ethanol")
+print(compare_state_sets(ww_ethanol_emi, echo_eth, 'state_code', 'state_code'))
+
+print("Comparing Breweries")
+print(compare_state_sets(ww_brew_emi, echo_brew, 'state_code', 'state_code'))
+
+print("Comparing Petroleum Refining")
+print(compare_state_sets(ww_petrref_emi, echo_petrref, 'state_code', 'state_code'))
+
 
 # %%  Step 2.6 Read in GHGRP Subpart II Data
 
@@ -989,7 +1017,7 @@ print('NAICS CODES in Subpart II:', np.unique(ghgrp_ind['NAICS Code']))
 industry_filters = {
     'pp': '322',      # Pulp and paper
     'mp': '3116',     # Red meat and poultry
-    'fv': '3114',     # Fruits and vegetables
+    'fv': ['3114', '311421', '311991', '311340', '312130'],     # Fruits and vegetables
     'eth': '325193',  # Ethanol production
     'brew': '312120', # Breweries
     'ref': '324121'   # Petroleum refining
@@ -1011,18 +1039,16 @@ ghgrp_combined = pd.concat(dfs, ignore_index=True)
 
 total_ghgrp_emis = ghgrp_combined[['Year', 'State', 'emis_kt_tot']]
 
-# %%
-
-# Step 2.6 Join GHGRP, ECHO, and emi data
+# %% Step 2.7 Join GHGRP, ECHO, and emi data
 
 industrial_emi_totals = pd.DataFrame(industrial_emis.groupby(['year'])['ghgi_ch4_kt'].sum().reset_index())
 
-final_pp = process_facilities_and_emissions(echo_pp, ghgrp_pp, ww_pp_emi, frs_pp, years, industry='Pulp and Paper')
-final_mp = process_facilities_and_emissions(echo_mp, ghgrp_mp, ww_mp_emi, frs_mp, years, industry='Meat and Poultry')
-final_fv = process_facilities_and_emissions(echo_fv, ghgrp_fv, ww_fv_emi, frs_fv, years, industry='Fruit and Vegetables')
-final_eth = process_facilities_and_emissions(echo_eth, ghgrp_eth, ww_ethanol_emi, frs_ethanol, years, industry='Ethanol')
-final_brew = process_facilities_and_emissions(echo_brew, ghgrp_brew, ww_brew_emi, frs_brew, years, industry='Breweries')
-final_ref = process_facilities_and_emissions(echo_petrref, ghgrp_ref, ww_petrref_emi, frs_petrref, years, industry='Petroleum Refining')
+final_pp = process_facilities_and_emissions(echo_pp, ghgrp_pp, ww_pp_emi, years, industry='Pulp and Paper')
+final_mp = process_facilities_and_emissions(echo_mp, ghgrp_mp, ww_mp_emi, years, industry='Meat and Poultry')
+final_fv = process_facilities_and_emissions(echo_fv, ghgrp_fv, ww_fv_emi, years, industry='Fruit and Vegetables')
+final_eth = process_facilities_and_emissions(echo_eth, ghgrp_eth, ww_ethanol_emi, years, industry='Ethanol')
+final_brew = process_facilities_and_emissions(echo_brew, ghgrp_brew, ww_brew_emi, years, industry='Breweries')
+final_ref = process_facilities_and_emissions(echo_petrref, ghgrp_ref, ww_petrref_emi, years, industry='Petroleum Refining')
 
 # %%
 # summary of the counts of datasets 
