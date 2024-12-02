@@ -208,18 +208,18 @@ forest_land_proxy = forest_land_proxy[
 
 
 # %% Step 2 - Calculate proxy emissions for each state
-proxy_df = calculate_state_emissions(forest_land_emi, forest_land_proxy, years)
+forestland_proxy_df = calculate_state_emissions(forest_land_emi, forest_land_proxy, years)
 
 # %% Join the MTBS lat long data to the proxy data
 
 mtbs_lat_long = mtbs_lat_long[['Event_ID', 'BurnBndLat', 'BurnBndLon']]
 mtbs_lat_long.rename(columns={'Event_ID': 'eventID', 'BurnBndLat': 'latitude', 'BurnBndLon': 'longitude'}, inplace=True)
-proxy_df = proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
-
+forestland_proxy_df = forestland_proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
+forestland_proxy_df.rename(columns={'originstatecd': 'state_code'}, inplace=True)
 
 # %% Step 3 Create the final proxy dataframe
-final_proxy_df = create_final_proxy_df(proxy_df)
+final_forestland_proxy_df = create_final_proxy_df(forestland_proxy_df)
 
-final_proxy_df.to_parquet(proxy_data_dir_path / "forest_land_proxy.parquet", index=False)
+final_forestland_proxy_df.to_parquet(proxy_data_dir_path / "forest_land_proxy.parquet", index=False)
 
 # %%

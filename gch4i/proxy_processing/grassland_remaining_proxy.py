@@ -193,12 +193,12 @@ grassland_proxy['fuelbed_aggregate'] = grassland_proxy['fuelbed_aggregate'].str.
 # Convert the FIPS state codes to two-letter state codes
 grassland_proxy = convert_FIPS_to_two_letter_code(grassland_proxy, 'originstatecd')
 
-# Get the forest and nonforest habitat types from the FCCS data
+# Get the grassland habitat types from the FCCS data
 fccs_grass = get_habitat_types(fccs_fuelbed, 'FUELBED', 'grassland')
 
 nawfd_grass = get_habitat_types(nawfd_fuelbed, 'name', 'grassland')
 
-# Filter the MTBS data to only include forest habitat types in the FCCS and NAWFD data
+# Filter the MTBS data to only include grassland habitat types in the FCCS and NAWFD data
 
 grassland_proxy = grassland_proxy[
     grassland_proxy['fuelbed_aggregate'].isin(fccs_grass['FCCS']) |
@@ -207,19 +207,19 @@ grassland_proxy = grassland_proxy[
 
 
 # %% Step 2 - Calculate proxy emissions for each state
-proxy_df = calculate_state_emissions(grassland_emi, grassland_proxy, years)
+grassland_proxy_df = calculate_state_emissions(grassland_emi, grassland_proxy, years)
 
 # %% Join the MTBS lat long data to the proxy data
 
 mtbs_lat_long = mtbs_lat_long[['Event_ID', 'BurnBndLat', 'BurnBndLon']]
 mtbs_lat_long.rename(columns={'Event_ID': 'eventID', 'BurnBndLat': 'latitude', 'BurnBndLon': 'longitude'}, inplace=True)
-proxy_df = proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
-proxy_df.rename(columns={'originstatecd': 'state_code'}, inplace=True)
+grassland_proxy_df = grassland_proxy_df.merge(mtbs_lat_long, on='eventID', how='left')
+grassland_proxy_df.rename(columns={'originstatecd': 'state_code'}, inplace=True)
 
 # %% Step 3 Create the final proxy dataframe
 
-final_proxy_df = create_final_proxy_df(proxy_df)
+final_grassland_proxy_df = create_final_proxy_df(grassland_proxy_df)
 
-final_proxy_df.to_parquet(proxy_data_dir_path / "grassland_proxy.parquet", index=False)
+final_grassland_proxy_df.to_parquet(proxy_data_dir_path / "grassland_proxy.parquet", index=False)
 
 # %%
