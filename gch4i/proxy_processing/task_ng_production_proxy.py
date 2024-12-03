@@ -12,6 +12,7 @@ import osgeo
 import geopandas as gpd
 import numpy as np
 import seaborn as sns
+import shapefile as shp
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -34,7 +35,21 @@ def task_get_ng_production_proxy_data(
     nems_region_dict_path: Path = sector_data_dir_path / "enverus/NEMS_Region_Dictionary.xlsx",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "gb_stations_proxy.parquet",
+    nei_path: Path = sector_data_dir_path / "nei_og",
+    all_well_count_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_all_well_count_proxy.parquet",
+    conv_well_count_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_conv_well_count_proxy.parquet",
+    hf_well_count_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_hf_well_count_proxy.parquet",
+    all_well_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_all_well_prod_proxy.parquet",
+    basin_220_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_basin_220_prod_proxy.parquet",
+    basin_395_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_basin_395_prod_proxy.parquet",
+    basin_430_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_basin_430_prod_proxy.parquet",
+    basin_other_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_basin_other_prod_proxy.parquet",
+    water_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_water_prod_proxy.parquet",
+    conv_well_comp_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_conv_well_comp_proxy.parquet",
+    hf_well_comp_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_hf_well_comp_proxy.parquet",
+    drilled_well_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_drilled_well_proxy.parquet",
+    state_gom_offshore_well_count_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_state_gom_offshore_well_count_proxy.parquet",
+    state_gom_offshore_well_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_state_gom_offshore_well_prod_proxy.parquet",
     ):
     """
     Data come from Enverus, both Drilling Info and Prism
@@ -56,6 +71,13 @@ def task_get_ng_production_proxy_data(
 
     TODO: Update enverus_well_counts_path with v3 data (currently using v2 data)
     """
+
+    # Functions:
+    # Define safe devide to set result to zero if denominator is zero
+    def safe_div(x,y):
+        if y == 0:
+            return 0
+        return x / y
 
     # STEP 1: Load in State ANSI data and NEMS definitions
 
@@ -112,6 +134,8 @@ def task_get_ng_production_proxy_data(
 
     # Based on ERGs logic, active wells are determined based on their production levels and not producing status
     Enverus_data_dict = {}
+    DI_data_dict = {}
+    Prism_data_dict = {}
     for iyear in years:
         #DI data
         DI_file_name = f"didsk_monthly_{iyear}.csv"
@@ -143,8 +167,43 @@ def task_get_ng_production_proxy_data(
                              'LIQ_10':'OILPROD_10','GAS_10':'GASPROD_10','WTR_10':'WATERPROD_10',
                              'LIQ_11':'OILPROD_11','GAS_11':'GASPROD_11','WTR_11':'WATERPROD_11',
                              'LIQ_12':'OILPROD_12','GAS_12':'GASPROD_12','WTR_12':'WATERPROD_12',})
-            .assign(WELL_COUNT=1)
+            .assign(WELL_COUNT=1)  # TODO: Check to see if this should actually be set to 1
             )
+        # Format completion date (YYYY-MM)
+        for iwell in range(0,len(DI_data)):
+            comp_date = str(DI_data.loc[iwell, 'COMPDATE'])
+            if comp_date == 'NaN':
+                comp_year_month = 'NaN'
+            elif comp_date == 'nan':
+                comp_year_month = 'NaN'
+            else:  # date format M/DD/YYYY
+                comp_month = f"{int(comp_date.split('/')[0]):02}"
+                comp_year = f"{int(comp_date.split('/')[2])}"
+                comp_year_month = str(comp_year)+'-'+str(comp_month)
+            DI_data.loc[iwell, 'comp_year_month'] = comp_year_month
+        # Format spud date (YYYY)
+        for iwell in range(0,len(DI_data)):
+            spud_date = str(DI_data.loc[iwell, 'SPUDDATE'])
+            if spud_date == 'NaN':
+                spud_year = 'NaN'
+            elif spud_date == 'nan':
+                spud_year = 'NaN'
+            else:  # date format M/DD/YYYY
+                spud_year = f"{int(spud_date.split('/')[2])}"
+                spud_year = str(spud_year)
+            DI_data.loc[iwell, 'spud_year'] = spud_year
+        # Format first production date (YYYY)
+        for iwell in range(0,len(DI_data)):
+            first_prod_date = str(DI_data.loc[iwell, 'FIRSTPRODDATE'])
+            if first_prod_date == 'NaN':
+                first_prod_year = 'NaN'
+            elif first_prod_date == 'nan':
+                first_prod_year = 'NaN'
+            else:  # date format M/DD/YYYY
+                first_prod_year = f"{int(first_prod_date.split('/')[2])}"
+                first_prod_year = str(first_prod_year)
+            DI_data.loc[iwell, 'first_prod_year'] = first_prod_year
+        DI_data_dict[f'{iyear}'] = DI_data
 
         # Prism Data
         Prism_file_name = f"prism_monthly_{iyear}.csv"
@@ -185,6 +244,41 @@ def task_get_ng_production_proxy_data(
                              'LIQUIDSPROD_BBL_12':'OILPROD_12','GASPROD_MCF_12':'GASPROD_12','WATERPROD_BBL_12':'WATERPROD_12',})
             .assign(WELL_COUNT=1)
             )
+        # Format completion date (YYYY-MM)
+        for iwell in range(0,len(Prism_data)):
+            comp_date = str(Prism_data.loc[iwell, 'COMPDATE'])
+            if comp_date == 'NaN':
+                comp_year_month = 'NaN'
+            elif comp_date == 'nan':
+                comp_year_month = 'NaN'
+            else:  # date format YYYY-MM-DD
+                comp_month = f"{int(comp_date.split('-')[1]):02}"
+                comp_year = f"{int(comp_date.split('-')[0])}"
+                comp_year_month = str(comp_year)+'-'+str(comp_month)
+            Prism_data.loc[iwell, 'comp_year_month'] = comp_year_month
+        # Format spud date (YYYY)
+        for iwell in range(0,len(Prism_data)):
+            spud_date = str(Prism_data.loc[iwell, 'SPUDDATE'])
+            if spud_date == 'NaN':
+                spud_year = 'NaN'
+            elif spud_date == 'nan':
+                spud_year = 'NaN'
+            else:  # date format YYYY-MM-DD
+                spud_year = f"{int(spud_date.split('-')[0])}"
+                spud_year = str(spud_year)
+            Prism_data.loc[iwell, 'spud_year'] = spud_year
+        # Format first production date (YYYY)
+        for iwell in range(0,len(Prism_data)):
+            first_prod_date = str(Prism_data.loc[iwell, 'FIRSTPRODDATE'])
+            if first_prod_date == 'NaN':
+                first_prod_year = 'NaN'
+            elif first_prod_date == 'nan':
+                first_prod_year = 'NaN'
+            else:  # date format YYYY-MM-DD
+                first_prod_year = f"{int(first_prod_date.split('-')[0])}"
+                first_prod_year = str(first_prod_year)
+            Prism_data.loc[iwell, 'first_prod_year'] = first_prod_year
+        Prism_data_dict[f'{iyear}'] = Prism_data
         
         # Combine into one array with common column names, replace nans with zeros, and sum annual production
         Enverus_data = pd.concat([DI_data, Prism_data], ignore_index=True)
@@ -322,4 +416,592 @@ def task_get_ng_production_proxy_data(
     # ERG has developed their own logic to determine if a well is an HF well or not and that result is included in the 
     # HF variable in this dataset. This method does not rely on the Enverus well 'Producing Status'
     # Well Type (e.g., non-associated gas well) is determined based on annual production GOR at that well (CUM OIL/ CUM GAS), 
-    # but the prsence of a well will only be included in maps in months where monthly gas prod > 
+    # but the presence of a well will only be included in maps in months where monthly gas prod > 0
+
+    # Proxy Data Dataframes:
+    # Well Counts
+    all_well_count_df = pd.DataFrame()  # Active gas well (conventional + HF) counts in a given month
+    conv_well_count_df = pd.DataFrame()  # Active conventional gas well counts in a given month
+    hf_well_count_df = pd.DataFrame()  # Active HF gas well counts in a given month
+    # Well-Level Production Volumes
+    all_well_prod_df = pd.DataFrame()  # Active gas well (conventional + HF) gas production in a given month
+    basin_220_prod_df = pd.DataFrame()  # Gas well gas production in Basin 220 in a given month
+    basin_395_prod_df = pd.DataFrame()  # Gas well gas production in Basin 395 in a given month
+    basin_430_prod_df = pd.DataFrame()  # Gas well gas production in Basin 430 in a given month
+    basin_other_prod_df = pd.DataFrame()  # Gas well gas production in Other Basins in a given month
+    # Water Production Volumes
+    water_prod_df = pd.DataFrame()
+    # Well Completions
+    conv_well_comp_df = pd.DataFrame()  # Conventional gas well completions
+    hf_well_comp_df = pd.DataFrame()  # HF gas well completions
+    # Drilled Gas Wells
+    drilled_well_df = pd.DataFrame()  # Gas wells drilled
+    # Offshore Well Counts and Production Volumes in State Waters in the Gulf of Mexico
+    state_gom_offshore_well_count_df = pd.DataFrame()  # Offshore state GOM gas well counts
+    state_gom_offshore_well_prod_df = pd.DataFrame()  # Offshore state GOM gas production
+
+
+    # Query Enverus data to create dictionaries of proxy data
+    for iyear in years:
+        enverus_data_temp = Enverus_data_dict[f'{iyear}'].copy()
+        
+        # Onshore Natural Gas
+        ng_data_temp = (enverus_data_temp
+                        .query("STATE_CODE.isin(@state_gdf['state_code'])")
+                        .query("OFFSHORE == 'N'")
+                        .query("CUM_GAS > 0")
+                        .assign(gas_to_oil_ratio=lambda df: df['CUM_GAS']/df['CUM_OIL'])
+                        .assign(year=str(iyear))
+                        .replace(np.inf, 0)
+                        .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
+                        )
+        # Offshore Natural Gas Wells
+        ng_offshore_data_temp = (enverus_data_temp
+                                 .query("STATE_CODE.isin(@state_gdf['state_code'])")
+                                 .query("OFFSHORE == 'Y'")
+                                 .query("CUM_GAS > 0")
+                                 .assign(gas_to_oil_ratio=lambda df: df['CUM_GAS']/df['CUM_OIL'])
+                                 .assign(year=str(iyear))
+                                 .replace(np.inf, 0)
+                                 .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
+                                 )
+        
+        # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)
+        for imonth in range(1,13):
+            imonth_str = f"{imonth:02}"  # convert to 2-digit months
+            year_month_str = str(iyear)+'-'+imonth_str
+            gas_prod_str = 'GASPROD_'+imonth_str
+            water_prod_str = 'WATERPROD_'+imonth_str
+            # onshore data for imonth
+            ng_data_imonth_temp = (ng_data_temp
+                                   .query(f"{prod_str} > 0")
+                                   .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   )
+            ng_data_imonth_temp = (ng_data_imonth_temp[[
+                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'HF','WELL_COUNT',gas_prod_str,water_prod_str,
+                'comp_year_month','spud_year','first_prod_year']]
+                )
+            # offshore data for imonth
+            ng_offshore_data_imonth_temp = (ng_offshore_data_temp
+                                            .query(f"{prod_str} > 0")
+                                            .assign(year_month=str(iyear)+'-'+imonth_str)
+                                            )
+            ng_data_imonth_temp = (ng_offshore_data_imonth_temp[[
+                'year','year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'HF','WELL_COUNT',gas_prod_str,water_prod_str,
+                'comp_year_month','spud_year','first_prod_year']]
+                )
+            # Well Counts
+            # All Gas Well Count
+            all_well_count_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT']]
+                                    .rename(columns=lambda x: str(x).lower())
+                                    .rename(columns={"well_count":"proxy_data"})
+                                    .reset_index(drop=True)
+                                    )
+            all_well_count_df = pd.concat([all_well_count_df,all_well_count_imonth])
+            # Conventional Gas Well Count
+            conv_well_count_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF']]
+                                     .query("HF != 'Y'")
+                                     .drop(columns=["HF"])
+                                     .rename(columns=lambda x: str(x).lower())
+                                     .rename(columns={"well_count":"proxy_data"})
+                                     .reset_index(drop=True)
+                                     )
+            conv_well_count_df = pd.concat([conv_well_count_df,conv_well_count_imonth])
+            # HF Gas Well Count
+            hf_well_count_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF']]
+                                   .query("HF == 'Y'")
+                                   .drop(columns=["HF"])
+                                   .rename(columns=lambda x: str(x).lower())
+                                   .rename(columns={"well_count":"proxy_data"})
+                                   .reset_index(drop=True)
+                                   )
+            hf_well_count_df = pd.concat([hf_well_count_df,hf_well_count_imonth])
+
+            # Gas Production
+            # All Gas Well Gas Production
+            all_well_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE',gas_prod_str]]
+                                   .assign(proxy_data=lambda df: df[gas_prod_str])
+                                   .drop(columns=[gas_prod_str])
+                                   .rename(columns=lambda x: str(x).lower())
+                                   .reset_index(drop=True)
+                                   )
+            all_well_prod_df = pd.concat([all_well_prod_df,all_well_prod_imonth])
+            # Basin 220 Gas Well Gas Production
+            basin_220_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','AAPG_CODE_ERG',gas_prod_str]]
+                                    .query("AAPG_CODE_ERG == '220'")
+                                    .assign(proxy_data=lambda df: df[gas_prod_str])
+                                    .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
+                                    .rename(columns=lambda x: str(x).lower())
+                                    .reset_index(drop=True)
+                                    )
+            basin_220_prod_df = pd.concat([basin_220_prod_df,basin_220_prod_imonth])
+            # Basin 395 Gas Well Gas Production
+            basin_395_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','AAPG_CODE_ERG',gas_prod_str]]
+                                    .query("AAPG_CODE_ERG == '395'")
+                                    .assign(proxy_data=lambda df: df[gas_prod_str])
+                                    .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
+                                    .rename(columns=lambda x: str(x).lower())
+                                    .reset_index(drop=True)
+                                    )
+            basin_395_prod_df = pd.concat([basin_395_prod_df,basin_395_prod_imonth])
+            # Basin 430 Gas Well Gas Production
+            basin_430_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','AAPG_CODE_ERG',gas_prod_str]]
+                                    .query("AAPG_CODE_ERG == '430'")
+                                    .assign(proxy_data=lambda df: df[gas_prod_str])
+                                    .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
+                                    .rename(columns=lambda x: str(x).lower())
+                                    .reset_index(drop=True)
+                                    )
+            basin_430_prod_df = pd.concat([basin_430_prod_df,basin_430_prod_imonth])
+            # Other Basins Gas Well Gas Production
+            basin_other_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','AAPG_CODE_ERG',gas_prod_str]]
+                                      .query("AAPG_CODE_ERG != '220' & AAPG_CODE_ERG != '395' & AAPG_CODE_ERG != '430'")
+                                      .assign(proxy_data=lambda df: df[gas_prod_str])
+                                      .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
+                                      .rename(columns=lambda x: str(x).lower())
+                                      .reset_index(drop=True)
+                                      )
+            basin_other_prod_df = pd.concat([basin_other_prod_df,basin_other_prod_imonth])
+
+            # Water Production
+            # Data Source by state defined in Enverus DrillingInfo Processing - Produced
+            # Water_2023-11-14_forGridding.xlsx file.
+            if iyear < 2016:  # WV uses NEI data
+                water_prod_enverus_states = ['AK','AL','AR','AZ','CA','CO','FL','LA',
+                                             'MI','MO','MS','MT','ND','NE','NM','NV',
+                                             'NY','OH','SD','TX','UT','VA','WY'
+                                             ]
+                # States using NEI for reference: ['IL','IN','KS','OK','PA','WV']
+            else:  # 2016 and beyond; WV uses Enverus data
+                water_prod_enverus_states = ['AK','AL','AR','AZ','CA','CO','FL','LA',
+                                             'MI','MO','MS','MT','ND','NE','NM','NV',
+                                             'NY','OH','SD','TX','UT','VA','WY','WV'
+                                             ]  #WV uses Enverus
+                # States using NEI for reference: ['IL','IN','KS','OK','PA']
+            # Enverus water production for applicable states (NEI water producted will
+            # be added in the NEI section of the code below)
+            water_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE',water_prod_str]]
+                                .query("STATE_CODE.isin(@water_prod_enverus_states)")
+                                .assign(proxy_data=lambda df: df[water_prod_str])
+                                .drop(columns=[water_prod_str])
+                                .rename(columns=lambda x: str(x).lower())
+                                .reset_index(drop=True)
+                                )
+            water_prod_df = pd.concat([water_prod_df,water_prod_imonth])
+
+            # Well Completions
+            # Conventional Gas Well Completions
+            conv_well_comp_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
+                                    .query("HF != 'Y'")
+                                    .drop(columns=["HF"])
+                                    .rename(columns=lambda x: str(x).lower())
+                                    .rename(columns={"well_count":"proxy_data"})
+                                    .query(f"comp_year_month == {year_month_str}")
+                                    .drop(columns=["comp_year_month"])
+                                    .reset_index(drop=True)
+                                    )
+            conv_well_comp_df = pd.concat([conv_well_comp_df,conv_well_comp_imonth])
+            
+            # HF Gas Well Completions
+            hf_well_comp_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
+                                  .query("HF == 'Y'")
+                                  .drop(columns=["HF"])
+                                  .rename(columns=lambda x: str(x).lower())
+                                  .rename(columns={"well_count":"proxy_data"})
+                                  .query(f"comp_year_month == '{year_month_str}'")
+                                  .drop(columns=["comp_year_month"])
+                                  .reset_index(drop=True)
+                                  )
+            hf_well_comp_df = pd.concat([hf_well_comp_df,hf_well_comp_imonth])
+
+            # Drilled Gas Wells
+            drilled_well_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','spud_year','first_prod_year']]
+                                  .rename(columns=lambda x: str(x).lower())
+                                  .rename(columns={"well_count":"proxy_data"})
+                                  # wells with a spud date or first production date in the current year
+                                  .query(f"spud_year == '{iyear}' | first_prod_year == '{iyear}'")
+                                  # wells with a spud_year == iyear or if no spud date, first_prod_year == iyear
+                                  .query(f"spud_year == '{iyear}' | spud_year == 'NaN'")
+                                  .drop(columns=['hf', 'spud_year', 'first_prod_year'])
+                                  .reset_index(drop=True)
+                                  )
+            drilled_well_df = pd.concat([drilled_well_df,drilled_well_imonth])
+            
+            # Offshore Well Counts and Production Volumes in State Waters in the Gulf of Mexico
+            state_gom_offshore_states = ['AL','FL','LA','MS','TX']
+            # Offshore State GOM Gas Well Counts
+            state_gom_offshore_well_count_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT']]
+                                                   .rename(columns=lambda x: str(x).lower())
+                                                   .rename(columns={"well_count":"proxy_data"})
+                                                   .reset_index(drop=True)
+                                                   )
+            state_gom_offshore_well_count_df = pd.concat([state_gom_offshore_well_count_df,state_gom_offshore_well_count_imonth])
+            # Offshore State GOM Gas Well Gas Production
+            state_gom_offshore_well_prod_imonth = (ng_offshore_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE',gas_prod_str]]
+                                                  .query("STATE_CODE.isin(@state_gom_offshore_states)")
+                                                  .assign(proxy_data=lambda df: df[gas_prod_str])
+                                                  .drop(columns=[gas_prod_str])
+                                                  .rename(columns=lambda x: str(x).lower())
+                                                  .reset_index(drop=True)
+                                                  )
+            state_gom_offshore_well_prod_df = pd.concat([state_gom_offshore_well_prod_df,state_gom_offshore_well_prod_imonth])
+
+    # Calculate Relative Emissions
+    def calc_enverus_rel_emi(df):
+        df['rel_emi'] = df.groupby(["state_code", "year"])['proxy_data'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+        df = df.drop(columns='proxy_data')
+        return df
+
+    # Well Counts
+    all_well_count_df = calc_enverus_rel_emi(all_well_count_df)
+    conv_well_count_df = calc_enverus_rel_emi(conv_well_count_df)
+    hf_well_count_df = calc_enverus_rel_emi(hf_well_count_df)
+    # Well-Level Production Volumes
+    all_well_prod_df = calc_enverus_rel_emi(all_well_prod_df)
+    basin_220_prod_df = calc_enverus_rel_emi(basin_220_prod_df)
+    basin_395_prod_df = calc_enverus_rel_emi(basin_395_prod_df)
+    basin_430_prod_df = calc_enverus_rel_emi(basin_430_prod_df)
+    basin_other_prod_df = calc_enverus_rel_emi(basin_other_prod_df)
+    # Water Production Volumes
+    water_prod_df = calc_enverus_rel_emi(water_prod_df)
+    # Well Completions
+    conv_well_comp_df = calc_enverus_rel_emi(conv_well_comp_df)
+    hf_well_comp_df = calc_enverus_rel_emi(hf_well_comp_df)
+    # Drilled Gas Wells
+    drilled_well_df = calc_enverus_rel_emi(drilled_well_df)
+    # Offshore Well Counts and Production Volumes in State Waters in the Gulf of Mexico
+    state_gom_offshore_well_count_df = calc_enverus_rel_emi(state_gom_offshore_well_count_df)
+    state_gom_offshore_well_prod_df = calc_enverus_rel_emi(state_gom_offshore_well_prod_df)
+
+    # Format Proxy Data into Geodataframes
+    def enverus_df_to_gdf(df):
+        gdf = (
+            gpd.GeoDataFrame(
+                df,
+                geometry=gpd.points_from_xy(
+                    df["longitude"],
+                    df["latitude"],
+                    crs=4326
+                )
+            )
+            .drop(columns=["latitude", "longitude"])
+            .loc[:, ["year", "year_month", "state_code", "rel_emi", "geometry"]]
+        )
+        return gdf
+
+    # Well Counts
+    all_well_count_gdf = enverus_df_to_gdf(all_well_count_df)
+    conv_well_count_gdf = enverus_df_to_gdf(conv_well_count_df)
+    hf_well_count_gdf = enverus_df_to_gdf(hf_well_count_df)
+    # Well-Level Production Volumes
+    all_well_prod_gdf = enverus_df_to_gdf(all_well_prod_df)
+    basin_220_prod_gdf = enverus_df_to_gdf(basin_220_prod_df)
+    basin_395_prod_gdf = enverus_df_to_gdf(basin_395_prod_df)
+    basin_430_prod_gdf = enverus_df_to_gdf(basin_430_prod_df)
+    basin_other_prod_gdf = enverus_df_to_gdf(basin_other_prod_df)
+    # Water Production Volumes
+    water_prod_gdf = enverus_df_to_gdf(water_prod_df)
+    # Well Completions
+    conv_well_comp_gdf = enverus_df_to_gdf(conv_well_comp_df)
+    hf_well_comp_gdf = enverus_df_to_gdf(hf_well_comp_df)
+    # Drilled Gas Wells
+    drilled_well_gdf = enverus_df_to_gdf(drilled_well_df)
+    # Offshore Well Counts and Production Volumes in State Waters in the Gulf of Mexico
+    state_gom_offshore_well_count_gdf = enverus_df_to_gdf(state_gom_offshore_well_count_df)
+    state_gom_offshore_well_prod_gdf = enverus_df_to_gdf(state_gom_offshore_well_prod_df)
+
+    # STEP 2.4: Well and Production Data (from NEI)
+
+    # NEI data is used for well counts, gas well completion counts, 
+    # gas well drilled counts, and gas production volumes for IL and IN.
+
+    # NEI data is used for water production volumes for IL, IN, KS, OK, and PA 
+    # as well as WV for years less than 2016.
+
+    # FIPS codes for relevant states (each code starts with 2 distinct characters):
+    # IL: 17; IN: 18; KS: 20; OK: 40; PA: 42; WV: 54
+    
+    fips_codes_df = pd.DataFrame({'state_code': ['IL', 'IN', 'KS', 'OK', 'PA', 'WV'],
+                                  'fips_code': ['17', '18', '20', '40', '42', '54']})
+
+    # Function to get NEI textfile and shapefile data
+    def get_NEI_data(ghgi_year, data_year, file_name):
+        if data_year <= 2017:
+            # NEI textfile data (data_year <= 2017) (2011, 2014, 2016, 2017)
+            nei_textfile_name = f"CONUS_SA_FILES_{data_year}/{file_name}"
+            nei_textfile_path = os.path.join(nei_path, nei_textfile_name)
+            data_temp = pd.read_csv(nei_textfile_path, sep='\t', skiprows = 25)
+            data_temp = data_temp.drop(["!"], axis=1)
+            data_temp.columns = ['Code','FIPS','COL','ROW','Frac','Abs','FIPS_Total','FIPS_Running_Sum']
+            data_temp = data_temp.astype({"FIPS": str})
+            # if water production data (gas: 6832, oil: 6833)
+            if file_name == 'USA_6832_NOFILL.txt' or file_name == 'USA_6833_NOFILL.txt':
+                if data_year < 2016:
+                    data_temp = (data_temp
+                                # query states: IL, IN, KS, OK, PA, WV
+                                .query("FIPS.str.startswith('17') | FIPS.str.startswith('18') | FIPS.str.startswith('20') | FIPS.str.startswith('40') | FIPS.str.startswith('42') | FIPS.str.startswith('54')")
+                                .reset_index(drop=True)
+                                )
+                    colmax = data_temp['COL'].max()
+                    colmin = data_temp['COL'].min()
+                    rowmax = data_temp['ROW'].max()
+                    rowmin = data_temp['ROW'].min()
+                else:
+                    data_temp = (data_temp
+                                # query states: IL, IN, KS, OK, PA
+                                .query("FIPS.str.startswith('17') | FIPS.str.startswith('18') | FIPS.str.startswith('20') | FIPS.str.startswith('40') | FIPS.str.startswith('42')")
+                                .reset_index(drop=True)
+                                )
+                    colmax = data_temp['COL'].max()
+                    colmin = data_temp['COL'].min()
+                    rowmax = data_temp['ROW'].max()
+                    rowmin = data_temp['ROW'].min()
+            # non-water production proxies (IL, IN)
+            else:
+                data_temp = (data_temp
+                            # query states: IL, IN
+                            .query("FIPS.str.startswith('17') | FIPS.str.startswith('18')")
+                            .reset_index(drop=True)
+                            )
+                colmax = data_temp['COL'].max()
+                colmin = data_temp['COL'].min()
+                rowmax = data_temp['ROW'].max()
+                rowmin = data_temp['ROW'].min()
+            # NEI reference grid shapefile with lat/lon locations
+            nei_reference_grid_path = os.path.join(nei_path, "NEI_Reference_Grid_LCC_to_WGS84_latlon.shp")
+            nei_reference_grid = (gpd.read_file(nei_reference_grid_path)
+                                .to_crs(4326))
+            nei_reference_grid = (nei_reference_grid
+                                .assign(cellid_column = nei_reference_grid.cellid.astype(str).str[0:4].astype(int))
+                                .assign(cellid_row = nei_reference_grid.cellid.astype(str).str[5:].astype(int))
+                                .query(f"cellid_column <= {colmax} & cellid_column >= {colmin}")
+                                .query(f"cellid_row <= {rowmax} & cellid_row >= {rowmin}")
+                                .reset_index(drop=True)
+                                )
+            # Match lat/lon locations from reference grid to nei data
+            for idx in np.arange(0,len(data_temp)):
+                # Add in lat/lon
+                icol = data_temp['COL'][idx]
+                irow = data_temp['ROW'][idx]
+                match = np.where((icol == nei_reference_grid.loc[:,'cellid_column']) & (irow == nei_reference_grid.loc[:,'cellid_row']))[0][0]
+                match = int(match)
+                # data_temp.loc[idx,'Lat'] = nei_reference_grid.loc[match, 'Latitude']
+                # data_temp.loc[idx,'Lon'] = nei_reference_grid.loc[match, 'Longitude']
+                data_temp.loc[idx,'geometry'] = nei_reference_grid.loc[match, 'geometry']
+                # Add in state_code
+                ifips = data_temp.loc[idx,'FIPS'][0:2]
+                data_temp.loc[idx,'state_code'] = fips_codes_df.loc[np.where(ifips == fips_codes_df.loc[:, 'fips_code'])[0][0],'state_code']
+            data_temp = data_temp[['state_code', 'Abs', 'geometry']]
+            data_temp = data_temp.rename(columns={'Abs':'activity_data'})
+        
+        else:
+            # NEI shapefile data (data_year > 2017) (2018, 2019, 2021, 2022)
+            state_geometries = state_gdf[["state_code","geometry"]]
+            nei_file_name = f"CONUS_SA_FILES_{data_year}"
+            nei_file_path = os.path.join(nei_path, nei_file_name)
+            data_temp = gpd.read_file(nei_file_path, layer=file_name)
+            data_temp = data_temp.to_crs(4326)
+            data_temp = gpd.tools.sjoin(data_temp, state_gdf, how="left")
+
+            # water production data (IL, IN, KS, OK, PA)
+            if file_name == 'PRODUCED_WATER_GAS' or file_name == '_6832' or file_name == 'ProducedWaterGasWells':
+                states_to_query = ['IL', 'IN', 'KS', 'OK', 'PA']
+            # non-water production proxies (IL, IN)
+            else:
+                states_to_query = ['IL', 'IN']
+            
+            # query relevant states
+            data_temp = data_temp.query('state_code.isin(@states_to_query)')
+
+            # grab activity data depending on column name (changes by year)
+            if data_year == 2018 or data_year == 2019 or data_year == 2020:
+                data_temp = data_temp[['state_code', 'ACTIVITY', 'geometry']]
+                data_temp = data_temp.rename(columns={'ACTIVITY':'activity_data'})            
+            if data_year == 2021:
+                data_temp = data_temp[['state_code', 'GRID_AC', 'geometry']]
+                data_temp = data_temp.rename(columns={'GRID_AC':'activity_data'})
+            if data_year == 2022:
+                data_temp = data_temp[['state_code', 'GRID_ACTIV', 'geometry']]
+                data_temp = data_temp.rename(columns={'GRID_ACTIV':'activity_data'})
+        
+        # convert activity data to relative emissions (idata / sum(state data))
+        data_temp['rel_emi'] = data_temp.groupby(["state_code"])['activity_data'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+        monthly_data_temp = data_temp.copy()
+        monthly_data_temp['rel_emi'] = monthly_data_temp['rel_emi'] * 1/12
+        monthly_data_temp = monthly_data_temp.drop(columns='activity_data')
+
+        # convert proxy data to monthly (assume 1/12 of annual proxy is assigned to each month)
+        nei_proxy_data = pd.DataFrame()
+        for imonth in range(1,13):
+            imonth_str = f"{imonth:02}"  # convert to 2-digit months
+            data_temp_imonth = monthly_data_temp.copy()
+            data_temp_imonth = data_temp_imonth.assign(year_month=str(ghgi_year)+'-'+imonth_str)
+            nei_proxy_data = pd.concat([nei_proxy_data,data_temp_imonth])
+        nei_proxy_data = nei_proxy_data.assign(year=ghgi_year)
+        nei_proxy_data = (nei_proxy_data[['year', 'year_month', 'state_code', 'rel_emi', 'geometry']]
+                          .reset_index(drop=True)
+                          )
+        return nei_proxy_data
+
+    # NEI data year assignments
+    # All years use the data affiliated with their year except the following exceptions:
+        # 2012: use 2011 data
+        # 2013: use 2014 data
+        # 2015: use 2014 data
+        # 2016: use 2017 data
+    nei_data_years = pd.DataFrame({'year': [2012,
+                                            2013,
+                                            2014,
+                                            2015,
+                                            2016,
+                                            2017,
+                                            2018,
+                                            2019,
+                                            2020,
+                                            2021,
+                                            2022], 
+                                   'nei_data': [2011,
+                                                2014,
+                                                2014,
+                                                2014,
+                                                2017,
+                                                2017,
+                                                2018,
+                                                2019,
+                                                2020,
+                                                2021,
+                                                2022]})
+
+    # NEI Data Dataframes:
+    # Well Counts
+    nei_all_well_count_df = pd.DataFrame()  # Active gas well (conventional + HF) counts in a given month
+    nei_conv_well_count_df = pd.DataFrame()  # Active conventional gas well counts in a given month
+    nei_hf_well_count_df = pd.DataFrame()  # Active HF gas well counts in a given month
+    # Well-Level Production Volumes
+    nei_all_well_prod_df = pd.DataFrame()  # Active gas well (conventional + HF) gas production in a given month
+    nei_basin_other_prod_df = pd.DataFrame()  # Gas well gas production in Other Basins in a given month
+    # Water Production Volumes
+    nei_water_prod_df = pd.DataFrame()
+    # Well Completions
+    nei_conv_well_comp_df = pd.DataFrame()  # Conventional gas well completions
+    nei_hf_well_comp_df = pd.DataFrame()  # HF gas well completions
+    # Drilled Gas Wells
+    nei_drilled_well_df = pd.DataFrame()  # Gas wells drilled
+
+    # NEI text file and shapefile names:
+    # Well Counts
+    well_count_file_names = pd.DataFrame({
+        'data_year': [2011, 2014, 2017,
+                      2018, 2019, 2020, 2021, 2022],
+        'file_name': ['USA_698_NOFILL.txt', 'USA_698_NOFILL.txt', 'USA_698_NOFILL.txt',
+                      'GAS_WELLS', 'GAS_WELLS', 'GAS_WELL', '_698', 'GasWells'],
+        })
+    # Well-Level Production Volumes
+    gas_prod_file_names = pd.DataFrame({
+        'data_year': [2011, 2014, 2017,
+                      2018, 2019, 2020, 2021, 2022],
+        'file_name': ['USA_696_NOFILL.txt', 'USA_696_NOFILL.txt', 'USA_696_NOFILL.txt',
+                      'GAS_PRODUCTION', 'GAS_PRODUCTION', 'GAS_PRODUCTION', '_696', 'GasProduction'],
+        })
+    # Water Production Volumes
+    water_prod_file_names = pd.DataFrame({
+        'data_year': [2011, 2014, 2017,
+                      2018, 2019, 2020, 2021, 2022],
+        'file_name': ['USA_6832_NOFILL.txt', 'USA_6832_NOFILL.txt', 'USA_6832698_NOFILL.txt',
+                      'PRODUCED_WATER_GAS', 'PRODUCED_WATER_GAS', 'PRODUCED_WATER_GAS', '_6832', 'ProducedWaterGasWells'],
+        })
+    # Well Completions
+    comp_count_file_names = pd.DataFrame({
+        'data_year': [2011, 2014, 2017,
+                      2018, 2019, 2020, 2021, 2022],
+        'file_name': ['USA_678_NOFILL.txt', 'USA_678_NOFILL.txt', 'USA_678_NOFILL.txt',
+                      'COMPLETIONS_GAS', 'COMPLETIONS_GAS', 'COMPLETIONS_GAS', '_678', 'GasWellCompletions'],
+        })
+    # Drilled Gas Wells
+    spud_count_file_names = pd.DataFrame({
+        'data_year': [2011, 2014, 2017,
+                      2018, 2019, 2020, 2021, 2022],
+        'file_name': ['USA_671_NOFILL.txt', 'USA_671_NOFILL.txt', 'USA_671_NOFILL.txt',
+                      'SPUD_GAS', 'SPUD_GAS', 'SPUD_GAS', '_671', 'SpudCountGasWells'],
+        })
+    
+    
+    def get_nei_file_name(nei_data_year, nei_file_names):
+        nei_file_name = nei_file_names[nei_file_names['data_year'] == nei_data_year]['file_name'].values[0]
+        return nei_file_name
+
+
+    for iyear in years:
+        nei_data_year = nei_data_years[nei_data_years['year'] == iyear]['nei_data'].values[0]
+        # Well Count
+        ifile_name = get_nei_file_name(nei_data_year, well_count_file_names)
+        nei_all_well_count_iyear = get_NEI_data(iyear, nei_data_year, ifile_name)
+        nei_all_well_count_df = pd.concat([nei_all_well_count_df, nei_all_well_count_iyear])
+        # Gas Production
+        ifile_name = get_nei_file_name(nei_data_year, gas_prod_file_names)
+        nei_all_well_prod_iyear = get_NEI_data(iyear, nei_data_year, ifile_name)
+        nei_all_well_prod_df = pd.concat([nei_all_well_prod_df, nei_all_well_prod_iyear])
+        # Water Production
+        ifile_name = get_nei_file_name(nei_data_year, water_prod_file_names)
+        nei_water_prod_iyear = get_NEI_data(iyear, nei_data_year, ifile_name)
+        nei_water_prod_df = pd.concat([nei_water_prod_df, nei_water_prod_iyear])
+        # Completions Count
+        ifile_name = get_nei_file_name(nei_data_year, comp_count_file_names)
+        nei_conv_well_comp_iyear = get_NEI_data(iyear, nei_data_year, ifile_name)
+        nei_conv_well_comp_df = pd.concat([nei_conv_well_comp_df, nei_conv_well_comp_iyear])
+        # Spud Count
+        ifile_name = get_nei_file_name(nei_data_year, spud_count_file_names)
+        nei_drilled_well_iyear = get_NEI_data(iyear, nei_data_year, ifile_name)
+        nei_drilled_well_df = pd.concat([nei_drilled_well_df, nei_drilled_well_iyear])
+    
+    # Copy Data to Other Dataframes
+    nei_conv_well_count_df = nei_all_well_count_df.copy()
+    nei_hf_well_count_df = nei_all_well_count_df.copy()
+    nei_basin_other_prod_df = nei_all_well_prod_df.copy()
+    nei_hf_well_comp_df = nei_conv_well_comp_df.copy()
+
+    # Add NEI Data to Enverus Data
+    # Well Counts
+    all_well_count_gdf = pd.concat([all_well_count_gdf, nei_all_well_count_df]).reset_index(drop=True)
+    conv_well_count_gdf = pd.concat([conv_well_count_gdf, nei_conv_well_count_df]).reset_index(drop=True)
+    hf_well_count_gdf = pd.concat([hf_well_count_gdf, nei_hf_well_count_df]).reset_index(drop=True)
+    # Well-Level Production Volumes
+    all_well_prod_gdf = pd.concat([all_well_prod_gdf, nei_all_well_prod_df]).reset_index(drop=True)
+    basin_220_prod_gdf = basin_220_prod_df.reset_index(drop=True)  # No IL/IN data to add
+    basin_395_prod_gdf = basin_395_prod_df.reset_index(drop=True)  # No IL/IN data to add
+    basin_430_prod_gdf = basin_430_prod_df.reset_index(drop=True)  # No IL/IN data to add
+    basin_other_prod_gdf = pd.concat([basin_other_prod_gdf, nei_basin_other_prod_df]).reset_index(drop=True)
+    # Water Production Volumes
+    water_prod_gdf = pd.concat([water_prod_gdf, nei_water_prod_df]).reset_index(drop=True)
+    # Well Completions
+    conv_well_comp_gdf = pd.concat([conv_well_comp_gdf, nei_conv_well_comp_df]).reset_index(drop=True)
+    hf_well_comp_gdf = pd.concat([hf_well_comp_gdf, nei_hf_well_comp_df]).reset_index(drop=True)
+    # Drilled Gas Wells
+    drilled_well_gdf = pd.concat([drilled_well_gdf, nei_drilled_well_df]).reset_index(drop=True)
+    # Offshore Well Counts and Production Volumes in State Waters in the Gulf of Mexico
+    state_gom_offshore_well_count_gdf = state_gom_offshore_well_count_df.reset_index(drop=True)  # No IL/IN data to add
+    state_gom_offshore_well_prod_gdf = state_gom_offshore_well_prod_df.reset_index(drop=True)  # No IL/IN data to add
+
+    # Output Proxy Parquet Files
+    all_well_count_gdf.to_parquet(all_well_count_output_path)
+    conv_well_count_gdf.to_parquet(conv_well_count_output_path)
+    hf_well_count_gdf.to_parquet(hf_well_count_output_path)
+    all_well_prod_gdf.to_parquet(all_well_prod_output_path)
+    basin_220_prod_gdf.to_parquet(basin_220_prod_output_path)
+    basin_395_prod_gdf.to_parquet(basin_395_prod_output_path)
+    basin_430_prod_gdf.to_parquet(basin_430_prod_output_path)
+    basin_other_prod_gdf.to_parquet(basin_other_prod_output_path)
+    water_prod_gdf.to_parquet(water_prod_output_path)
+    conv_well_comp_gdf.to_parquet(conv_well_comp_output_path)
+    hf_well_comp_gdf.to_parquet(hf_well_comp_output_path)
+    drilled_well_gdf.to_parquet(drilled_well_output_path)
+    state_gom_offshore_well_count_gdf.to_parquet(state_gom_offshore_well_count_output_path)
+    state_gom_offshore_well_prod_gdf.to_parquet(state_gom_offshore_well_prod_output_path)
+    return None
+
+
+
+    
+

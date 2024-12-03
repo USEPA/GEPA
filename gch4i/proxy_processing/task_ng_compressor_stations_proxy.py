@@ -30,9 +30,9 @@ from gch4i.utils import us_state_to_abbrev
 def task_get_ng_compressor_stations_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_midstream_ng_path: Path = sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb",
-    gb_stations_output_path: Annotated[Path, Product] = proxy_data_dir_path / "gb_stations_proxy.parquet",
-    storage_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "storage_comp_station_proxy.parquet",
-    trans_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "trans_comp_station_proxy.parquet",
+    gb_stations_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_gb_stations_proxy.parquet",
+    storage_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_storage_comp_station_proxy.parquet",
+    trans_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_trans_comp_station_proxy.parquet",
 ):
     """
     Creation of the following proxies using Enverus Midstream Rextag_Natural_Gas.gdb:
