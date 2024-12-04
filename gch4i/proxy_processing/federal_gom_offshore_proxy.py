@@ -22,6 +22,7 @@ from gch4i.config import (
     sector_data_dir_path,
     max_year,
     min_year,
+    years,
 )
 
 from gch4i.utils import us_state_to_abbrev
@@ -31,38 +32,53 @@ from gch4i.utils import us_state_to_abbrev
 @task(id="federal_gom_offshore_proxy")
 def task_get_federal_gom_offshore_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    boem_data_directory_path: Path = sector_data_dir_path / "boem",
-    ng_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "federal_gom_offshore_proxy.parquet",
-    oil_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "oil_gom_fed_proxy.parquet",
+    GOADS_11_path: Path = sector_data_dir_path / "boem" / "2011_Gulfwide_Platform_Inventory.accdb",
+    GOADS_14_path: Path = sector_data_dir_path / "boem" / "2014_Gulfwide_Platform_Inventory.accdb",
+    GOADS_17_path: Path = sector_data_dir_path / "boem" / "2017_Gulfwide_Platform_Inventory.accdb",
+    ERG_GOADSEmissions_path: Path = sector_data_dir_path / "boem" / "BOEM GEI Emissions Data_EmissionSource_2020-03-11.xlsx",
+    ng_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_federal_gom_offshore_proxy.parquet",
+    ng_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_federal_gom_offshore_proxy.parquet",
+    oil_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_federal_gom_offshore_proxy.parquet",
 ):
     """
     # TODO:
     """
 
-    state_gdf = (
-        gpd.read_file(state_path)
-        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-        .rename(columns=str.lower)
-        .rename(columns={"stusps": "state_code", "name": "state_name"})
-        .astype({"statefp": int})
-        # get only lower 48 + DC
-        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-        .reset_index(drop=True)
-        .to_crs(4326)
-    )
+    # Get and format BOEM GOM data for 2011, 2014, and 2017
 
-    # get and format boem gom data for 2011, 2014, 2017, and 2021
-    # NOTE: 2011 has tblPointER and tblPointEM but the rest of the years have one single table of data
-    gom_df = pd.DataFrame()
+    # GOADS data year assignments
+        # 2011 data: 2012
+        # 2014 data: 2013, 2014, 2015
+        # 2017 data: 2016-2022
+        # 2021 data: NOT USED BY GHGI TEAM YET - CHECK FOR V4
+
+    federal_gom_offshore_data_years = pd.DataFrame(
+        {'year': [2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+         'goads_data': [2011, 2014, 2014, 2014, 2017, 2017, 2017, 2017, 2017, 2017, 2017]
+         })
+
+    # Use ERG Preprocessed data to determine if oil or gas
+    ERG_complex_crosswalk = (pd.read_excel(
+        ERG_GOADSEmissions_path,
+        sheet_name = "Complex Emissions by Source",
+        usecols = "AJ:AM",
+        nrows = 11143)
+        .rename(columns={"Year.2": "year",
+                         "BOEM COMPLEX ID.2": "boem_complex_id",
+                         "Oil Gas Defn FINAL.1": "oil_gas_defn",
+                         "Major / Minor.1": "major_minor"})
+        .query("year == 2011 | year == 2014 | year == 2017")
+        .astype({"boem_complex_id": int})
+        .drop(columns="major_minor")  # no longer separating major vs. minor in v3
+        .replace('', np.nan)
+        .dropna()
+        .reset_index(drop=True)
+        )
 
     # 2011 GOADS Data
-
     # Read In and Format 2011 BEOM Data
-    gom_file_name = f"2011_Gulfwide_Platform_Inventory.accdb"
-    gom_file_path = os.path.join(boem_data_directory_path, gom_file_name)
-    driver_str = r'Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ='+gom_file_path+';'''
+    GOADS_11_inputfile = str(GOADS_11_path)
+    driver_str = r'Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ='+GOADS_11_inputfile+';'''
     conn = pyodbc.connect(driver_str)
     GOADS_locations = pd.read_sql("SELECT * FROM tblPointER", conn)
     GOADS_emissions = pd.read_sql("SELECT * FROM tblPointEM", conn)
@@ -70,7 +86,7 @@ def task_get_federal_gom_offshore_proxy_data(
 
     # Format Location Data
     GOADS_locations = GOADS_locations[["strStateFacilityIdentifier","strEmissionReleasePointID","dblXCoordinate","dblYCoordinate"]]
-    #Create platform-by-platform file
+    # Create platform-by-platform file
     GOADS_locations_Unique = pd.DataFrame({'strStateFacilityIdentifier':GOADS_locations['strStateFacilityIdentifier'].unique()})
     GOADS_locations_Unique['lon'] = 0.0
     GOADS_locations_Unique['lat'] = 0.0
@@ -82,192 +98,276 @@ def task_get_federal_gom_offshore_proxy_data(
         GOADS_locations_Unique.loc[iplatform,'lat',] = GOADS_locations['dblYCoordinate'][match_platform]
         GOADS_locations_Unique.loc[iplatform,'strEmissionReleasePointID'] = GOADS_locations['strEmissionReleasePointID'][match_platform][:3]
 
-    GOADS_locations_Unique.reset_index(inplace=True, drop=True)
-    #display(GOADS_locations_Unique)
+    GOADS_locations_Unique = (GOADS_locations_Unique
+                              .drop(columns='strEmissionReleasePointID')
+                              .replace('', np.nan)
+                              .dropna()
+                              .reset_index(drop=True))
 
-    #print(GOADS_emissions.columns)
-    #Format Emissions Data (clean lease data string)
-    GOADS_emissions = GOADS_emissions[["strStateFacilityIdentifier","strPollutantCode","dblEmissionNumericValue","BOEM-MONTH",
-                                  "BOEM-LEASE_NUM","BOEM-COMPLEX_ID"]]
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('OCS','')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('-','')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace(' ','')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G1477','G01477')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G73','00073')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G605','00605')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G72','00072')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G599','00599')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G7155','G07155')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G2357','G02357')
-    GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G4921','G04921')
-    GOADS_emissions['Emis_tg'] = 0.0
-    GOADS_emissions['Emis_tg'] = 9.0718474E-7 * GOADS_emissions['dblEmissionNumericValue'] #convert short tons to Tg
-    GOADS_emissions = GOADS_emissions[GOADS_emissions['strPollutantCode'] == 'CH4']
-    GOADS_emissions.reset_index(inplace=True, drop=True)
+    # Format Emissions Data (clean lease data string)
+    GOADS_emissions = GOADS_emissions[["strStateFacilityIdentifier","strPollutantCode",
+                                       "dblEmissionNumericValue","BOEM-MONTH",
+                                       "BOEM-COMPLEX_ID"]]
+    GOADS_emissions = (GOADS_emissions
+                       .query("strPollutantCode == 'CH4'")
+                       .assign(Emis_tg = 0.0)
+                       .assign(Emis_tg = lambda df: 9.0718474E-7 * df['dblEmissionNumericValue']) #convert short tons to Tg
+                       .rename(columns={"BOEM-COMPLEX_ID": "boem_complex_id"})
+                       .astype({"boem_complex_id": int})
+                       .drop(columns={"strPollutantCode", "dblEmissionNumericValue"})
+                       .replace('', np.nan)
+                       .dropna()
+                       .reset_index(drop=True)
+                       )
 
-    #display(GOADS_emissions)
+    # Select 2011 data from ERG complex crosswalk
+    ERG_complex_crosswalk_2011 = ERG_complex_crosswalk.copy().query('year == 2011').reset_index(drop=True)
 
-    # Use ERG Preprocessed data to determine if major or minor and oil or gas
-    ERG_complex_crosswalk = pd.read_excel(ERG_GOADSEmissions_inputfile, sheet_name = "Complex Emissions by Source", usecols = "AJ:AM", nrows = 11143)
-    #display(ERG_complex_crosswalk)
+    # Join locations, emissions, and complex types together
+    federal_gom_offshore_2011 = (GOADS_emissions
+                                 .set_index("boem_complex_id")
+                                 .join(ERG_complex_crosswalk_2011.set_index("boem_complex_id"))
+                                 .reset_index()
+                                 .set_index("strStateFacilityIdentifier")
+                                 .join(GOADS_locations_Unique.set_index("strStateFacilityIdentifier"))
+                                 .reset_index()
+                                 .astype({"BOEM-MONTH": str})
+                                 .assign(month=lambda df: df['BOEM-MONTH'].astype(str).str.zfill(2))
+                                 .assign(state_code='FO')
+                                 .drop(columns={'strStateFacilityIdentifier', 'BOEM-MONTH'})
+                                 )
+    federal_gom_offshore_2011_gdf = (
+        gpd.GeoDataFrame(
+            federal_gom_offshore_2011,
+            geometry=gpd.points_from_xy(
+                federal_gom_offshore_2011["lon"],
+                federal_gom_offshore_2011["lat"],
+                crs=4326
+            )
+        )
+        .drop(columns=["lat", "lon"])
+        .loc[:, ["boem_complex_id", "year", "month", "state_code", "Emis_tg", "geometry", "oil_gas_defn"]]
+    )
 
-    # add data to map array, for the closest year to 2011
-    year_diff = [abs(x - 2011) for x in year_range]
-    iyear = year_diff.index(min(year_diff))
+    # Separate out ng and oil
+    ng_federal_gom_offshore_2011_gdf = (federal_gom_offshore_2011_gdf
+                                        .query("oil_gas_defn == 'Gas'")
+                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        .reset_index(drop=True)
+                                        )
+    oil_federal_gom_offshore_2011_gdf = (federal_gom_offshore_2011_gdf
+                                         .query("oil_gas_defn == 'Oil'")
+                                         .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                         .reset_index(drop=True)
+                                         )
 
-    #assign oil vs gas by lease/complex ID
-    GOADS_emissions['LEASE_TYPE'] =''
-    GOADS_emissions['MAJOR_STRUC'] =''
-    for istruc in np.arange(0,len(GOADS_emissions)):
-        imatch = np.where(np.logical_and(ERG_complex_crosswalk['BOEM COMPLEX ID.2']==int(GOADS_emissions['BOEM-COMPLEX_ID'][istruc]),\
-                            ERG_complex_crosswalk['Year.2'] == 2011))
-        if np.size(imatch) >0:
-            imatch = imatch[0][0]
-            GOADS_emissions.loc[istruc,'LEASE_TYPE'] = ERG_complex_crosswalk['Oil Gas Defn FINAL.1'][imatch]
-            GOADS_emissions.loc[istruc,'MAJOR_STRUC'] = ERG_complex_crosswalk['Major / Minor.1'][imatch]
-        else:
-            print(istruc, GOADS_emissions['BOEM-COMPLEX_ID'][istruc])
+    # 2014 GOADS Data
+    # Read In and Format 2014 BEOM Data
+    GOADS_14_inputfile = str(GOADS_14_path)
+    driver_str = r'Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ='+GOADS_14_inputfile+';'''
+    conn = pyodbc.connect(driver_str)
+    GOADS_emissions = pd.read_sql("SELECT * FROM 2014_Gulfwide_Platform_20161102", conn)
+    conn.close()
 
-        # for all gas platforms, match the platform to the emissions
-        if GOADS_emissions['LEASE_TYPE'][istruc] =='Gas':
-            match_platform = np.where(GOADS_locations_Unique.strStateFacilityIdentifier==GOADS_emissions['strStateFacilityIdentifier'][istruc])[0][0]
-            ilat = int((GOADS_locations_Unique['lat'][match_platform] - Lat_low)/Res01)
-            ilon = int((GOADS_locations_Unique['lon'][match_platform] - Lon_left)/Res01)
-            imonth = GOADS_emissions['BOEM-MONTH'][istruc]-1 #dict is 1-12, not 0-11
-            if GOADS_emissions['MAJOR_STRUC'][istruc] =='Major':
-                Map_GOADSmajor_emissions[ilat,ilon,iyear,imonth] += GOADS_emissions['Emis_tg'][istruc]
-            else:
-                Map_GOADSminor_emissions[ilat,ilon,iyear,imonth] += GOADS_emissions['Emis_tg'][istruc]
-            
-            
-    # sum complexes and emissions for diagnostic
-    majcplx = GOADS_emissions[(GOADS_emissions['MAJOR_STRUC']=='Major')]
-    majcplx = majcplx[majcplx['LEASE_TYPE'] =='Gas']
-    num_majcplx = majcplx['BOEM-COMPLEX_ID'].unique()
-    #print(np.shape(num_majcplx))
-    mincplx = GOADS_emissions[GOADS_emissions['MAJOR_STRUC']=='Minor']
-    mincplx = mincplx[mincplx['LEASE_TYPE'] =='Gas']
-    num_mincplx = mincplx['BOEM-COMPLEX_ID'].unique()
-    #print(np.size(num_mincplx))            
-    del GOADS_emissions
-    print('Number of Major Gas Complexes: ',(np.size(num_majcplx)))
-    print('Emissions (Tg): ',np.sum(Map_GOADSmajor_emissions[:,:,iyear,:]))
-    print('Number of Minor Gas Complexes: ',(np.size(num_mincplx)))
-    print('Emissions (Tg): ',np.sum(Map_GOADSminor_emissions[:,:,iyear,:]))
+    # Format Emissions Data (clean lease data string)
+    GOADS_emissions = GOADS_emissions[["X_COORDINATE", "Y_COORDINATE", "POLLUTANT_CODE",
+                                       "EMISSIONS_VALUE", "MONTH", "COMPLEX_ID"]]
+    GOADS_emissions = (GOADS_emissions
+                       .query("POLLUTANT_CODE == 'CH4'")
+                       .assign(Emis_tg = 0.0)
+                       .assign(Emis_tg = lambda df: 9.0718474E-7 * df['EMISSIONS_VALUE']) #convert short tons to Tg
+                       .rename(columns={"COMPLEX_ID": "boem_complex_id"})
+                       .astype({"boem_complex_id": int})
+                       .drop(columns={"POLLUTANT_CODE", "EMISSIONS_VALUE"})
+                       .replace('', np.nan)
+                       .dropna()
+                       .reset_index(drop=True)
+                       )
 
+    # Select 2014 data from ERG complex crosswalk
+    ERG_complex_crosswalk_2014 = ERG_complex_crosswalk.copy().query('year == 2014').reset_index(drop=True)
 
-
-
-    gom_data_years = ['2011', '2014', '2017', '2021']
-    for idatayear in gom_data_years:
-        gom_file_name = f"{idatayear}_Gulfwide_Platform_Inventory.accdb"
-        gom_file_path = os.path.join(boem_data_directory_path, gom_file_name)
-        driver_str = r'Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ='+gom_file_path+';'''
-        conn = pyodbc.connect(driver_str)
-        GOADS_locations = pd.read_sql("SELECT * FROM tblPointER", conn)
-        GOADS_emissions = pd.read_sql("SELECT * FROM tblPointEM", conn)
-        conn.close()
-                                    
-        # Format Location Data
-        GOADS_locations = GOADS_locations[["strStateFacilityIdentifier","strEmissionReleasePointID","dblXCoordinate","dblYCoordinate"]]
-        #Create platform-by-platform file
-        GOADS_locations_Unique = pd.DataFrame({'strStateFacilityIdentifier':GOADS_locations['strStateFacilityIdentifier'].unique()})
-        GOADS_locations_Unique['lon'] = 0.0
-        GOADS_locations_Unique['lat'] = 0.0
-        GOADS_locations_Unique['strEmissionReleasePointID'] = ''
-
-        for iplatform in np.arange(len(GOADS_locations_Unique)):
-            match_platform = np.where(GOADS_locations['strStateFacilityIdentifier'] == GOADS_locations_Unique['strStateFacilityIdentifier'][iplatform])[0][0]
-            GOADS_locations_Unique.loc[iplatform,'lon',] = GOADS_locations['dblXCoordinate'][match_platform]
-            GOADS_locations_Unique.loc[iplatform,'lat',] = GOADS_locations['dblYCoordinate'][match_platform]
-            GOADS_locations_Unique.loc[iplatform,'strEmissionReleasePointID'] = GOADS_locations['strEmissionReleasePointID'][match_platform][:3]
-
-        GOADS_locations_Unique.reset_index(inplace=True, drop=True)
-        #display(GOADS_locations_Unique)
-
-        #print(GOADS_emissions.columns)
-        #Format Emissions Data (clean lease data string)
-        GOADS_emissions = GOADS_emissions[["strStateFacilityIdentifier","strPollutantCode","dblEmissionNumericValue","BOEM-MONTH",
-                                    "BOEM-LEASE_NUM","BOEM-COMPLEX_ID"]]
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('OCS','')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('-','')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace(' ','')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G1477','G01477')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G73','00073')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G605','00605')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G72','00072')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G599','00599')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G7155','G07155')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G2357','G02357')
-        GOADS_emissions['BOEM-LEASE_NUM'] = GOADS_emissions['BOEM-LEASE_NUM'].str.replace('G4921','G04921')
-        GOADS_emissions['Emis_tg'] = 0.0
-        GOADS_emissions['Emis_tg'] = 9.0718474E-7 * GOADS_emissions['dblEmissionNumericValue'] #convert short tons to Tg
-        GOADS_emissions = GOADS_emissions[GOADS_emissions['strPollutantCode'] == 'CH4']
-        GOADS_emissions.reset_index(inplace=True, drop=True)
-
-        #display(GOADS_emissions)
-
-        # Use ERG Preprocessed data to determine if major or minor and oil or gas
-        ERG_complex_crosswalk = pd.read_excel(ERG_GOADSEmissions_inputfile, sheet_name = "Complex Emissions by Source", usecols = "AJ:AM", nrows = 11143)
-
-        # add data to map array, for the closest year to 2011
-        year_diff = [abs(x - 2011) for x in year_range]
-        iyear = year_diff.index(min(year_diff))
-
-        #assign oil vs gas by lease/complex ID
-        GOADS_emissions['LEASE_TYPE'] =''
-        GOADS_emissions['MAJOR_STRUC'] =''
-        for istruc in np.arange(0,len(GOADS_emissions)):
-            imatch = np.where(np.logical_and(ERG_complex_crosswalk['BOEM COMPLEX ID.2']==int(GOADS_emissions['BOEM-COMPLEX_ID'][istruc]),\
-                                ERG_complex_crosswalk['Year.2'] == 2011))
-            if np.size(imatch) >0:
-                imatch = imatch[0][0]
-                GOADS_emissions.loc[istruc,'LEASE_TYPE'] = ERG_complex_crosswalk['Oil Gas Defn FINAL.1'][imatch]
-                GOADS_emissions.loc[istruc,'MAJOR_STRUC'] = ERG_complex_crosswalk['Major / Minor.1'][imatch]
-            else:
-                print(istruc, GOADS_emissions['BOEM-COMPLEX_ID'][istruc])
-
-            # for all gas platforms, match the platform to the emissions
-            if GOADS_emissions['LEASE_TYPE'][istruc] =='Gas':
-                match_platform = np.where(GOADS_locations_Unique.strStateFacilityIdentifier==GOADS_emissions['strStateFacilityIdentifier'][istruc])[0][0]
-                ilat = int((GOADS_locations_Unique['lat'][match_platform] - Lat_low)/Res01)
-                ilon = int((GOADS_locations_Unique['lon'][match_platform] - Lon_left)/Res01)
-                imonth = GOADS_emissions['BOEM-MONTH'][istruc]-1 #dict is 1-12, not 0-11
-                if GOADS_emissions['MAJOR_STRUC'][istruc] =='Major':
-                    Map_GOADSmajor_emissions[ilat,ilon,iyear,imonth] += GOADS_emissions['Emis_tg'][istruc]
-                else:
-                    Map_GOADSminor_emissions[ilat,ilon,iyear,imonth] += GOADS_emissions['Emis_tg'][istruc]
-                
-                
-        # sum complexes and emissions for diagnostic
-        majcplx = GOADS_emissions[(GOADS_emissions['MAJOR_STRUC']=='Major')]
-        majcplx = majcplx[majcplx['LEASE_TYPE'] =='Gas']
-        num_majcplx = majcplx['BOEM-COMPLEX_ID'].unique()
-        #print(np.shape(num_majcplx))
-        mincplx = GOADS_emissions[GOADS_emissions['MAJOR_STRUC']=='Minor']
-        mincplx = mincplx[mincplx['LEASE_TYPE'] =='Gas']
-        num_mincplx = mincplx['BOEM-COMPLEX_ID'].unique()
-        #print(np.size(num_mincplx))            
-        del GOADS_emissions
-        print('Number of Major Gas Complexes: ',(np.size(num_majcplx)))
-        print('Emissions (Tg): ',np.sum(Map_GOADSmajor_emissions[:,:,iyear,:]))
-        print('Number of Minor Gas Complexes: ',(np.size(num_mincplx)))
-        print('Emissions (Tg): ',np.sum(Map_GOADSminor_emissions[:,:,iyear,:]))
-
+    # Join locations, emissions, and complex types together
+    federal_gom_offshore_2014 = (GOADS_emissions
+                                 .set_index("boem_complex_id")
+                                 .join(ERG_complex_crosswalk_2014.set_index("boem_complex_id"))
+                                 .reset_index()
+                                 .astype({"MONTH": str})
+                                 .assign(state_code='FO')
+                                 .rename(columns={'X_COORDINATE': 'lon', 'Y_COORDINATE': 'lat', 'MONTH': 'month'})
+                                 )
     
-    # Create proxy gdf
-    proxy_gdf = (
-    gpd.GeoDataFrame(
-        gb_stations_df,
-        geometry=gpd.points_from_xy(
-            gb_stations_df["lon"],
-            gb_stations_df["lat"],
-            crs=4326,
-        ),
-    )
-    .drop(columns=["lat", "lon"])
-    .loc[:, ["facility_name", "state_code", "geometry"]]
+    # Correct months to be numeric digits
+    month_to_mm_df = pd.DataFrame(
+        {'month': ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                   'August', 'September', 'October', 'November', 'December'],
+         'mm': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+         })
+    federal_gom_offshore_2014 = (federal_gom_offshore_2014
+                                 .merge(month_to_mm_df, how='left')
+                                 .drop(columns='month')
+                                 .rename(columns={'mm': 'month'})
+                                 )
+
+    federal_gom_offshore_2014_gdf = (
+        gpd.GeoDataFrame(
+            federal_gom_offshore_2014,
+            geometry=gpd.points_from_xy(
+                federal_gom_offshore_2014["lon"],
+                federal_gom_offshore_2014["lat"],
+                crs=4326
+            )
+        )
+        .drop(columns=["lat", "lon"])
+        .loc[:, ["boem_complex_id", "year", "month", "state_code", "Emis_tg", "geometry", "oil_gas_defn"]]
     )
 
-    proxy_gdf.to_parquet(output_path)
+    # Separate out ng and oil
+    ng_federal_gom_offshore_2014_gdf = (federal_gom_offshore_2014_gdf
+                                        .query("oil_gas_defn == 'Gas'")
+                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        .reset_index(drop=True)
+                                        )
+    oil_federal_gom_offshore_2014_gdf = (federal_gom_offshore_2014_gdf
+                                         .query("oil_gas_defn == 'Oil'")
+                                         .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                         .reset_index(drop=True)
+                                         )
+
+    # 2017 GOADS Data
+    # Read In and Format 2017 BEOM Data
+    GOADS_17_inputfile = str(GOADS_17_path)
+    driver_str = r'Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ='+GOADS_17_inputfile+';'''
+    conn = pyodbc.connect(driver_str)
+    GOADS_emissions = pd.read_sql("SELECT * FROM 2017_Gulfwide_Platform_20190705_CAP_GHG", conn)
+    conn.close()
+
+    # Format Emissions Data (clean lease data string)
+    GOADS_emissions = GOADS_emissions[["X_COORDINATE", "Y_COORDINATE", "POLLUTANT_CODE",
+                                       "EMISSIONS_VALUE", "Month", "COMPLEX_ID"]]
+    GOADS_emissions = (GOADS_emissions
+                       .query("POLLUTANT_CODE == 'CH4'")
+                       .assign(Emis_tg = 0.0)
+                       .assign(Emis_tg = lambda df: 9.0718474E-7 * df['EMISSIONS_VALUE']) #convert short tons to Tg
+                       .rename(columns={"COMPLEX_ID": "boem_complex_id"})
+                       .astype({"boem_complex_id": int})
+                       .drop(columns={"POLLUTANT_CODE", "EMISSIONS_VALUE"})
+                       .replace('', np.nan)
+                       .dropna()
+                       .reset_index(drop=True)
+                       )
+
+    # Select 2017 data from ERG complex crosswalk
+    ERG_complex_crosswalk_2017 = ERG_complex_crosswalk.copy().query('year == 2017').reset_index(drop=True)
+
+    # Join locations, emissions, and complex types together
+    federal_gom_offshore_2017 = (GOADS_emissions
+                                 .set_index("boem_complex_id")
+                                 .join(ERG_complex_crosswalk_2017.set_index("boem_complex_id"))
+                                 .reset_index()
+                                 .astype({"Month": str})
+                                 .assign(state_code='FO')
+                                 .rename(columns={'X_COORDINATE': 'lon', 'Y_COORDINATE': 'lat', 'Month': 'month'})
+                                 )
+    
+    # Correct months to be numeric digits
+    month_to_mm_df = pd.DataFrame(
+        {'month': ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                   'August', 'September', 'October', 'November', 'December'],
+         'mm': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+         })
+    federal_gom_offshore_2017 = (federal_gom_offshore_2017
+                                 .merge(month_to_mm_df, how='left')
+                                 .drop(columns='month')
+                                 .rename(columns={'mm': 'month'})
+                                 )
+
+    federal_gom_offshore_2017_gdf = (
+        gpd.GeoDataFrame(
+            federal_gom_offshore_2017,
+            geometry=gpd.points_from_xy(
+                federal_gom_offshore_2017["lon"],
+                federal_gom_offshore_2017["lat"],
+                crs=4326
+            )
+        )
+        .drop(columns=["lat", "lon"])
+        .loc[:, ["boem_complex_id", "year", "month", "state_code", "Emis_tg", "geometry", "oil_gas_defn"]]
+    )
+
+    # Separate out ng and oil
+    ng_federal_gom_offshore_2017_gdf = (federal_gom_offshore_2017_gdf
+                                        .query("oil_gas_defn == 'Gas'")
+                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        .reset_index(drop=True)
+                                        )
+    oil_federal_gom_offshore_2017_gdf = (federal_gom_offshore_2017_gdf
+                                         .query("oil_gas_defn == 'Oil'")
+                                         .assign(rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                         .reset_index(drop=True)
+                                         )
+
+    # Build complete proxy (2012-2022)
+    ng_federal_gom_offshore_gdf = gpd.GeoDataFrame()
+    oil_federal_gom_offshore_gdf = gpd.GeoDataFrame()
+    for iyear in years:
+        data_year = federal_gom_offshore_data_years[federal_gom_offshore_data_years['year'] == iyear]['goads_data'].values[0]
+        if data_year == 2011:
+            ng_temp_data = (ng_federal_gom_offshore_2011_gdf
+                            .copy()
+                            .assign(year = iyear)
+                            .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])
+                            )
+            oil_temp_data = (oil_federal_gom_offshore_2011_gdf
+                             .copy()
+                             .assign(year = iyear)
+                             .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])
+                             )
+        if data_year == 2014:
+            ng_temp_data = (ng_federal_gom_offshore_2014_gdf
+                            .copy()
+                            .assign(year = iyear)
+                            .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])
+                            )
+            oil_temp_data = (oil_federal_gom_offshore_2014_gdf
+                             .copy()
+                             .assign(year = iyear)
+                             
+                             )
+        if data_year == 2017:
+            ng_temp_data = (ng_federal_gom_offshore_2017_gdf
+                            .copy()
+                            .assign(year = iyear)
+                            .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])
+                            )
+            oil_temp_data = (oil_federal_gom_offshore_2017_gdf
+                             .copy()
+                             .assign(year = iyear)
+                             .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])
+                             )
+        ng_federal_gom_offshore_gdf = pd.concat([ng_federal_gom_offshore_gdf, ng_temp_data])
+        oil_federal_gom_offshore_gdf = pd.concat([oil_federal_gom_offshore_gdf, oil_temp_data])
+    
+    ng_federal_gom_offshore_gdf = (ng_federal_gom_offshore_gdf
+                                   .loc[:, ["boem_complex_id", "year", "month", 
+                                            "year_month", "state_code", "geometry", 
+                                            "rel_emi"]]
+                                   .reset_index(drop=True)
+                                   )
+    oil_federal_gom_offshore_gdf = (oil_federal_gom_offshore_gdf
+                                   .loc[:, ["boem_complex_id", "year", "month", 
+                                            "year_month", "state_code", "geometry", 
+                                            "rel_emi"]]                                    
+                                    .reset_index(drop=True)
+                                    )
+
+    ng_federal_gom_offshore_gdf.to_parquet(ng_output_path)
+    oil_federal_gom_offshore_gdf.to_parquet(oil_output_path)
+
     return None
