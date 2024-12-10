@@ -17,19 +17,19 @@ from gch4i.utils import tg_to_kt
 # %%
 # comes from the spreadsheet
 
-source_name = "composting"
+source_name = "5B1_composting"
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="testing").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
         "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
-        "source_list": data.ghgi_group.to_list(),
+        "source_list": data.gch4i_source.to_list(),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 

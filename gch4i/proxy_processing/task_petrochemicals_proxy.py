@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
@@ -157,8 +158,11 @@ def task_get_petrochemicals_proxy_data(
         ),
     )
     .drop(columns=["lat", "lon"])
+    .astype({"year":int})
     .loc[:, ["facility_name", "state_code", "geometry", "year", "capacity_kt"]]
     )
 
     proxy_gdf.to_parquet(output_path)
     return None
+
+# %%

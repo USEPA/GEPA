@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 from typing import Annotated
 
@@ -14,23 +15,26 @@ from gch4i.config import (
 from gch4i.utils import tg_to_kt
 
 
-source_name = "carbides"
+source_name = "2B5_carbide"
 
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="testing").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
         "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
-        "source_list": data.ghgi_group.to_list(),
+        "source_list": data.gch4i_source.to_list(),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
 emi_parameters_dict
+
+# %%
+# input_path, source_list, output
 
 # %%
 
@@ -111,10 +115,4 @@ def task_carbided_proxy(
     input_path: Path = "",
     output_path: Path = "",
 ) -> None:
-    pass
-
-
-@mark.persist
-@task(id="carbides_gridding")
-def task_carbides_gridding() -> None:
     pass
