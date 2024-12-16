@@ -1,8 +1,9 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2024-08-27
+Date Last Modified:     2024-12-12
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
+gch4i_name:             1A_mobile_combustion
 Input Files:            - Mobile non-CO2 InvDB State Breakout_2022.xlsx
                         - SIT Mobile Dataframe 5.24.2023.xlsx
 Output Files:           - Emissions by State, Year for each subcategory
@@ -45,56 +46,85 @@ def get_comb_mobile_inv_data(in_path, src, params):
     - Emi_Farm
     - Emi_Equip
     - Emi_Other
+    ----------
+
+    This function takes different cleaning paths, depending on the emission source.
+    Some emis group based on multiple sources, while others are based on a
+    single source. The function reads in the data and returns the emissions in kt.
+
+    ----------
+    NOTE: read_excel_params2 must be imported from a_excel_dict.py for this function
+    to execute.
+    ----------
+    Parameters
+    ----------
+    in_path : str
+        path to the input file
+    src : str
+        subcategory of interest
+    params : dict
+        additional parameters
     """
 
-################################################################################
+    ####################################################################################
 
     # Overwrite parameters if Emi group is made up of mutliple srcs
+    # If source is in this list, then params must be overwritten, as it contributes
+    # to a combined emission group.
     if src in (['motorcycles', 'passenger cars',
                 'heavy-duty vehicles', 'diesel highway']):
+        # Directly overwrite the params dictionary
         params = read_excel_params2(proxy_file_path, source_name, src,
                                     sheet='emi_proxy_mapping')
     else:
         params = params
 
-    # Read in input_data[0]
-
+    # Read in the first file - InvDB data
     emi_df = (
-        # read in the data
         pd.read_excel(
             in_path[0],
-            sheet_name=params["arguments"][0],  # param
-            skiprows=params["arguments"][1],    # param
+            sheet_name=params["arguments"][0],  # Sheet name
+            skiprows=params["arguments"][1],    # Skip rows
             index_col=None
         )
     )
-    # Initialize years
+    # Specify years to keep
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
+    # Clean and format the data
     emi_df = (
+        # Rename columns
         emi_df.rename(columns=lambda x: str(x).lower())
         .rename(columns={"georef": "state_code"})
+        # Query for CH4 emissions
         .query('ghg == "CH4"')
+        # Query for whether subcategory1 contains any of the sources
         .query(f'subcategory1.str.contains("{params["substrings"][0]}", regex=True)',
-               engine='python')  # param
+               engine='python')
+        # Filter state code and years
         .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
+        # Replace NA values with 0
         .replace(0, pd.NA)
         .apply(pd.to_numeric, errors="coerce")
         .dropna(how="all")
         .fillna(0)
         .reset_index()
+        # Melt the data: unique state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
+        # Convert tg to kt
         .assign(ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
         .drop(columns=["ch4_tg"])
         .astype({"year": int, "ch4_kt": float})
         .fillna({"ch4_kt": 0})
+        # Ensure state/year grouping is unique
         .groupby(["state_code", "year"]).sum().reset_index()
-        .query("year.between(@min_year, @max_year-1)")  # Missing 2022
+        # Ensure only years between min_year and max_year are included
+        .query("year.between(@min_year, @max_year-1)")  # Missing 2022 in SIT Mobile
         .sort_values(["state_code", "year"])
     )
-    ################################################################################
-    # End Here if subcategory is in list
+    ####################################################################################
+    # End the function here if the source is in the list
     if src in (["alternative fuel highway", "farm equipment",
                 "construction equipment", "other", "diesel highway"]):
 
@@ -102,35 +132,40 @@ def get_comb_mobile_inv_data(in_path, src, params):
 
         return emi_df
 
-    ################################################################################
+    ####################################################################################
 
-    # Read in input_data[1]
+    # Read in the second file - SIT Mobile data
     emi_df2 = (
-        # read in the data
         pd.read_excel(
             in_path[1],
-            sheet_name=params["arguments"][2],  # param
+            sheet_name=params["arguments"][2],  # Sheet name
             index_col=None
         )
     )
 
+    # Clean and format the data
     emi_df2 = (
+        # Rename columns
         emi_df2.rename(columns=lambda x: str(x).lower())
         .drop(columns=["state"])
         .rename(columns={'unnamed: 0': 'state_code'})
         # Remove CO2 from sector and get emissions for specific subcategory
-        .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')  # param
-        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")') # param
+        .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
+        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
+        # Melt the data: unique state/sector
         .melt(id_vars=["state_code", "sector"],
               var_name="year",
               value_name="ch4_metric")
         .astype({"year": int})
+        # Ensure only years between min_year and max_year are included
         .query("year.between(@min_year, @max_year)")
+        # Pivot the data: unique state/year
         .pivot_table(index=["state_code", "year"],
                      columns="sector",
                      values="ch4_metric")
     )
 
+    # Calculate the relative proportion of emissions
     emi_df2 = (
         emi_df2.div(emi_df2.iloc[:, 0], axis=0)
         .drop(columns=emi_df2.columns[0])
@@ -139,34 +174,47 @@ def get_comb_mobile_inv_data(in_path, src, params):
         .reset_index()
     )
 
-    ################################################################################
+    ####################################################################################
 
+    # Merge the two dataframes
     emi_df3 = (
         pd.merge(emi_df, emi_df2, on=["state_code", "year"], how="left")
         .assign(ghgi_ch4_kt=lambda df: df.iloc[:, 2] * df["proportion"])
     )
 
+    # Drop unnecessary columns
     emi_df3 = emi_df3.drop(columns=["proportion", emi_df3.columns[2]])
 
     return emi_df3
 
 
-################################################################################
-################################################################################
+########################################################################################
+########################################################################################
 
 # %% STEP 2. Initialize Parameters
+"""
+This section initializes the parameters for the task and stores them in the
+emi_parameters_dict.
 
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+file. The parameters are used to create the pytask task for the emi.
+"""
+# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
 source_name = "1A_mobile_combustion"
-source_path = "combustion_mobile"
+# Directory name for GHGI data
+source_path = "1A_mobile_combustion"
 
+# Data Guide Directory
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-
+# Read and query for the source name (ghch4i_name)
 proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
-# Edited for multiple filenames
+# Initialize the emi_parameters_dict
+# This process is different from other emi_functions, as it reads in multiple files
 emi_parameters_dict = {}
+# Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     filenames = data.file_name.iloc[0].split(",")
     emi_parameters_dict[emi_name] = {
@@ -177,9 +225,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
     }
 
 emi_parameters_dict
-# if src in cars, motorcycles then.
-# if src in diesel, trucks/buses then.
-# else...
+
 
 # %% STEP 3. Create Pytask Function and Loop
 
@@ -194,18 +240,21 @@ for _id, _kwargs in emi_parameters_dict.items():
         output_path: Annotated[Path, Product],
     ) -> None:
 
+        # Initialize the emi_df_list
         emi_df_list = []
+        # Loop through the input paths and source list to get the emissions data
         for ghgi_group in source_list:
             individual_emi_df = get_comb_mobile_inv_data(input_paths,
                                                          ghgi_group,
                                                          parameters)
             emi_df_list.append(individual_emi_df)
 
+        # Concatenate the emissions data and group by state and year
         emission_group_df = (
             pd.concat(emi_df_list)
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
             .reset_index()
         )
-        emission_group_df.head()
+        # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)
