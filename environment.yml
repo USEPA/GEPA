@@ -4,11 +4,17 @@ name: gch4i
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.12
+  - pyarrow
+  - gdal
+  - rasterio
+  - geopandas
+  - fiona
   # - basemap # added by Nathan -- needed for module data_plot_functions (in "Global_Functions")
   - black
   - cartopy
-  # - xlrd # added by Hannah -- needed in Coal
+  - dask
+  - xlrd # added by Hannah -- needed in Coal and lng_storage_proxy
   - invoke
   - jupyter
   - jupyterlab
@@ -19,10 +25,11 @@ dependencies:
   - pandas
   - pandas-flavor
   - pandas-profiling
+  - pyxlsb
   # - plotly
   # - pyjanitor
   - pylint
-  # - pyodbc # added by Nathan -- needed in Wastewater
+  - pyodbc # added by Nathan -- needed in Wastewater
   - pyprojroot
   # - pyshp # added by Hannah -- needed in Petroleum Systems
   - python-duckdb
@@ -33,17 +40,15 @@ dependencies:
   - xarray
   - openpyxl
   # - tabula-py
-  - pyarrow
-  - geopandas
   # - pyodbc
   - geopy
   # - PyPDF2
   - pytask
-  - rasterio
   - geocube
-  - pyogrio # use 
+  - pyogrio # use
   - rioxarray
   - pip
+  - xlsxwriter
+  - lxml
   - pip:
       - -e . # this will install the gch4i package in your environment in dev mode
- 

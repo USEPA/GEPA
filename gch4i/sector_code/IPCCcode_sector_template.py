@@ -36,7 +36,7 @@ from gch4i.config import (
     gridded_data_path,
     data_dir_path,
 )
-from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
+from gch4i.utils import ARR_SHAPE, GEPA_PROFILE
 from gch4i.utils import (
     calc_conversion_factor,
     load_area_matrix,

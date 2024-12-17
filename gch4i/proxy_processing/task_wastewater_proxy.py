@@ -1,10 +1,10 @@
 # %%
 from pathlib import Path
+
 from typing import Annotated, List, Dict
 from zipfile import ZipFile
 import calendar
 import datetime
-
 import requests
 import time
 from pyarrow import parquet
@@ -20,6 +20,7 @@ from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
+
 from gch4i.config import (
     V3_DATA_PATH,
     proxy_data_dir_path,
@@ -33,7 +34,6 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
-
 # %%
 
 # Read in emi data
@@ -45,7 +45,6 @@ ww_fv_emi = pd.read_csv(emi_data_dir_path / "ww_fv_emi.csv")
 ww_mp_emi = pd.read_csv(emi_data_dir_path / "ww_mp_emi.csv")
 ww_petrref_emi = pd.read_csv(emi_data_dir_path / "ww_petrref_emi.csv")
 ww_pp_emi = pd.read_csv(emi_data_dir_path / "ww_pp_emi.csv")
-
 
 # GHGRP Data
 ghgrp_emi_ii_inputfile = proxy_data_dir_path / "wastewater/ghgrp_subpart_ii.csv"
@@ -109,10 +108,11 @@ def extract_industry_facilities(echo_nonpotw, industry_name, naics_codes, sic_co
     return industry_df
 
 
+
 def convert_state_names_to_codes(df, state_column):
     """
     Convert full state names in a DataFrame column to two-letter state codes.
-    If column already contains valid two-letter codes, return DataFrame unchanged.
+
 
     Parameters:
     df (pd.DataFrame): The DataFrame containing the state names.
@@ -135,7 +135,7 @@ def convert_state_names_to_codes(df, state_column):
         'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT', 'Virginia': 'VA', 'Washington': 'WA',
         'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
     }
-    
+
     # Get set of valid state codes
     valid_codes = set(state_name_to_code.values())
     
@@ -415,6 +415,7 @@ def calculate_emissions_proxy(emi_df, ghgrp_df, echo_df, year_range):
     return final_proxy_df
 
 
+
 def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, industry='Pulp and Paper'):
     """
     Process facilities data, match with GHGRP data, and distribute emissions.
@@ -434,7 +435,6 @@ def process_facilities_and_emissions(echo_df, ghgrp_df, emi_df, year_range, indu
     echo_df['ghgrp_match'] = 0
     echo_df['emis_kt'] = 0
     ghgrp_df['found'] = 0
-
     ghgrp_df['data_source'] = 'ghgrp'
     
     # Step 1 Data wrangling
@@ -558,6 +558,7 @@ def merge_facility_and_emissions_data(facility_info, facility_emis):
     ghgrp_ind = pd.merge(facility_info, facility_emis)
     ghgrp_ind['emis_kt_tot'] = ghgrp_ind['ghg_quantity'] / 1e3  # convert to kt
     return ghgrp_ind
+
 
 def filter_by_naics(df, naics_codes):
     """
@@ -956,6 +957,7 @@ frs_brew = pd.concat([frs_brew, new_rows], ignore_index=True)
 ### FRS now contains brewery data that will be used in the ww_brew proxy data
 # %% Step 2.3 ECHO data processing
 
+
 echo_file_directory = proxy_data_dir_path / "wastewater/ECHO"
 combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
 
@@ -965,8 +967,8 @@ if combined_echo_file_path.exists():
 else:
     echo_full = read_and_combine_csv_files(echo_file_directory)
 
-
 # %% Step 2.3.1 Process the potw and non-potw facilities
+
 
 # Process POTW facilities
 echo_potw = clean_and_group_echo_data(echo_full, 'POTW')
@@ -1026,6 +1028,7 @@ facility_emis = rename_columns(facility_emis, facility_emis_columns)
 ghgrp_ind = merge_facility_and_emissions_data(facility_info, facility_emis)
 ghgrp_ind['NAICS Code'] = ghgrp_ind['NAICS Code'].astype(str)
 
+
 # Filter data for different industries
 industry_filters = {
     'pp': '322',      # Pulp and paper
@@ -1045,7 +1048,6 @@ ghgrp_fv = ghgrp_industries['fv']
 ghgrp_eth = ghgrp_industries['eth']
 ghgrp_brew = ghgrp_industries['brew']
 ghgrp_ref = ghgrp_industries['ref']
-
 
 # %% Step 2.7 Join GHGRP, ECHO, and emi data
 

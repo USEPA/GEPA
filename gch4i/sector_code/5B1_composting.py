@@ -10,7 +10,8 @@ Output Files:
                     - {FULL_NAME}_ch4_kt_per_year.tif
                     - {FULL_NAME}_ch4_emi_flux.tif
 Notes:
-TODO: get latest inventory data
+NOTE: THIS IS NOT A COMPLETE SCRIPT. IT IS A SHELL BEING KEPT UNTIL WE KNOW COMPOSTING
+FITS INTO THE NEW STANDARD GRIDDER FRAMEWORK. THIS SCRIPT IS NOT CURRENTLY BEING USED.
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -25,7 +26,7 @@ import geopandas as gpd
 import pandas as pd
 import seaborn as sns
 from IPython.display import display
-from shapely import Point, wkb
+
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -54,8 +55,11 @@ from gch4i.utils import (
 
 gpd.options.io_engine = "pyogrio"
 
+
 # TODO: move to emis file
-def get_composting_inventory_data(input_path, output_path):
+@mark.persist
+@task(id="composting_emi")
+def task_composting_emi(input_path, output_path):
     emi_df = (
         pd.read_excel(
             input_path,
@@ -100,125 +104,13 @@ def get_composting_inventory_data(input_path, output_path):
         .fillna({"ghgi_ch4_kt": 0})
         # get only the years we need
         .query("year.between(@min_year, @max_year)")
-        .query("state_code.isin(@state_gdf['state_code'])")
+        # .query("state_code.isin(@state_gdf['state_code'])")
     )
     emi_df.to_csv(output_path)
     return emi_df
 
 
-def get_composting_proxy_data(
-    excess_food_op_path,
-    frs_facility_path,
-    frs_naics_path,
-    biocycle_path,
-    comp_council_path,
-    state_gdf,
-):
 
-    excess_food_df = (
-        pd.read_excel(
-            excess_food_op_path,
-            sheet_name="Data",
-            usecols=["Name", "Latitude", "Longitude"],
-        ).rename(columns=str.lower)
-        # .rename(columns={"state": "state_code"})
-        # .query("state_code.isin(@state_info_df['state_code'])")
-        .assign(
-            formatted_fac_name=lambda df: name_formatter(df["name"]), source="ex_food"
-        )
-    )
-    excess_food_df
-
-    # get the composting facilities from the FRS database based on the NAICS code.
-    # I use duckdb for a bit of performance in these very large tables over pandas.
-    frs_composting_fac_df = (
-        duckdb.execute(
-            (
-                "SELECT frs_main.primary_name as name, frs_main.latitude83 as latitude, frs_main.longitude83 as longitude "
-                f"FROM (SELECT registry_id, primary_name, latitude83, longitude83 FROM '{frs_facility_path}') as frs_main "
-                f"JOIN (SELECT registry_id, naics_code FROM '{frs_naics_path}') AS frs_naics "
-                "ON frs_main.registry_id = frs_naics.registry_id "
-                f"WHERE naics_code == {COMPOSTING_FRS_NAICS_CODE}"
-            )
-        )
-        .df()
-        .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
-    )
-    frs_composting_fac_df
-
-    biocycle_df = (
-        pd.read_csv(biocycle_path)
-        .rename(columns={"lat": "latitude", "lon": "longitude"})
-        .assign(source="biocycle")
-    )
-    biocycle_df
-
-    # google earth exports 3d points, covert them to 2d to avoid issues.
-    _drop_z = lambda geom: wkb.loads(wkb.dumps(geom, output_dimension=2))
-
-    comp_council_gdf = (
-        gpd.read_file(comp_council_path, driver="KML")
-        .rename(columns=str.lower)
-        .drop(columns="description")
-        .assign(
-            formatted_fac_name=lambda df: name_formatter(df["name"]),
-            geometry=lambda df: df.geometry.transform(_drop_z),
-            source="comp_council",
-        )
-    )
-    comp_council_gdf
-
-    # there is a two step process to get all facilities in one dataframe:
-    # 1) put together the facilities that have lat/lon columns and make them
-    # geodataframes,
-    facility_concat_df = pd.concat(
-        [frs_composting_fac_df, biocycle_df, excess_food_df]
-    ).sort_values("formatted_fac_name")
-    facility_concat_gdf = gpd.GeoDataFrame(
-        facility_concat_df.drop(columns=["latitude", "longitude"]),
-        geometry=gpd.points_from_xy(
-            facility_concat_df["longitude"], facility_concat_df["latitude"]
-        ),
-        crs=4326,
-    )
-    # 2) concat these with the facilities data that are already geodataframes.
-    facility_concat_2_gdf = pd.concat([comp_council_gdf, facility_concat_gdf])
-    facility_concat_2_gdf = facility_concat_2_gdf[
-        facility_concat_2_gdf.is_valid & ~facility_concat_2_gdf.is_empty
-    ]
-    facility_concat_2_gdf.normalize()
-
-    # Remove duplicate facilities based on our spatial tolerance
-    # if two or more facilities fall within the tolerance, only 1 location is kept, the
-    # resulting centroid will be at the intersection of their buffers.
-    final_facility_gdf = (
-        facility_concat_2_gdf.to_crs("ESRI:102003")
-        .assign(geometry=lambda df: df.buffer(DUPLICATION_TOLERANCE_M))
-        .dissolve()
-        .explode()
-        .centroid.to_frame()
-        .to_crs(4326)
-        .sjoin(state_gdf[["geometry", "state_code"]])
-        .drop(columns="index_right")
-        .rename_geometry("geometry")
-    )
-
-    # NOTE: DC has no facilities listed, but has 1 year (2012) with reported emissions.
-    # Erin email note on DC: My understanding is that (industrial) composting in DC has
-    # been outsources to MD. Since the inventory is trying to capture the distribution
-    # of industrial composting emissions, let’s manually add a single facility location
-    # for DC. Let’s use the Fort Totten Waste Transfer Station (lat/lon: 38.947624,
-    # -77.001213). We can make a note of this in the data and assumptions document and
-    # this assumption can be re-visited in later iterations.
-    final_facility_gdf = pd.concat(
-        [
-            final_facility_gdf,
-            state_gdf[state_gdf["state_code"] == "DC"][
-                ["state_code", "geometry"]
-            ].assign(geometry=Point(-77.001213, 38.947624)),
-        ]
-    ).reset_index(drop=True)
-    return final_facility_gdf
 
 
 # https://www.epa.gov/system/files/documents/2024-02/us-ghg-inventory-2024-main-text.pdf
@@ -235,7 +127,7 @@ netcdf_description = (
 
 # PATHS
 composting_dir = ghgi_data_dir_path / "composting"
-sector_data_dir_path = V3_DATA_PATH / "sector"
+
 
 # OUTPUT FILES
 ch4_kt_dst_path = tmp_data_dir_path / f"{FULL_NAME}_ch4_kt_per_year"
@@ -246,36 +138,27 @@ inventory_workbook_path = composting_dir / "State_Composting_1990-2021.xlsx"
 
 # PROXY INPUT FILES
 # state vector refence with state_code
-state_geo_path = global_data_dir_path / "tl_2020_us_state.zip"
+state_geo_path = 
 # input 1: excess food opportunities data
-excess_food_op_path = sector_data_dir_path / "CompostingFacilities.xlsx"
+excess_food_op_path = 
 # input 2: frs facilities where NAICS code is for composting
-frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
-frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
+frs_naics_path = 
+frs_facility_path = 
 # input 3: biocycle facility locations pulled from v2
-biocycle_path = sector_data_dir_path / "biocycle_locs_clean.csv"
+biocycle_path = 
 # input 4: ad council data from their kml file
-comp_council_path = sector_data_dir_path / "STA Certified Compost Participants Map.kml"
+comp_council_path = 
 
 # the NAICS code pulled from the v2 notebook for facilities in the FRS data
-COMPOSTING_FRS_NAICS_CODE = 562219
+
 # the spatial tolerance for removing duplicate facility points
-DUPLICATION_TOLERANCE_M = 250
+
 # %% STEP 1. Load GHGI-Proxy Mapping Files ---------------------------------------------
 
 # %% STEP 2: Read In EPA State GHGI Emissions by Year ----------------------------------
 
 # Get state vectors and state_code for use with inventory and proxy data
-state_gdf = (
-    gpd.read_file(state_geo_path)
-    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-    .rename(columns=str.lower)
-    .rename(columns={"stusps": "state_code", "name": "state_name"})
-    .astype({"statefp": int})
-    # get only lower 48 + DC
-    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-    .to_crs(4326)
-)
+
 
 EPA_state_emi_df = get_composting_inventory_data(inventory_workbook_path)
 
