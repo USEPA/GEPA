@@ -43,7 +43,7 @@ from gch4i.config import (
     tmp_data_dir_path,
     data_dir_path,
 )
-from gch4i.gridding import ARR_SHAPE, GEPA_PROFILE
+from gch4i.utils import ARR_SHAPE, GEPA_PROFILE
 from gch4i.utils import calc_conversion_factor, load_area_matrix, write_tif_output, tg_to_kt
 
 # %% # Set paths to input EPA inventory data, proxy mapping files, and proxy data

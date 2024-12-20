@@ -26,7 +26,7 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
-t_to_kt = 0.001
+tg_to_kt = 0.001
 year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
 num_years = len(year_range)
@@ -38,7 +38,7 @@ def task_get_reporting_msw_landfills_proxy_data(
     subpart_hh_path = "https://data.epa.gov/efservice/hh_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_reporting_proxy.parquet",
+    / "msw_landfills_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -70,7 +70,7 @@ def task_get_reporting_msw_landfills_proxy_data(
                  "zip"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * t_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='last')
     .astype({"year": int})
@@ -104,7 +104,7 @@ def get_nonreporting_msw_landfills_proxy_data(
     MSW_FRS_NAICS_CODE = 562219,
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     nonreporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "msw_landfills_nonreporting_proxy.parquet",
+    / "msw_landfills_nr_proxy.parquet",
     ):
 
     # Non-reporting facilities from LMOP and WBJ
