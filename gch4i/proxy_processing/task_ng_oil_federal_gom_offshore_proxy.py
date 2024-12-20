@@ -29,8 +29,8 @@ from gch4i.utils import us_state_to_abbrev
 
 # %%
 @mark.persist
-@task(id="federal_gom_offshore_proxy")
-def task_get_federal_gom_offshore_proxy_data(
+@task(id="ng_oil_federal_gom_offshore_proxy")
+def task_get_ng_oil_federal_gom_offshore_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     GOADS_11_path: Path = sector_data_dir_path / "boem" / "2011_Gulfwide_Platform_Inventory.accdb",
     GOADS_14_path: Path = sector_data_dir_path / "boem" / "2014_Gulfwide_Platform_Inventory.accdb",
