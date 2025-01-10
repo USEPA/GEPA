@@ -24,6 +24,7 @@ import numpy as np
 import rioxarray
 from geocube.api.core import make_geocube
 import rasterio
+from tqdm.auto import tqdm
 
 
 # %%
@@ -31,10 +32,15 @@ import rasterio
 source_dir = sector_data_dir_path / "combustion_stationary"
 
 
+pop_paths = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif"))
+pop_paths
+# %%
+
+
 @mark.persist
 def task_rwc_proxy(
     NEI_resi_wood_inputfile: Path = source_dir / "NEI 2020 RWC Throughputs.xlsx",
-    pop_input_path: Path = tmp_data_dir_path / "usa_ppp_2020_reprojected.tif",
+    pop_input_paths: Path = pop_paths,
     county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path / "rwc_proxy.nc",
@@ -52,6 +58,7 @@ def task_rwc_proxy(
     # vintage of county fips codes. The 2020 data match the census data, so these
     # replacements are not needed.
 
+    # read in the throughput data, format it
     rwc_df = (
         pd.read_excel(NEI_resi_wood_inputfile)
         .query("(ThroughputUnit == 'TON') & (SourceClassificationCode != 2104009000)")
@@ -64,7 +71,7 @@ def task_rwc_proxy(
     )
     rwc_df.head()
     # %%
-    # sum up the throughput by county
+    # sum up the throughput by county for all the types
     county_sums = rwc_df.groupby(["fips"])["throughput"].sum()
     county_sums.head()
     # %%
@@ -86,13 +93,24 @@ def task_rwc_proxy(
     # plot the data to have a look
     county_w_rwc_gdf.plot("throughput", cmap="hot", legend=True)
     # %%
-    # we can see here that when joined with states, there are no missing data. If we
-    # were to perform the replacements, we would find missing data.
-    county_w_rwc_gdf[county_w_rwc_gdf["throughput"].isna()]
+    # we can see here that when joined with Census county data, there are no missing
+    # data. If we were to perform the replacements, we would find missing data.
+
+    cnty_missing_data = county_w_rwc_gdf["throughput"].isna().sum()
+
+    if cnty_missing_data > 0:
+        print("are there any counties missing throughput data?", cnty_missing_data)
+        county_w_rwc_gdf[county_w_rwc_gdf["throughput"].isna()]
+    else:
+        print("no missing data in the county throughput data")
     # %%
-    # read in the population data
+    # get the gepa profile
+    gepa_profile = GEPA_spatial_profile()
+    gepa_profile.profile["count"] = 1
+    # %%
+    # read in the population data. This one is reference to create the county grid
     pop_xr = (
-        rioxarray.open_rasterio(pop_input_path)
+        rioxarray.open_rasterio(pop_input_paths[0])
         .squeeze("band")
         .drop_vars("band")
         .where(lambda x: x >= 0)
@@ -106,66 +124,94 @@ def task_rwc_proxy(
         .astype({"geoid": int})[["geometry", "geoid", "throughput"]]
         .set_index("geoid")
     )
+    # make the county grid
     cnty_grid = make_geocube(
         vector_data=cnty_int_gdf.reset_index(),
         measurements=["geoid"],
         like=pop_xr,
         fill=99,
     )
+    # %%
 
-    # assign the county geoid to the population grid
-    pop_xr["geoid"] = cnty_grid["geoid"]
-    pop_xr
+    res_dict = {}
+    # we apply the 2020 throughput to the population data for the years we have pop data
+    for pop_path in tqdm(pop_input_paths):
+        the_year = int(pop_path.stem.split("_")[-2])
+        pop_xr = (
+            rioxarray.open_rasterio(pop_input_paths[0])
+            .squeeze("band")
+            .drop_vars("band")
+            .where(lambda x: x >= 0)
+        )
+
+        # assign the county geoid to the population grid
+        pop_xr["geoid"] = cnty_grid["geoid"]
+
+        # normalize the population at the county level
+        cnty_pop_normed_xr = (
+            pop_xr.groupby(["geoid"])
+            .apply(normalize)
+            .sortby(["y", "x"])
+            .where(lambda x: x["geoid"] >= 0, drop=True)
+        )
+
+        # we not now have a population dataset that is normalized to the county level
+        # so we now allocate the tons of throughput of residential wood combustion to
+        # the county level. This will take the TONS of rwc and allocate it to the
+        # county level by the normalize population data.
+        results = []
+        for geoid, data in cnty_pop_normed_xr.groupby("geoid"):
+            # if this isn't a county, make the values 0
+            if geoid == 99:
+                throughput = 0
+            else:
+                throughput = cnty_int_gdf.loc[geoid]["throughput"]
+            res = data * throughput
+            results.append(res)
+
+        # put the results back together
+        rwc_xr = (
+            xr.concat(results, dim="stacked_y_x")
+            .unstack("stacked_y_x")
+            .drop_vars("geoid")
+            .sortby(["y", "x"])
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs(4326)
+            .rio.write_transform(pop_xr.rio.transform())
+            .rio.set_attrs(pop_xr.attrs)
+        )
+        rwc_xr
+        rwc_xr.plot()
+
+        # this is a hacky thing, but for some reason the above concat strips the geo
+        # information from the xarray and I can't get it back in there. So I save the
+        # file to a temporary file and read it back in. rioxarray.open_rasterio
+        # restores the geo information so then we can keep going.
+
+        tmp_file = rasterio.MemoryFile()
+        rwc_xr.rio.to_raster(tmp_file.name, profile=gepa_profile.profile)
+        rwc_xr = (
+            rioxarray.open_rasterio(tmp_file)
+            .squeeze("band")
+            .drop_vars("band")
+            .assign_coords(year=the_year)
+        )
+        rwc_xr.plot()
+        res_dict[the_year] = rwc_xr
+
     # %%
-    # normalize the population at the county level
-    cnty_pop_normed_xr = (
-        pop_xr.groupby(["geoid"])
-        .apply(normalize)
-        .sortby(["y", "x"])
-        .where(lambda x: x["geoid"] >= 0, drop=True)
-    )
-    cnty_pop_normed_xr
+    # since we have population data up to 2020, we need to duplicate the latest data
+    # into the years we don't have
+    expanded_years = [x for x in years if x not in res_dict.keys()]
+    latest_year = max(res_dict.keys())
+    expanded_years, latest_year
+    for the_year in expanded_years:
+        res_dict[the_year] = res_dict[latest_year].assign_coords(year=the_year)
     # %%
-    # we not now have a population dataset that is normalized to the county level
-    # so we now allocate the tons of throughput of residential wood combustion to the
-    # county level. This will take the TONS of rwc and allocate it to the county level
-    # by the normalize population data.
-    results = []
-    for geoid, data in cnty_pop_normed_xr.groupby("geoid"):
-        # if this isn't a county, make the values 0
-        if geoid == 99:
-            throughput = 0
-        else:
-            throughput = cnty_int_gdf.loc[geoid]["throughput"]
-        res = data * throughput
-        results.append(res)
-    # %%
-    # put the results back together
-    rwc_xr = (
-        xr.concat(results, dim="stacked_y_x")
-        .unstack("stacked_y_x")
-        .drop_vars("geoid")
-        .sortby(["y", "x"])
-        .rio.set_spatial_dims(x_dim="x", y_dim="y")
-        .rio.write_crs(4326)
-        .rio.write_transform(pop_xr.rio.transform())
-        .rio.set_attrs(pop_xr.attrs)
+    rwc_xr = xr.concat(
+        list(res_dict.values()), dim="year", create_index_for_new_dim=True
     )
     rwc_xr
-    rwc_xr.plot()
-    # %%
-    # this is a hacky thing, but for some reason the above concat strips the geo
-    # information from the xarray and I can't get it back in there. So I save the file
-    # to a temporary file and read it back in. rioxarray.open_rasterio restores the geo
-    # information so then we can keep going.
-
-    gepa_profile = GEPA_spatial_profile()
-    gepa_profile.profile["count"] = 1
-    tmp_file = rasterio.MemoryFile()
-    rwc_xr.rio.to_raster(tmp_file.name, profile=gepa_profile.profile)
-    rwc_xr = rioxarray.open_rasterio(tmp_file).squeeze("band").drop_vars("band")
-    rwc_xr.plot()
-
     # %%
     # read the state geospatial data and make it into a grid. Assign that grid to the
     # rwc data so we can normalize the data to the state level.
@@ -189,13 +235,15 @@ def task_rwc_proxy(
     rwc_xr["statefp"].plot()
 
     # %%
+    def normalize(data):
+        return data / data.sum()
 
     # apply the normalization function to the data
     out_ds = (
-        rwc_xr.groupby(["statefp"])
+        rwc_xr.groupby(["statefp", "year"])
         .apply(normalize)
         .to_dataset(name="rel_emi")
-        .expand_dims(year=years)
+        # .expand_dims(year=years)
         .sortby(["year", "y", "x"])
     )
     out_ds["rel_emi"].shape
