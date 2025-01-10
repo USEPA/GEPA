@@ -24,6 +24,7 @@ import rasterio
 import rioxarray
 from geocube.api.core import make_geocube
 from pytask import Product, mark, task
+import pytask
 
 from gch4i.config import (
     global_data_dir_path,
@@ -73,18 +74,12 @@ for year in years:
     zip_path = nass_cdl_path / zip_file_name
     cdl_input_path = nass_cdl_path / tif_file_name
 
-    cdl_download_dict[f"cdl_{year}"] = dict(
+    cdl_download_dict[f"cdl_dl_{year}"] = dict(
         url=url,
         zip_path=zip_path,
-        cdl_input_path=cdl_input_path,
+        cdl_path=cdl_input_path,
     )
 
-# (
-#     url,
-#     zip_path,
-#     cdl_input_path,
-# ) = cdl_download_dict["cdl_2014"].values()
-# url, zip_path, cdl_input_path
 
 for _id, kwargs in cdl_download_dict.items():
 
@@ -93,12 +88,42 @@ for _id, kwargs in cdl_download_dict.items():
     def task_download_cdl(
         url: str,
         zip_path: Annotated[Path, Product],
-        cdl_path: Annotated[Path, Product],
     ):
         download_url(url, zip_path)
+
+
+cdl_unzip_dict = {}
+for year in years:
+
+    zip_file_name = f"{year}_30m_cdls.zip"
+    tif_file_name = f"{year}_30m_cdls.tif"
+
+    zip_path = nass_cdl_path / zip_file_name
+    cdl_input_path = nass_cdl_path / tif_file_name
+
+    cdl_unzip_dict[f"cdl_unzip_{year}"] = dict(
+        zip_path=zip_path,
+        cdl_path=cdl_input_path,
+    )
+
+for _id, kwargs in cdl_unzip_dict.items():
+
+    @mark.persist
+    @task(id=_id, kwargs=kwargs)
+    def task_unzip_cdl(
+        zip_path: Annotated[Path, Product],
+        cdl_path: Annotated[Path, Product],
+    ):
         unzip_cdl(zip_path, cdl_path)
 
 
+# %%
+
+
+pytask.build(
+    tasks=[task_download_cdl(**kwargs) for kwargs in cdl_download_dict.values()]
+)
+pytask.build(tasks=[task_unzip_cdl(**kwargs) for kwargs in cdl_unzip_dict.values()])
 # %%
 
 calc_crop_perc = {}
@@ -120,29 +145,32 @@ for crop_name, crop_vals in crop_val_dict.items():
         )
 calc_crop_perc
 
-for _id, kwargs in calc_crop_perc.items():
+# for _id, kwargs in calc_crop_perc.items():
 
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_calc_cdl_perc(
-        cdl_input_path: Path,
-        output_path_binary: Annotated[Path, Product],
-        output_path_perc: Annotated[Path, Product],
-        crop_vals: np.array,
-    ):
 
-        make_raster_binary(
-            input_path=cdl_input_path,
-            output_path=output_path_binary,
-            true_vals=crop_vals,
-            num_workers=NUM_WORKERS,
-        )
-        warp_to_gepa_grid(
-            input_path=output_path_binary,
-            output_path=output_path_perc,
-            num_threads=NUM_WORKERS,
-        )
+#     @mark.persist
+#     @task(id=_id, kwargs=kwargs)
+def task_calc_cdl_perc(
+    cdl_input_path: Path,
+    output_path_binary: Annotated[Path, Product],
+    output_path_perc: Annotated[Path, Product],
+    crop_vals: np.array,
+):
 
+    make_raster_binary(
+        input_path=cdl_input_path,
+        output_path=output_path_binary,
+        true_vals=crop_vals,
+        num_workers=NUM_WORKERS,
+    )
+    warp_to_gepa_grid(
+        input_path=output_path_binary,
+        output_path=output_path_perc,
+        num_threads=NUM_WORKERS,
+    )
+
+
+pytask.build(tasks=[task_calc_cdl_perc(**kwargs) for kwargs in calc_crop_perc.values()])
 
 # %%
 proxy_stack_dict = {}
@@ -261,3 +289,6 @@ for _id, kwargs in proxy_stack_dict.items():
         out_ds["crops"].transpose("year", "y", "x").round(10).rio.write_crs(
             ras_crs
         ).to_netcdf(output_path)
+
+
+# %%
