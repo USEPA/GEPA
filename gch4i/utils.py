@@ -752,13 +752,83 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     plt.close()
 
 
+us_state_to_abbrev_dict = {
+    "Alabama": "AL",
+    "Alaska": "AK",
+    "Arizona": "AZ",
+    "Arkansas": "AR",
+    "California": "CA",
+    "Colorado": "CO",
+    "Connecticut": "CT",
+    "Delaware": "DE",
+    "Florida": "FL",
+    "Georgia": "GA",
+    "Hawaii": "HI",
+    "Idaho": "ID",
+    "Illinois": "IL",
+    "Indiana": "IN",
+    "Iowa": "IA",
+    "Kansas": "KS",
+    "Kentucky": "KY",
+    "Louisiana": "LA",
+    "Maine": "ME",
+    "Maryland": "MD",
+    "Massachusetts": "MA",
+    "Michigan": "MI",
+    "Minnesota": "MN",
+    "Mississippi": "MS",
+    "Missouri": "MO",
+    "Montana": "MT",
+    "Nebraska": "NE",
+    "Nevada": "NV",
+    "New Hampshire": "NH",
+    "New Jersey": "NJ",
+    "New Mexico": "NM",
+    "New York": "NY",
+    "North Carolina": "NC",
+    "North Dakota": "ND",
+    "Ohio": "OH",
+    "Oklahoma": "OK",
+    "Oregon": "OR",
+    "Pennsylvania": "PA",
+    "Rhode Island": "RI",
+    "South Carolina": "SC",
+    "South Dakota": "SD",
+    "Tennessee": "TN",
+    "Texas": "TX",
+    "Utah": "UT",
+    "Vermont": "VT",
+    "Virginia": "VA",
+    "Washington": "WA",
+    "West Virginia": "WV",
+    "Wisconsin": "WI",
+    "Wyoming": "WY",
+    "District of Columbia": "DC",
+    "American Samoa": "AS",
+    "Guam": "GU",
+    "Northern Mariana Islands": "MP",
+    "Puerto Rico": "PR",
+    "United States Minor Outlying Islands": "UM",
+    "U.S. Virgin Islands": "VI",
+}
+
+
+def us_state_to_abbrev(state_name: str) -> str:
+    """converts a full US state name to the two-letter abbreviation"""
+    return (us_state_to_abbrev_dict[state_name] 
+            if state_name in us_state_to_abbrev_dict 
+            else state_name)
+
+
 def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
     """
     Function to compare and plot the difference between v2 and v3 for each year of the
     raster data for each sector.
     """
     if v2_name is None:
-        Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
+        Warning(
+            f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!"
+            )
     else:
         profile = GEPA_spatial_profile()
 
@@ -799,13 +869,9 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # Comparison of masses:
                 # flux to mass conversion factor
                 area_matrix = load_area_matrix()
-                month_days = [
-                    calendar.monthrange(int(year), x)[1] for x in range(1, 13)
-                ]
+                month_days = [calendar.monthrange(int(year), x)[1] for x in range(1, 13)]
                 year_days = np.sum(month_days)
-                conversion_factor_annual = calc_conversion_factor(
-                    year_days, area_matrix
-                )
+                conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
                 # v2 mass raster sum
                 # divide by the flux conversion factor to transform back into mass units
                 v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
@@ -887,10 +953,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 )
                 plt.title(difference_plot_title, fontsize=14)
                 # Save the plot as a PNG file
-                plt.savefig(
-                    str(figures_data_dir_path)
-                    + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png"
-                )
+                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
                 # Show the plot for review
                 plt.show()
                 # Close the plot
@@ -913,10 +976,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 ax1.set_ylabel("v2 frequency")
                 ax2.set_ylabel("v3 frequency")
                 # Save the plot as a PNG file
-                plt.savefig(
-                    str(figures_data_dir_path)
-                    + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png"
-                )
+                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png")
                 # Show the plot for review
                 plt.show()
                 # Close the plot
@@ -924,76 +984,6 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
 
         result_df = pd.concat(result_list, axis=1)
         return result_df
-
-
-us_state_to_abbrev_dict = {
-    "Alabama": "AL",
-    "Alaska": "AK",
-    "Arizona": "AZ",
-    "Arkansas": "AR",
-    "California": "CA",
-    "Colorado": "CO",
-    "Connecticut": "CT",
-    "Delaware": "DE",
-    "Florida": "FL",
-    "Georgia": "GA",
-    "Hawaii": "HI",
-    "Idaho": "ID",
-    "Illinois": "IL",
-    "Indiana": "IN",
-    "Iowa": "IA",
-    "Kansas": "KS",
-    "Kentucky": "KY",
-    "Louisiana": "LA",
-    "Maine": "ME",
-    "Maryland": "MD",
-    "Massachusetts": "MA",
-    "Michigan": "MI",
-    "Minnesota": "MN",
-    "Mississippi": "MS",
-    "Missouri": "MO",
-    "Montana": "MT",
-    "Nebraska": "NE",
-    "Nevada": "NV",
-    "New Hampshire": "NH",
-    "New Jersey": "NJ",
-    "New Mexico": "NM",
-    "New York": "NY",
-    "North Carolina": "NC",
-    "North Dakota": "ND",
-    "Ohio": "OH",
-    "Oklahoma": "OK",
-    "Oregon": "OR",
-    "Pennsylvania": "PA",
-    "Rhode Island": "RI",
-    "South Carolina": "SC",
-    "South Dakota": "SD",
-    "Tennessee": "TN",
-    "Texas": "TX",
-    "Utah": "UT",
-    "Vermont": "VT",
-    "Virginia": "VA",
-    "Washington": "WA",
-    "West Virginia": "WV",
-    "Wisconsin": "WI",
-    "Wyoming": "WY",
-    "District of Columbia": "DC",
-    "American Samoa": "AS",
-    "Guam": "GU",
-    "Northern Mariana Islands": "MP",
-    "Puerto Rico": "PR",
-    "United States Minor Outlying Islands": "UM",
-    "U.S. Virgin Islands": "VI",
-}
-
-
-def us_state_to_abbrev(state_name: str) -> str:
-    """converts a full US state name to the two-letter abbreviation"""
-    return (
-        us_state_to_abbrev_dict[state_name]
-        if state_name in us_state_to_abbrev_dict
-        else state_name
-    )
 
 
 def download_url(url, output_path):
