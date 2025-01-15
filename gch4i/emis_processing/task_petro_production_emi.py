@@ -1,12 +1,13 @@
 """
 Name:                   task_petro_production_emi.py
-Date Last Modified:     2024-08-27
+Date Last Modified:     2024-12-12
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of petroleum systems emissions
                         to State, Year, emissions format
-Input Files:            1B2aii_petroleum_production.xlsx
+gch4i_name:             1B2aii_petroleum_production
+Input Files:            1B2aii_petroleum_production Input Files
 Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  - This version of emi mapping is draft for mapping .py files
+Notes:                  -
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -20,7 +21,6 @@ import ast
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
-    tmp_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
@@ -93,12 +93,36 @@ def get_petro_production_inv_data(in_path, src, params):
     HF Workovers - Total
         - HF Workovers: Non-REC with Venting
         - HF Workovers: REC with Venting
+    ----------
+
+    This function takes different cleaning paths, depending on the emission source.
+    Some emis group based on multiple sources, while others are based on a
+    single source. The function reads in the data and returns the emissions in kt.
+
+    ----------
+    NOTE: read_excel_params2 must be imported from a_excel_dict.py for this function
+    to execute.
+    ----------
+    Parameters
+    ----------
+    in_path : str
+        path to the input file
+    src : str
+        subcategory of interest
+    params : dict
+        additional parameters
     """
 
+    ####################################################################################
+
+    # Overwrite parameters if Emi group is made up of mutliple srcs
+    # If source is in this list, then params must be overwritten, as it contributes
+    # to a combined emission group.
     if src in (['sales areas, heaters, pressure relief valves', 'tanks',
                 'blowdowns, pipelines, battery pumps',
                 'wellheads, separators, headers, heaters',
                 'chemical injection pumps', 'pneumatic devices - total']):
+        # Directly overwrite the params dictionary
         params = read_excel_params2(proxy_file_path,
                                     source_name,
                                     src,
@@ -106,14 +130,17 @@ def get_petro_production_inv_data(in_path, src, params):
     else:
         params = params
 
+    # Read in the data
     emi_df = pd.read_excel(
         in_path,
         sheet_name=params["arguments"][0],  # Sheet name
-        nrows=params["arguments"][1],  # number of rows
-        skiprows=params["arguments"][2],  # number of rows to skip
+        nrows=params["arguments"][1],  # Number of rows
+        skiprows=params["arguments"][2],  # Skip rows
         index_col=None
         )
 
+    # Create a dictionary to map state names to state codes
+    # Consider replacing this with pre-defined dictionary
     state_dict = {
         "alabama": "AL",
         "alaska": "AK",
@@ -176,87 +203,114 @@ def get_petro_production_inv_data(in_path, src, params):
         "northern mariana is": "MP"
     }
 
+    # Specify years to keep
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
 ########################################################################################
-    # Edits happened here
+    # Follow this path if the source is in the list
     if src in ["offshore gom federal waters",
                "offshore pacific federal and state waters",
                "offshore alaska state waters"]:
+        # If True, 'make_up' list for queryign emission_source
         if src == "offshore alaska state waters":
             make_up = ["Offshore Alaska State Waters, Vent/Leak",
                        "Offshore Alaska State Waters, Flare"]
+        # If True, 'make_up' list for queryign emission_source
         elif src == "offshore pacific federal and state waters":
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
+        # If True, 'make_up' list for queryign emission_source
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
                        "Offshore GoM Federal Waters: Flaring"]
         emi_df = (
+            # Rename columns
             emi_df.rename(columns=lambda x: str(x).lower())
+            # Filter for emission sources and years
             .filter(items=["emission source"] + year_list, axis=1)
+            # Add '_' to emission source
             .rename(columns={"emission source": "emission_source"})
+            # Query for 'make_up' in emissions_source
             .query("emission_source in @make_up")
             )
 
+        # Transpose the dataframe
         emi_df = pd.DataFrame(emi_df.sum()).transpose()
 
         emi_df = (
+            # Melt the data: unique state/year
             emi_df.melt(id_vars="emission_source", var_name="year", value_name="ch4_mt")
+            # Convert mt to kt
             .assign(ghgi_ch4_kt=lambda x: x["ch4_mt"] / 1000)
             .drop(columns=["ch4_mt"])
             .astype({"year": int, "ghgi_ch4_kt": float})
             .fillna({"ghgi_ch4_kt": 0})
+            # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
+            # Make state_code "ALL"
             .assign(state_code="ALL")
+            # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
             .reset_index()
         )
         return emi_df
 
-# 1. Offshore Alaska State Waters, Vent/Leak
-# 2. Offshore Alaska State Waters, Flare
+    ####################################################################################
+    # Path Begins here, if not in previous list
 
-# 1. Offshore Pacific Federal and State Waters, Flare
-# 2. Offshore Pacific Federal and State Waters, Vent/Leak
+    # 1. Offshore Alaska State Waters, Vent/Leak
+    # 2. Offshore Alaska State Waters, Flare
 
-# 1. Offshore GoM Federal Waters: Major Complexes (there are THREE instances of this source, which need to be summed)
-# 2. Offshore GoM Federal Waters: Minor Complexes (there are THREE instances of this source, which need to be summed)
-# 3. Offshore GoM Federal Waters: Flaring
+    # 1. Offshore Pacific Federal and State Waters, Flare
+    # 2. Offshore Pacific Federal and State Waters, Vent/Leak
 
-# To here
-##########################
+    # 1. Offshore GoM Federal Waters: Major Complexes (there are THREE instances of this source, which need to be summed)
+    # 2. Offshore GoM Federal Waters: Minor Complexes (there are THREE instances of this source, which need to be summed)
+    # 3. Offshore GoM Federal Waters: Flaring
+
+    # Clean and format the data
     emi_df = (
+        # Rename columns
         emi_df.rename(columns=lambda x: str(x).lower())
         .assign(state_code=lambda x: x["state"].str.lower().map(state_dict))
         .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
+        # Replace NA values with 0
         .replace(0, pd.NA)
         .apply(pd.to_numeric, errors="coerce")
         .dropna(how="all")
         .fillna(0)
         .reset_index()
     )
+    # If-else statement: if source is in the list, then follow this path
     if src in ["tanks", "wellheads, separators, headers, heaters"]:
         emi_df = (
+            # Melt the data: unique state/year
             emi_df.melt(id_vars="state_code", var_name="year", value_name="ch4_mt")
+            # Convert mt to kt
             .assign(ghgi_ch4_kt=lambda x: x["ch4_mt"] / 1000)
             .drop(columns=["ch4_mt"])
             .astype({"year": int, "ghgi_ch4_kt": float})
             .fillna({"ghgi_ch4_kt": 0})
+            # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
+            # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
             .reset_index()
         )
+    # Else Path
     else:
         emi_df = (
+            # Melt the data: unique state/year
             emi_df.melt(id_vars="state_code", var_name="year", value_name="ghgi_ch4_kt")
             .astype({"year": int, "ghgi_ch4_kt": float})
             .fillna({"ghgi_ch4_kt": 0})
+            # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
+            # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
             .reset_index()
@@ -265,16 +319,27 @@ def get_petro_production_inv_data(in_path, src, params):
 
 
 # %% STEP 2. Initialize Parameters
+"""
+This section initializes the parameters for the task and stores them in the
+emi_parameters_dict.
+
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+file. The parameters are used to create the pytask task for the emi.
+"""
+# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
 source_name = "1B2aii_petroleum_production"
-source_path = "Petroleum and Natural Gas"
+# Directory name for GHGI data
+source_path = "1B2aii_petroleum_production"
 
+# Data Guide Directory
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-
+# Read and query for the source name (ghch4i_name)
 proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
-
+# Initialize the emi_parameters_dict
 emi_parameters_dict = {}
+# Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
         "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
@@ -299,61 +364,21 @@ for _id, _kwargs in emi_parameters_dict.items():
         output_path: Annotated[Path, Product],
     ) -> None:
 
+        # Initialize the emi_df_list
         emi_df_list = []
+        # Loop through the input paths and source list to get the emissions data
         for input_path, ghgi_group in zip(input_paths, source_list):
             individual_emi_df = get_petro_production_inv_data(input_path,
                                                               ghgi_group,
                                                               parameters)
             emi_df_list.append(individual_emi_df)
 
+        # Concatenate the emissions data and group by state and year
         emission_group_df = (
             pd.concat(emi_df_list)
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
             .reset_index()
         )
-        emission_group_df.head()
+        # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)
-
-
-##########################################################################
-# %% TESTING
-
-# emi_df = pd.read_excel(
-#     "/Users/aburnette/Library/CloudStorage/OneDrive-SharedLibraries-EnvironmentalProtectionAgency(EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/ghgi/Petroleum and Natural Gas/PetroleumSystems_90-22_FR.xlsx",
-#     sheet_name="Production_CH4 (MT)",  # Sheet name
-#     nrows=130,  # number of rows
-#     skiprows=3,  # number of rows to skip
-#     index_col=None
-#     )
-
-# make_up = ["Offshore Alaska State Waters, Vent/Leak",
-#            "Offshore Alaska State Waters, Flare"]
-
-# year_list = [str(x) for x in list(range(min_year, max_year + 1))]
-
-# emi_df = (
-#     emi_df.rename(columns=lambda x: str(x).lower())
-#     .filter(items=["emission source"] + year_list, axis=1)
-#     .rename(columns={"emission source": "emission_source"})
-#     .query("emission_source in @make_up")
-#     )
-
-# emi_df = pd.DataFrame(emi_df.sum()).transpose()
-
-# emi_df = (
-#     emi_df.melt(id_vars="emission_source", var_name="year", value_name="ch4_mt")
-#     .assign(ghgi_ch4_kt=lambda x: x["ch4_mt"] / 1000)
-#     .drop(columns=["ch4_mt"])
-#     .astype({"year": int, "ghgi_ch4_kt": float})
-#     .fillna({"ghgi_ch4_kt": 0})
-#     .query("year.between(@min_year, @max_year)")
-#     .assign(state_code="ALL")
-#     .groupby(["state_code", "year"])["ghgi_ch4_kt"]
-#     .sum()
-#     .reset_index()
-# )
-
-
-
-# # divide by 1000 to convert to kt
