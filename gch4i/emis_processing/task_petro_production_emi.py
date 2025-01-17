@@ -20,6 +20,7 @@ import ast
 
 from gch4i.config import (
     V3_DATA_PATH,
+    tmp_data_dir_path,
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
@@ -232,19 +233,22 @@ def get_petro_production_inv_data(in_path, src, params):
     if src in ["offshore gom federal waters",
                "offshore pacific federal and state waters",
                "offshore alaska state waters"]:
-        # If True, 'make_up' list for queryign emission_source
+        # If True, 'make_up' list for querying emission_source
         if src == "offshore alaska state waters":
             make_up = ["Offshore Alaska State Waters, Vent/Leak",
                        "Offshore Alaska State Waters, Flare"]
-        # If True, 'make_up' list for queryign emission_source
+            state_name = "ALL"  # I assume AK (Alaska)
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore pacific federal and state waters":
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
-        # If True, 'make_up' list for queryign emission_source
+            state_name = "CAO"  # State_code used in proxy processing
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
                        "Offshore GoM Federal Waters: Flaring"]
+            state_name = "ALL"  # I assume GOM (Gulf of Mexico)
         emi_df = (
             # Rename columns
             emi_df.rename(columns=lambda x: str(x).lower())
@@ -270,7 +274,7 @@ def get_petro_production_inv_data(in_path, src, params):
             # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
             # Make state_code "ALL"
-            .assign(state_code="ALL")
+            .assign(state_code=state_name)
             # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
@@ -366,7 +370,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": tmp_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict

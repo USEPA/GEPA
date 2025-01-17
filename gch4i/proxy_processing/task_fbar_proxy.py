@@ -34,7 +34,6 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     # ghgi_data_dir_path,
-    # tmp_data_dir_path,
     emi_data_dir_path,
     # max_year,
     # min_year
@@ -82,7 +81,7 @@ def create_circle_geometry(row, radius_crs="EPSG:3857"):
 
 
 # Base proxy retrieval function. To be used with 7 pytask functions
-def task_get_fbar_proxy_data(
+def get_fbar_proxy_data(
         filter_condition,
         state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
         ):
@@ -319,7 +318,7 @@ def task_get_fbar_cotton_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_cotton_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="cotton", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="cotton", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -331,7 +330,7 @@ def task_get_fbar_maize_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_maize_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="maize", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="maize", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -343,19 +342,19 @@ def task_get_fbar_rice_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_rice_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="rice", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="rice", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
 
 # Soybean Proxy
 @mark.persist
-def task_get_fbar_soybean_proxy_data(
+def task_get_fbar_soybeans_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_soybean_proxy.parquet"
+    / "fbar_soybeans_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="soybean", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="soybean", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -367,7 +366,7 @@ def task_get_fbar_sugarcane_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_sugarcane_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="sugarcane", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="sugarcane", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -379,7 +378,7 @@ def task_get_fbar_wheat_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_wheat_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="wheat", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="wheat", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -391,6 +390,8 @@ def task_get_fbar_other_proxy_data(
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "fbar_other_proxy.parquet"
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="other",  state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="other",  state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
+
+
