@@ -1,4 +1,14 @@
-# %%
+"""
+Name:                  2B5 Carbide Emissions
+Date Last Modified:    2025-01-21
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Clean and standardized carbides emissions data
+Input Files:           - gch4i_data_guide_v3.xlsx
+                       - {V3_DATA_PATH}/ghgi/2B5_carbide/State_Carbides_1990-2022.xlsx
+Output Files:          - {emi_data_dir_path}/carbides_emi.csv
+"""
+
+# %% Import Libraries
 from pathlib import Path
 from typing import Annotated
 
@@ -14,16 +24,26 @@ from gch4i.config import (
 )
 from gch4i.utils import tg_to_kt
 
+# %% Initialize Parameters
+"""
+This section initializes the parameters for the task and stores them in the
+emi_parameters_dict.
 
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+file. The parameters are used to create the pytask task for the emi.
+"""
+# gch4i_name to filter the data guide
 source_name = "2B5_carbide"
-
+# Data Guide Dictionary
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-
+# Read and query for the source name (gch4i_name)
 proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 
+# Initialize the emi_parameters_dict
 emi_parameters_dict = {}
+# Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
         "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
@@ -31,13 +51,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
-emi_parameters_dict
-
-# %%
-# input_path, source_list, output
-
-# %%
-
+# %% Create Pytask Function and Loop
 for _id, _kwargs in emi_parameters_dict.items():
 
     @mark.persist
@@ -47,10 +61,21 @@ for _id, _kwargs in emi_parameters_dict.items():
         source_list: str,
         output_path: Annotated[Path, Product],
     ) -> None:
-        # %%
+        """Process carbide emissions data from GHGI source files.
+
+        Args:
+            input_path (Path): path to the input data
+            source_list (str): list of sources to filter the data
+            output_path (Path): path to the output data
+
+        Returns:
+            None. Writes output CSV file with columns [year, state_code, ghgi_ch4_kt]
+        """
+
+        # clean the source list
         source_list = [x.strip().casefold() for x in source_list]
+        # define years of interest
         year_list = [str(x) for x in list(range(min_year, max_year + 1))]
-        """read in the ghgi_ch4_kt values for each state"""
 
         emi_df = (
             # read in the data
@@ -63,6 +88,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             )
             # name column names lower
             .rename(columns=lambda x: str(x).lower())
+            # format the names of emission source group strings
             .assign(
                 ghgi_source=lambda df: df["subcategory1"]
                 .astype(str)
@@ -81,15 +107,18 @@ for _id, _kwargs in emi_parameters_dict.items():
             )
             .rename(columns={"georef": "state_code"})
             .set_index("state_code")
-            # covert "NO" string to numeric (will become np.nan)
+            # convert NO/0 to NA, remove states with all 0 years
+            .replace(0, pd.NA)
             .apply(pd.to_numeric, errors="coerce")
-            # drop states that have all nan values
             .dropna(how="all")
+            .fillna(0)
             # reset the index state back to a column
             .reset_index()
             # make the table long by state/year
             .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
+            # convert units to kt
             .assign(ghgi_ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
+            # drop tg unit columns
             .drop(columns=["ch4_tg"])
             # make the columns types correcet
             .astype({"year": int, "ghgi_ch4_kt": float})
@@ -103,16 +132,5 @@ for _id, _kwargs in emi_parameters_dict.items():
             .sum()
             .reset_index()
         )
-        emi_df
-        # %%
+        # write out data to output path
         emi_df.to_csv(output_path, index=False)
-        # %%
-
-
-@mark.persist
-@task(id="carbides_proxy")
-def task_carbided_proxy(
-    input_path: Path = "",
-    output_path: Path = "",
-) -> None:
-    pass

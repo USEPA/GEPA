@@ -133,5 +133,5 @@ for _id, _kwargs in emi_parameters_dict.items():
             .sum()
             .reset_index()
         )
-        # write out data to outoput path
+        # write out data to output path
         emi_df.to_csv(output_path, index=False)
