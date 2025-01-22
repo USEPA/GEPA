@@ -1,5 +1,18 @@
-# %%
-# import calendar
+"""
+Name:                  task_abandoned_coal_proxy.py
+Date Last Modified:    2025-01-22
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Process abandoned coal proxy data for emissions.
+Input Files:           - Inventory Workbook: {ghgi_data_dir_path}/1B1a_abandoned_coal/
+                        AbandonedCoalMines1990-2022_FRv1.xlsx
+                       - MSHA: {sector_data_dir_path}/abandoned_mines/Mines.zip
+                       - County: {global_data_dir_path}/tl_2020_us_county.zip
+                       - State: {global_data_dir_path}/tl_2020_us_state.zip
+Output Files:          - {proxy_data_dir_path}/abd_coal_proxy.parquet
+"""
+
+# %% Import Libraries
+
 import datetime
 from pathlib import Path
 from typing import Annotated
@@ -23,9 +36,10 @@ from gch4i.config import (
 )
 from gch4i.utils import name_formatter
 
+
 pd.set_option("future.no_silent_downcasting", True)
 
-# %%
+# %% Pytask Function
 
 
 @mark.persist
@@ -98,7 +112,6 @@ def task_get_abd_coal_proxy_data(
     }
 
     basin_coef_df = pd.DataFrame.from_dict(basin_coef_dict)
-    basin_coef_df
 
     # the set of functions to calculate emissions based on the status of the mine and
     # the basin it is in.
@@ -595,4 +608,3 @@ def task_get_abd_coal_proxy_data(
     # %%
     # save the final proxy data
     proxy_gdf.to_parquet(output_path)
-    # %%
