@@ -16,6 +16,7 @@ import requests
 import rioxarray  # noqa f401
 import seaborn as sns
 import xarray as xr
+import time
 from geocube.api.core import make_geocube
 from IPython.display import display
 from rasterio.enums import Resampling
@@ -23,6 +24,8 @@ from rasterio.features import rasterize, shapes
 from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -1277,3 +1280,104 @@ def proxy_from_stack(
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         ras_crs
     ).to_netcdf(output_path)
+
+def geocode_address(df, address_column):
+    """
+    Geocode addresses using Nominatim, handling missing values
+    
+    Parameters:
+    df: DataFrame containing addresses
+    address_column: Name of column containing addresses
+    
+    Returns:
+    DataFrame with added latitude and longitude columns
+    """
+    # Check if address column exists
+    if address_column not in df.columns:
+        raise ValueError(f"Column {address_column} not found in DataFrame")
+        
+    # Initialize geocoder
+    geolocator = Nominatim(user_agent="my_app")
+    
+    # Create cache dictionary
+    geocode_cache = {}
+    
+    def get_lat_long(address):
+        # Handle missing values
+        if pd.isna(address) or str(address).strip() == '':
+            return (None, None)
+            
+        # Check cache first
+        if address in geocode_cache:
+            return geocode_cache[address]
+        
+        try:
+            # Add delay to respect Nominatim's usage policy
+            time.sleep(1)
+            location = geolocator.geocode(str(address))
+            if location:
+                result = (location.latitude, location.longitude)
+                geocode_cache[address] = result
+                return result
+            return (None, None)
+            
+        except (GeocoderTimedOut, GeocoderServiceError):
+            return (None, None)
+    
+    # Create lat_long column
+    df['lat_long'] = None
+    
+    # Check if longitude column exists
+    if 'longitude' not in df.columns:
+        df['longitude'] = None
+        
+    # Only geocode rows where both latitude and longitude are missing
+    mask = ((df['longitude'].isna() | (df['longitude'] == '')) & 
+            (df['latitude'].isna() | (df['latitude'] == '')) & 
+            df[address_column].notna())
+    
+    # Apply geocoding only to rows that need it
+    df.loc[mask, 'lat_long'] = df.loc[mask, address_column].apply(get_lat_long)
+    
+    # Update latitude/longitude only for rows that were geocoded
+    df.loc[mask, 'latitude'] = df.loc[mask, 'lat_long'].apply(lambda x: x[0] if x else None) 
+    df.loc[mask, 'longitude'] = df.loc[mask, 'lat_long'].apply(lambda x: x[1] if x else None)
+    
+    # Drop temporary column
+    df = df.drop('lat_long', axis=1)
+    
+    return df
+
+def create_final_proxy_df(proxy_df):   
+    """
+    Function to create the final proxy df that is ready for gridding
+
+    Parameters:
+    - proxy_df: DataFrame containing proxy data.
+
+    Returns:
+    - final_proxy_df: DataFrame containing the processed emissions data for each state.
+    """
+    
+    # Create a GeoDataFrame and generate geometry from longitude and latitude
+    proxy_gdf = gpd.GeoDataFrame(
+        proxy_df,
+        geometry=gpd.points_from_xy(proxy_df['longitude'], proxy_df['latitude'], crs='EPSG:4326')
+    )
+
+    # subset to only include the columns we want to keep
+    proxy_gdf = proxy_gdf[['state_code', 'year', 'emis_kt', 'geometry']]
+    
+    # Normalize relative emissions to sum to 1 for each year and state
+    proxy_gdf = proxy_gdf.groupby(['state_code', 'year']).filter(lambda x: x['emis_kt'].sum() > 0) #drop state-years with 0 total volume
+    proxy_gdf['rel_emi'] = proxy_gdf.groupby(['year', 'state_code'])['emis_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0) #normalize to sum to 1
+    sums = proxy_gdf.groupby(["state_code", "year"])["rel_emi"].sum() #get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
+    
+    # Drop the original emissions column
+    proxy_gdf = proxy_gdf.drop(columns=['emis_kt'])
+
+    # Rearrange columns
+    proxy_gdf = proxy_gdf[['state_code', 'year', 'rel_emi', 'geometry']]
+
+    return proxy_gdf
