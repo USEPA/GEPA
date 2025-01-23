@@ -1,4 +1,24 @@
-# %%
+"""
+Name:                  task_coastal_wetlands_proxy.py
+Date Last Modified:    2025-01-23
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Process coastal wetlands proxy data for emissions.
+Input Files:           - CCAP: {sector_data_dir_path}/coastal_wetlands/
+                        conus_{ccap_year}_ccap_landcover_20200311.tif
+                       - Tidal Mask: {sector_data_dir_path}/coastal_wetlands/
+                        tidal_mhhws_extent.img
+Intermediate Files:    - Masked Raster: {sector_data_dir_path}/coastal_wetlands/
+                        coastal_wetlands_{ccap_year}_masked.tif
+                       - Binary Raster: {sector_data_dir_path}/coastal_wetlands/
+                        coastal_wetlands_{ccap_year}_binary.tif
+Output Files:          - Proxy: {proxy_data_dir_path}/coastal_wetlands_proxy.nc
+                       - Tidal Output: {sector_data_dir_path}/coastal_wetlands/
+                        tidal_mask_warped.tif
+                       - CW GEPA: {sector_data_dir_path}/coastal_wetlands/
+                        coastal_wetlands_{ccap_year}_gepa.tif
+"""
+
+# %% Import Packages
 # %load_ext autoreload
 # %autoreload 2
 
@@ -23,13 +43,6 @@ from gch4i.config import (
     years,
 )
 from gch4i.utils import make_raster_binary, mask_raster_parallel, warp_to_gepa_grid
-
-NUM_WORKERS = multiprocessing.cpu_count()
-
-
-# define a function to normalize the population data by state and year
-def normalize(x):
-    return x / x.sum()
 
 
 """
@@ -56,17 +69,34 @@ calculated in the 20-year hold period.
 Monica
 """
 
-# %%
+# %% Assign file paths & constants
+NUM_WORKERS = multiprocessing.cpu_count()
+
+
+# define a function to normalize the population data by state and year
+def normalize(x):
+    """
+    Normalize values to sum to 1 within groups.
+
+    Args:
+        x: Array-like input data
+
+    Returns:
+        Normalized array where values sum to 1
+    """
+    return x / x.sum()
+
+
 cw_dir_path = sector_data_dir_path / "coastal_wetlands"
 tidal_mask_warped = cw_dir_path / "tidal_mask_warped.tif"
 proxy_output_path = proxy_data_dir_path / "coastal_wetlands_proxy.nc"
-# %%
+
 # https://coastalimagery.blob.core.windows.net/ccap-landcover/CCAP_bulk_download/Regional_30meter_Land_Cover/ccap-class-scheme-highres.pdf
 COASTAL_WETLAND_CLASSES = np.array([13, 14, 15])
 CCAP_YEARS = [2010, 2016]
 
 
-# %%
+# %% Pytask Function
 @mark.persist
 @task(id="prep_coastal_wetlands_mask")
 def task_prep_coastal_wetlands_mask(
@@ -94,6 +124,7 @@ def task_prep_coastal_wetlands_mask(
 #       the raster to binary, we take the average of the binary values in the gepa grid
 #       to get the proportion of the grid cell that is considered to be a coastal
 #       wetlands.
+
 prep_dict = dict()
 for ccap_year in CCAP_YEARS:
     ccap_path = cw_dir_path / f"conus_{ccap_year}_ccap_landcover_20200311.tif"
@@ -151,7 +182,7 @@ for id, kwargs in prep_dict.items():
         print(" done.")
 
 
-# %%
+# %% Pytask Function
 
 
 @mark.persist
@@ -186,6 +217,7 @@ def task_coastal_wetlands_proxy(
     with rasterio.open(ccap_path) as src:
         ras_crs = src.crs
 
+    # Read in the state geometries
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -205,9 +237,6 @@ def task_coastal_wetlands_proxy(
     comb_ccap_cr["statefp"] = state_grid["statefp"]
 
     comb_ccap_cr = xr.where(comb_ccap_cr["statefp"] == 99, np.nan, comb_ccap_cr)
-
-    # plot the data to check
-    # comb_ccap_cr["statefp"].plot()
 
     # apply the normalization function to the population data
     proxy_xr = (
@@ -235,13 +264,11 @@ def task_coastal_wetlands_proxy(
             | (np.isclose(df["sum_check"], 0))
         )
     )
-    all_eq_df
 
     if not all_eq_df["is_close"].all():
         raise ValueError("not all values are normed correctly!")
 
+    # Write output to netcdf
     proxy_xr.transpose("year", "y", "x").round(10).rio.write_crs(ras_crs).to_netcdf(
         output_path
     )
-
-    # %%
