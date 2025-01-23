@@ -1,4 +1,21 @@
-# %%
+"""
+Name:                  task_composting_proxy.py
+Date Last Modified:    2025-01-23
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Process composting proxy data for emissions.
+Input Files:           - Excess Food: {sector_data_dir_path}/composting/
+                        CompostingFacilities.xlsx
+                       - FRS Facility: {global_data_dir_path}/NATIONAL_FACILITY_FILE.CSV
+                       - FRS NAICS: {global_data_dir_path}/NATIONAL_NAICS_FILE.CSV
+                       - Biocycle: {sector_data_dir_path}/composting/
+                        biocycle_locs_clean.csv
+                       - Comp Council: {sector_data_dir_path}/composting/
+                        STA Certified Compost Participants Map.kml
+                       - State Geo: {global_data_dir_path}/tl_2020_us_state.zip
+Output Files:          - DST: {proxy_data_dir_path}/composting_proxy.parquet
+"""
+
+# %% Import Libraries
 from pathlib import Path
 from typing import Annotated
 
@@ -19,16 +36,15 @@ from gch4i.config import (  # noqa
 )
 from gch4i.utils import name_formatter
 
-# gpd.options.io_engine = "pyogrio"
 
-
-# %%
+# %% Assign Constant Variables
 COMPOSTING_FRS_NAICS_CODE = 562219
 DUPLICATION_TOLERANCE_M = 250
 
 composting_dir = sector_data_dir_path / "composting"
 
 
+# %% Pytask Function
 @mark.persist
 @task(id="composting_proxy")
 def get_composting_proxy_data(
@@ -44,7 +60,23 @@ def get_composting_proxy_data(
         proxy_data_dir_path / "composting_proxy.parquet"
     ),
 ):
-    # %%
+    """
+    Generate proxy data for composting facilities by combining multiple data sources and
+    removing duplicate facilities based on spatial proximity.
+
+    Args:
+        excess_food_op_path (Path): Path to the excess food composting facilities data.
+        frs_facility_path (Path): Path to the FRS facility data.
+        frs_naics_path (Path): Path to the FRS NAICS data.
+        biocycle_path (Path): Path to the biocycle composting facilities data.
+        comp_council_path (Path): Path to the compost council composting facilities data.
+        state_geo_path (Path): Path to the state geography data.
+        dst_path (Path): Path to save the output data.
+
+    Returns:
+        Creates a parquet file containing facility locations with state codes.
+    """
+    # read in state geometries
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -56,19 +88,17 @@ def get_composting_proxy_data(
         .to_crs(4326)
     )
 
+    # read in the composting facilities data
     excess_food_df = (
         pd.read_excel(
             excess_food_op_path,
             sheet_name="Data",
             usecols=["Name", "Latitude", "Longitude"],
         ).rename(columns=str.lower)
-        # .rename(columns={"state": "state_code"})
-        # .query("state_code.isin(@state_info_df['state_code'])")
         .assign(
             formatted_fac_name=lambda df: name_formatter(df["name"]), source="ex_food"
         )
     )
-    excess_food_df
 
     # get the composting facilities from the FRS database based on the NAICS code.
     # I use duckdb for a bit of performance in these very large tables over pandas.
@@ -85,19 +115,19 @@ def get_composting_proxy_data(
         .df()
         .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
     )
-    frs_composting_fac_df
 
+    # read in the biocycle composting facilities data
     biocycle_df = (
         pd.read_csv(biocycle_path)
         .rename(columns={"lat": "latitude", "lon": "longitude"})
         .assign(source="biocycle")
     )
-    biocycle_df
 
     # google earth exports 3d points, covert them to 2d to avoid issues.
     def _drop_z(geom):
         return wkb.loads(wkb.dumps(geom, output_dimension=2))
 
+    # read in the compost council composting facilities data
     comp_council_gdf = (
         gpd.read_file(comp_council_path, driver="KML")
         .rename(columns=str.lower)
@@ -108,7 +138,6 @@ def get_composting_proxy_data(
             source="comp_council",
         )
     )
-    comp_council_gdf
 
     # there is a two step process to get all facilities in one dataframe:
     # 1) put together the facilities that have lat/lon columns and make them
@@ -160,7 +189,6 @@ def get_composting_proxy_data(
             ].assign(geometry=Point(-77.001213, 38.947624)),
         ]
     ).reset_index(drop=True)
+
+    # Save the final data to a parquet file
     final_facility_gdf.to_parquet(dst_path)
-
-
-# %%
