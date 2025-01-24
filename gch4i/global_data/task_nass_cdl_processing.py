@@ -1,15 +1,19 @@
 """
-Author:     Nick Kruskamp
-email:      nkruskamp@rti.org
-last
-updated:    2025-01-21
-exsum:      This script is used to process the nass Cropland Data Layer data into the
-            intermediate data that serve several proxies (all crop, farm pipelines,
-            rice area). The script downloads the raw data, unzips it, and then creates
-            the binary and percentage layers for each crop class value sets.
+Name:                  task_nass_cdl_processing.py
+Date Last Modified:    2025-01-21
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               This script is used to process the nass Cropland Data Layer data
+                        into the intermediate data that serve several proxies (all crop,
+                        farm pipelines, rice area). The script downloads the raw data,
+                        unzips it, and then creates the binary and percentage layers
+                        for each crop class value sets.
+Input Files:           - nass_cdl_path: {sector_data_dir_path}/nass_cdl
+                       - url: ("https://www.nass.usda.gov/Research_and_Science/Cropland/
+                            Release/datasets/" f"{zip_file_name}")
+Output Files:          - {proxy_data_dir_path}/abd_coal_proxy.parquet
 """
 
-# %%
+# %% Import Libraries & Setup Paths
 # %load_ext autoreload
 # %autoreload 2
 
@@ -42,8 +46,7 @@ crop_val_dict = {
     "rice": rice_crop_vals,
 }
 
-# %%
-
+# %% Unzip CDL
 
 def unzip_cdl(zip_path, output_path):
     """unzip an input path zip_path to the output path"""
@@ -51,8 +54,7 @@ def unzip_cdl(zip_path, output_path):
         z.extract(output_path.name, output_path.parent)
 
 
-# %%
-# download all the years of NASS CDL data
+# %% Download all the years of NASS CDL data
 cdl_download_dict = {}
 for year in years:
 
@@ -73,6 +75,7 @@ for year in years:
     )
 
 
+# %% Pytask Function
 for _id, kwargs in cdl_download_dict.items():
 
     @mark.persist
@@ -84,7 +87,7 @@ for _id, kwargs in cdl_download_dict.items():
         download_url(url, zip_path)
 
 
-# unzip all the CDL data we need
+# %% Unzip all the CDL data we need
 cdl_unzip_dict = {}
 for year in years:
 
@@ -99,6 +102,7 @@ for year in years:
         cdl_path=cdl_input_path,
     )
 
+# %% Pytask Function
 for _id, kwargs in cdl_unzip_dict.items():
 
     @mark.persist
@@ -110,7 +114,7 @@ for _id, kwargs in cdl_unzip_dict.items():
         unzip_cdl(zip_path, cdl_path)
 
 
-# %%
+# %% Calculate the binary and percentage crop layers
 
 # create the binary and percentage crop layers for each crop type
 # the will take the raw 30 meter data, create a binary layer for the list of crop values
@@ -135,6 +139,7 @@ for crop_name, crop_vals in crop_val_dict.items():
         )
 calc_crop_perc
 
+# %% Pytask Function
 for _id, kwargs in calc_crop_perc.items():
 
     @mark.persist
@@ -157,6 +162,3 @@ for _id, kwargs in calc_crop_perc.items():
             output_path=output_path_perc,
             num_threads=NUM_WORKERS,
         )
-
-
-# %%
