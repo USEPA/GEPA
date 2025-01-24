@@ -21,11 +21,9 @@ import geopandas as gpd
 from shapely.geometry import LineString, MultiLineString
 
 from gch4i.config import (
-    # V3_DATA_PATH,
     emi_data_dir_path,
     proxy_data_dir_path,
     global_data_dir_path,
-    tmp_data_dir_path,
     max_year,
     min_year
 )
@@ -105,7 +103,7 @@ def task_get_waterways_proxy(
     waterways: Path = global_data_dir_path / "raw/bts_2023_waterways.gpkg",
     emi_data: Path = emi_data_dir_path / "emi_waterways.csv",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_proxy_output: Annotated[Path, Product] = tmp_data_dir_path
+    reporting_proxy_output: Annotated[Path, Product] = proxy_data_dir_path
     / "waterways_proxy.parquet"
 ):
     """
