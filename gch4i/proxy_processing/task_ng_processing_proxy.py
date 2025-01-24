@@ -21,6 +21,7 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
+    emi_data_dir_path,
     max_year,
     min_year,
     years,
@@ -36,6 +37,7 @@ def task_get_ng_processing_proxy_data(
     enverus_midstream_ng_path: Path = sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb",
     ghgrp_facilities_path: Path = sector_data_dir_path / "ng_processing/GHGRP_Facility_Info_Jan2025.csv",
     ghgrp_subpart_w_path: Path = sector_data_dir_path / "ng_processing/EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb",
+    ng_processing_emi_path: Path = emi_data_dir_path / "processing_emi.csv",
     proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_processing_proxy.parquet",
     ):
     """
@@ -422,13 +424,55 @@ def task_get_ng_processing_proxy_data(
                 crs=4326,
             ),
         )
-        .drop(columns=["latitude", "longitude"])
-        .loc[:, ["facility_name", "state_code", "geometry", "year", "rel_emi"]]
+        .drop(columns=["facility_name", "latitude", "longitude"])
+        .loc[:, ["state_code", "geometry", "year", "rel_emi"]]
     )
 
+    # Check for missing proxy data and create alternative proxy data
+    """
+    Steps:
+        - Check if proxy data is missing for a state and year
+        - Create alternative proxy data by assigning rel_emi = 1 and geometry = state polygon
+            - This distributes emissions evenly across the state
+    """
+    # Check if proxy data exists for emissions data
+    emi_df = (pd.read_csv(ng_processing_emi_path)
+              .query("state_code.isin(@state_gdf['state_code'])")
+              .query("ghgi_ch4_kt > 0")
+              .reset_index(drop=True)
+              )
+
+    # Retrieve unique state codes for emissions without proxy data
+    # This step is necessary, as not all emissions data excludes emission-less states
+    emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(processing_plants_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Find missing states
+    missing_states = emi_states.difference(proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    if missing_states:
+        # Create alternative proxy from missing states
+        alt_proxy = (
+            pd.DataFrame(missing_states, columns=['state_code', 'year'])
+            # Assign well type and make rel_emi = 1
+            .assign(
+                rel_emi=1
+            )
+            # Merge state polygon geometry
+            .merge(
+                state_gdf[['state_code', 'geometry']],
+                on='state_code',
+                how='left'
+            )
+        )
+
+        # Convert to GeoDataFrame
+        alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
+        # Append to grouped_proxy
+        processing_plants_gdf = pd.concat([processing_plants_gdf, alt_proxy], ignore_index=True)
+    
     # Output proxy parquet files
     processing_plants_gdf.to_parquet(proxy_output_path)
 
     return None
-
-# %%
