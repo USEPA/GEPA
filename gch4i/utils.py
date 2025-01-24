@@ -62,6 +62,12 @@ def normalize(x):
     return x / x.sum() if x.sum() > 0 else 0
 
 
+# NOTE: xarray does not like the if else of the default normalize method, so I have
+# defined a new one here to appease xarray.
+def normalize_xr(x):
+    return x / x.sum()
+
+
 def allocate_emissions_to_proxy(
     proxy_gdf: gpd.GeoDataFrame,
     emi_df: pd.DataFrame,
@@ -137,8 +143,10 @@ def allocate_emissions_to_proxy(
             continue
         # get the value of emissions for that state/year
         state_year_emissions = data["ghgi_ch4_kt"].iat[0]
+
         # if there are no state inventory emissions, assign all proxy for that
         # state / year as 0
+
         if state_year_emissions == 0:
             Warning(
                 f"there are proxies in {state} for {year} but there are no emissions!"
@@ -815,9 +823,11 @@ us_state_to_abbrev_dict = {
 
 def us_state_to_abbrev(state_name: str) -> str:
     """converts a full US state name to the two-letter abbreviation"""
-    return (us_state_to_abbrev_dict[state_name] 
-            if state_name in us_state_to_abbrev_dict 
-            else state_name)
+    return (
+        us_state_to_abbrev_dict[state_name]
+        if state_name in us_state_to_abbrev_dict
+        else state_name
+    )
 
 
 def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
@@ -826,9 +836,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
     raster data for each sector.
     """
     if v2_name is None:
-        Warning(
-            f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!"
-            )
+        Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
     else:
         profile = GEPA_spatial_profile()
 
@@ -869,9 +877,13 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # Comparison of masses:
                 # flux to mass conversion factor
                 area_matrix = load_area_matrix()
-                month_days = [calendar.monthrange(int(year), x)[1] for x in range(1, 13)]
+                month_days = [
+                    calendar.monthrange(int(year), x)[1] for x in range(1, 13)
+                ]
                 year_days = np.sum(month_days)
-                conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
+                conversion_factor_annual = calc_conversion_factor(
+                    year_days, area_matrix
+                )
                 # v2 mass raster sum
                 # divide by the flux conversion factor to transform back into mass units
                 v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
@@ -953,7 +965,10 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 )
                 plt.title(difference_plot_title, fontsize=14)
                 # Save the plot as a PNG file
-                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png")
+                plt.savefig(
+                    str(figures_data_dir_path)
+                    + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png"
+                )
                 # Show the plot for review
                 plt.show()
                 # Close the plot
@@ -976,7 +991,10 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 ax1.set_ylabel("v2 frequency")
                 ax2.set_ylabel("v3 frequency")
                 # Save the plot as a PNG file
-                plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png")
+                plt.savefig(
+                    str(figures_data_dir_path)
+                    + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png"
+                )
                 # Show the plot for review
                 plt.show()
                 # Close the plot

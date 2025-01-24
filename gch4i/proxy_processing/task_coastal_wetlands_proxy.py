@@ -1,3 +1,24 @@
+"""
+Name:                   task_coastal_wetlands_proxy.py
+Date Last Modified:     2025-01-23
+Authors Name:           Nick Kruskamp (RTI International)
+Purpose:                This script processes the coastal wetlands data from the CCAP
+                        dataset to create a proxy for the emissions from coastal
+                        wetlands. The data is masked to the tidal line data provided by
+                        the inventory team, converted to binary based on the classes
+                        they consider to be coastal wetlands, and then warped to the
+                        gepa grid. The data is then normalized to the state level and
+                        saved as a netcdf file. The data for 2012 and 2016 are
+                        replicated into the following years to match the years of the
+                        emissions data.
+Input Files:            - {sector_data_dir_path}/coastal_wetlands/
+                            conus_2010_ccap_landcover_20200311.tif
+                        - {sector_data_dir_path}/coastal_wetlands/
+                            conus_2016_ccap_landcover_20200311.tif
+                        - {sector_data_dir_path}/coastal_wetlands/tidal_mhhws_extent.img
+Output Files:           - {proxy_data_dir_path}/coastal_wetlands_proxy.nc
+"""
+
 # %%
 # %load_ext autoreload
 # %autoreload 2
@@ -6,14 +27,14 @@ import multiprocessing
 from pathlib import Path
 from typing import Annotated
 
+from pyarrow import parquet  # noqa
+import osgeo  # noqa
 import geopandas as gpd
 import numpy as np
-import osgeo  # noqa
 import rasterio
 import rioxarray
 import xarray as xr
 from geocube.api.core import make_geocube
-from pyarrow import parquet  # noqa
 from pytask import Product, mark, task
 
 from gch4i.config import (
@@ -22,15 +43,16 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
-from gch4i.utils import make_raster_binary, mask_raster_parallel, warp_to_gepa_grid
+from gch4i.utils import (
+    GEPA_spatial_profile,
+    make_raster_binary,
+    mask_raster_parallel,
+    normalize_xr,
+    warp_to_gepa_grid,
+)
 
 NUM_WORKERS = multiprocessing.cpu_count()
-
-
-# define a function to normalize the population data by state and year
-def normalize(x):
-    return x / x.sum()
-
+GEPA_PROFILE = GEPA_spatial_profile()
 
 """
 Hi all,
@@ -199,20 +221,24 @@ def task_coastal_wetlands_proxy(
 
     comb_ccap_cr = xr.concat(ccap_list, dim="year").rename("cw_perc")
 
+    GEPA_PROFILE.profile["count"] = len(years)
+    tmp_file = rasterio.MemoryFile()
+    comb_ccap_cr.rio.to_raster(tmp_file.name, profile=GEPA_PROFILE.profile)
+    comb_ccap_cr = (
+        rioxarray.open_rasterio(tmp_file).rename({"band": "year"})
+        # assign the band as our years so the output raster data has year band names
+    )
+    comb_ccap_cr["year"] = years
+
     state_grid = make_geocube(
         vector_data=state_gdf, measurements=["statefp"], like=comb_ccap_cr, fill=99
     )
     comb_ccap_cr["statefp"] = state_grid["statefp"]
 
-    comb_ccap_cr = xr.where(comb_ccap_cr["statefp"] == 99, np.nan, comb_ccap_cr)
-
-    # plot the data to check
-    # comb_ccap_cr["statefp"].plot()
-
     # apply the normalization function to the population data
     proxy_xr = (
         comb_ccap_cr.groupby(["year", "statefp"])
-        .apply(normalize)
+        .apply(normalize_xr)
         .sortby(["year", "y", "x"])
         .to_dataset(name="rel_emi")
     )
