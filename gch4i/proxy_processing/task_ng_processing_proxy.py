@@ -1,18 +1,24 @@
+"""
+Name:                   task_ng_processing_proxy.py
+Date Last Modified:     January 24, 2025
+Authors Name:           Hannah Lohman
+Purpose:                Process natural gas processing proxy data for methane emissions
+Input Files:            - tl_2020_us_state.zip
+                        - Rextag_Natural_Gas.gdb
+                        - GHGRP_Facility_Info_Jan2025.csv
+                        - EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb
+                        - processing_emi.csv
+Output Files:           - ng_processing_proxy.parquet
+"""
+
 # %%
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
-
 from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
 from pytask import Product, task, mark
 from pyxlsb import open_workbook
 
@@ -29,7 +35,7 @@ from gch4i.config import (
 
 from gch4i.utils import us_state_to_abbrev
 
-# %%
+
 @mark.persist
 @task(id="ng_processing_proxy")
 def task_get_ng_processing_proxy_data(
@@ -40,10 +46,6 @@ def task_get_ng_processing_proxy_data(
     ng_processing_emi_path: Path = emi_data_dir_path / "processing_emi.csv",
     proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_processing_proxy.parquet",
     ):
-    """
-    Data come from Enverus Midstream and GHGRP Subpart W.
-
-    """
 
     # Load in State ANSI data
     state_gdf = (
@@ -62,7 +64,6 @@ def task_get_ng_processing_proxy_data(
     gas_processing_plants = (gpd.read_file(
         enverus_midstream_ng_path,
         layer="GasProcessingPlants",
-        # columns=["NAME", "TYPE", "STATUS", "THROUGHPUT", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
         columns=["NAME", "TYPE", "STATUS", "CAPACITY", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
         .query("TYPE == 'Processing Plant'")
         .query("STATUS == 'Operational'")
@@ -71,7 +72,6 @@ def task_get_ng_processing_proxy_data(
         .drop(columns=["STATUS", "CNTRY_NAME"])
         .rename(columns={"NAME": "facility_name",
                          "TYPE": "type",
-                         # "THROUGHPUT": "throughput",
                          "CAPACITY": "capacity",
                          "CNTY_NAME": "county",
                          "STATE_NAME": "state_name",
@@ -84,7 +84,6 @@ def task_get_ng_processing_proxy_data(
     central_processing_facilities = (gpd.read_file(
         enverus_midstream_ng_path,
         layer="CentralProcessingFacilities",
-        # columns=["NAME", "TYPE", "STATUS", "THROUGHPUT", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
         columns=["NAME", "TYPE", "STATUS", "CAPACITY", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
         .query("TYPE == 'Central Processing Facility'")
         .query("STATUS == 'Operational'")
@@ -93,7 +92,6 @@ def task_get_ng_processing_proxy_data(
         .drop(columns=["STATUS", "CNTRY_NAME"])
         .rename(columns={"NAME": "facility_name",
                          "TYPE": "type",
-                         # "THROUGHPUT": "throughput",
                          "CAPACITY": "capacity",
                          "CNTY_NAME": "county",
                          "STATE_NAME": "state_name",
@@ -425,7 +423,7 @@ def task_get_ng_processing_proxy_data(
             ),
         )
         .drop(columns=["facility_name", "latitude", "longitude"])
-        .loc[:, ["state_code", "geometry", "year", "rel_emi"]]
+        .loc[:, ["year", "state_code", "rel_emi", "geometry"]]
     )
 
     # Check for missing proxy data and create alternative proxy data
@@ -469,6 +467,7 @@ def task_get_ng_processing_proxy_data(
 
         # Convert to GeoDataFrame
         alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
+        
         # Append to grouped_proxy
         processing_plants_gdf = pd.concat([processing_plants_gdf, alt_proxy], ignore_index=True)
     
@@ -476,3 +475,5 @@ def task_get_ng_processing_proxy_data(
     processing_plants_gdf.to_parquet(proxy_output_path)
 
     return None
+
+# %%
