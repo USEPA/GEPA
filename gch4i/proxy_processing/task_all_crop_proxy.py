@@ -14,7 +14,7 @@ Input Files:            - nass CDL intermediate products: {nass_cdl_path}/
 Output Files:           - {proxy_data_dir_path}/all_crop_proxy.nc
 """
 
-# %%
+# %% Import Libraries
 # %load_ext autoreload
 # %autoreload 2
 
@@ -41,7 +41,7 @@ from gch4i.utils import (
     normalize_xr,
 )
 
-# %%
+# %% Pytask Function
 crop_name = "all_crop"
 nass_cdl_path = sector_data_dir_path / "nass_cdl"
 
