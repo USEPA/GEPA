@@ -15,7 +15,7 @@ Input Files:            - NEI: {sector_data_dir_path}/combustion_stationary/
 Output Files:           - {proxy_data_dir_path}/rwc_proxy.nc
 """
 
-# %%
+# %% Import Libraries
 # %load_ext autoreload
 # %autoreload 2
 
@@ -42,7 +42,7 @@ from gch4i.config import (
 )
 from gch4i.utils import GEPA_spatial_profile, normalize, normalize_xr
 
-# %%
+# %% Pytask Function
 
 source_dir = sector_data_dir_path / "combustion_stationary"
 pop_paths = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif"))
@@ -282,4 +282,3 @@ def task_rwc_proxy(
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         rwc_xr.rio.crs
     ).to_netcdf(output_path)
-    # %%
