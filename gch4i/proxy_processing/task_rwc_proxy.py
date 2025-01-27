@@ -1,40 +1,51 @@
-# %%
+"""
+Name:                   task_rwc_proxy.py
+Date Last Modified:     2025-01-23
+Authors Name:           Nick Kruskamp (RTI International)
+Purpose:                This script processes the residential wood combustion data from
+                        the NEI and allocates it to the county level as an intermediate
+                        step. The county level data is then allocated to the grid level
+                        based on the population grid. The data are then normalized to
+                        the state level and saved as a netcdf file.
+Input Files:            - NEI: {sector_data_dir_path}/combustion_stationary/
+                            NEI 2020 RWC Throughputs.xlsx
+                        - Population: {tmp_data_dir_path}/usa_ppp_*_reprojected.tif
+                        - County: {global_data_dir_path}/tl_2020_us_county.zip
+                        - State: {global_data_dir_path}/tl_2020_us_state.zip
+Output Files:           - {proxy_data_dir_path}/rwc_proxy.nc
+"""
+
+# %% Import Libraries
+# %load_ext autoreload
+# %autoreload 2
 
 from pathlib import Path
 from typing import Annotated
-import pandas as pd
-import geopandas as gpd
 
-from pytask import Product, mark
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import rasterio
+import rioxarray
 import rioxarray.merge
+import xarray as xr
+from geocube.api.core import make_geocube
+from pytask import Product, mark
+from tqdm.auto import tqdm
 
 from gch4i.config import (
     global_data_dir_path,
-    sector_data_dir_path,
     proxy_data_dir_path,
+    sector_data_dir_path,
     tmp_data_dir_path,
     years,
 )
-import xarray as xr
-from gch4i.utils import (
-    normalize,
-    GEPA_spatial_profile,
-)
-import numpy as np
-import rioxarray
-from geocube.api.core import make_geocube
-import rasterio
-from tqdm.auto import tqdm
+from gch4i.utils import GEPA_spatial_profile, normalize, normalize_xr
 
-
-# %%
+# %% Pytask Function
 
 source_dir = sector_data_dir_path / "combustion_stationary"
-
-
 pop_paths = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif"))
-pop_paths
-# %%
 
 
 @mark.persist
@@ -138,7 +149,7 @@ def task_rwc_proxy(
     for pop_path in tqdm(pop_input_paths):
         the_year = int(pop_path.stem.split("_")[-2])
         pop_xr = (
-            rioxarray.open_rasterio(pop_input_paths[0])
+            rioxarray.open_rasterio(pop_path)
             .squeeze("band")
             .drop_vars("band")
             .where(lambda x: x >= 0)
@@ -234,14 +245,10 @@ def task_rwc_proxy(
     # plot the data to check
     rwc_xr["statefp"].plot()
 
-    # %%
-    def normalize(data):
-        return data / data.sum()
-
     # apply the normalization function to the data
     out_ds = (
         rwc_xr.groupby(["statefp", "year"])
-        .apply(normalize)
+        .apply(normalize_xr)
         .to_dataset(name="rel_emi")
         # .expand_dims(year=years)
         .sortby(["year", "y", "x"])
@@ -275,4 +282,3 @@ def task_rwc_proxy(
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         rwc_xr.rio.crs
     ).to_netcdf(output_path)
-    # %%
