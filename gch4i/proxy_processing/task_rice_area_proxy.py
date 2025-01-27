@@ -43,7 +43,7 @@ This file is not necessary to create the proxy, but I keep it here for future re
 of validating our numbers.
 """
 
-# %%
+# %% Import Libraries
 # %load_ext autoreload
 # %autoreload 2
 from pathlib import Path
@@ -72,7 +72,9 @@ GEPA_PROFILE.profile["count"] = 1
 
 sector_dir: Path = sector_data_dir_path / "USDA_NASS"
 cdl_path: Path = sector_data_dir_path / "nass_cdl"
-# %%
+
+
+# %% Pytask Function
 
 
 @mark.persist
@@ -160,7 +162,7 @@ def task_rice_proxy(
     data_dict = {}
     for the_year, rice_harv_df in census_df.groupby("Year"):
 
-        print(f"{the_year}:\t\t{int(rice_harv_df["value_num"].sum()):,}")
+        print(f"{the_year}:\t\t{int(rice_harv_df['value_num'].sum()):,}")
 
         rice_gdf = (
             county_gdf[["geoid", "geometry"]]
