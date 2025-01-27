@@ -1,38 +1,59 @@
+"""
+Name:                   task_wastewater_proxy.py
+Date Last Modified:     2025-01-24
+Authors Name:           C. Coxen (RTI International)
+Purpose:                Mapping of wastewater proxy emissions
+Input Files:            - ww_dom_nonseptic_emi.csv
+                        - ww_sep_emi.csv
+                        - ww_brew_emi.csv  
+                        - ww_ethanol_emi.csv
+                        - ww_fv_emi.csv
+                        - ww_mp_emi.csv
+                        - ww_petrref_emi.csv
+                        - ghgrp_subpart_ii.csv
+                        - SubpartII_Facilities.csv
+                        - NATIONAL_NAICS_FILE.csv
+                        - NATIONAL_FACILITY_FILE.csv
+                        - openbrewerydb_geolocated.csv
+Output Files:           - ww_pp_proxy.parquet
+                        - ww_mp_proxy.parquet
+                        - ww_fv_proxy.parquet
+                        - ww_ethanol_proxy.parquet
+                        - ww_brew_proxy.parquet
+                        - ww_petrref_proxy.parquet
+                        - ww_nonseptic_proxy.parquet
+Notes:                  - Openbrewerydb data was pulled in to fill in gaps in the brewery data
+                        - FRS data was added to fill in gaps in the ECHO and GHGRP data
+"""
+
 # %%
 from pathlib import Path
 
-from typing import Annotated, List, Dict
-from zipfile import ZipFile
-import calendar
-import datetime
+from typing import List
 import requests
 import time
 from pyarrow import parquet
-from io import StringIO
 import pandas as pd
 import duckdb
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
 from pytask import Product, task, mark
 from geopy.distance import geodesic
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 
 from gch4i.config import (
     V3_DATA_PATH,
     proxy_data_dir_path,
     emi_data_dir_path,
-    global_data_dir_path,
-    ghgi_data_dir_path,
-    max_year,
     min_year,
     years
 )
 
-from gch4i.utils import name_formatter
+from gch4i.utils import (
+    us_state_to_abbrev,
+    geocode_address,
+    create_final_proxy_df
+)
 
 # %%
 
@@ -775,7 +796,6 @@ def get_brewery_data(states: List[str], brewery_types: List[str]) -> pd.DataFram
     else:
         return pd.DataFrame()
 
-
 def create_final_proxy_df(proxy_df):   
     """
     Function to create the final proxy df that is ready for gridding
@@ -794,14 +814,20 @@ def create_final_proxy_df(proxy_df):
     )
 
     # subset to only include the columns we want to keep
-    proxy_gdf = proxy_gdf[['state_code', 'year', 'latitude', 'longitude', 'emis_kt', 'geometry']]
+    proxy_gdf = proxy_gdf[['state_code', 'year', 'emis_kt', 'geometry']]
     
     # Normalize relative emissions to sum to 1 for each year and state
     proxy_gdf = proxy_gdf.groupby(['state_code', 'year']).filter(lambda x: x['emis_kt'].sum() > 0) #drop state-years with 0 total volume
-    proxy_gdf['emis_kt'] = proxy_gdf.groupby(['year', 'state_code'])['emis_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0) #normalize to sum to 1
-    sums = proxy_gdf.groupby(["state_code", "year"])["emis_kt"].sum() #get sums to check normalization
+    proxy_gdf['rel_emi'] = proxy_gdf.groupby(['year', 'state_code'])['emis_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0) #normalize to sum to 1
+    sums = proxy_gdf.groupby(["state_code", "year"])["rel_emi"].sum() #get sums to check normalization
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
     
+    # Drop the original emissions column
+    proxy_gdf = proxy_gdf.drop(columns=['emis_kt'])
+
+    # Rearrange columns
+    proxy_gdf = proxy_gdf[['state_code', 'year', 'rel_emi', 'geometry']]
+
     return proxy_gdf
 
 # %% Step 2.1 Read in and process FRS data
@@ -811,7 +837,6 @@ def create_final_proxy_df(proxy_df):
 frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
 frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
 
-# Example usage:
 naics_codes = {
     'pp': '3221',
     'mp': '3116',
@@ -956,7 +981,6 @@ frs_brew = pd.concat([frs_brew, new_rows], ignore_index=True)
 
 ### FRS now contains brewery data that will be used in the ww_brew proxy data
 # %% Step 2.3 ECHO data processing
-
 
 echo_file_directory = proxy_data_dir_path / "wastewater/ECHO"
 combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
