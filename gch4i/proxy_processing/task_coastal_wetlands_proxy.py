@@ -19,7 +19,7 @@ Input Files:            - {sector_data_dir_path}/coastal_wetlands/
 Output Files:           - {proxy_data_dir_path}/coastal_wetlands_proxy.nc
 """
 
-# %%
+# %% Import Libraries
 # %load_ext autoreload
 # %autoreload 2
 
@@ -78,17 +78,17 @@ calculated in the 20-year hold period.
 Monica
 """
 
-# %%
+# %% Set File Paths
 cw_dir_path = sector_data_dir_path / "coastal_wetlands"
 tidal_mask_warped = cw_dir_path / "tidal_mask_warped.tif"
 proxy_output_path = proxy_data_dir_path / "coastal_wetlands_proxy.nc"
-# %%
+
 # https://coastalimagery.blob.core.windows.net/ccap-landcover/CCAP_bulk_download/Regional_30meter_Land_Cover/ccap-class-scheme-highres.pdf
 COASTAL_WETLAND_CLASSES = np.array([13, 14, 15])
 CCAP_YEARS = [2010, 2016]
 
 
-# %%
+# %% Pytask Function
 @mark.persist
 @task(id="prep_coastal_wetlands_mask")
 def task_prep_coastal_wetlands_mask(
@@ -173,7 +173,7 @@ for id, kwargs in prep_dict.items():
         print(" done.")
 
 
-# %%
+# %% Pytask Function
 
 
 @mark.persist
@@ -269,5 +269,3 @@ def task_coastal_wetlands_proxy(
     proxy_xr.transpose("year", "y", "x").round(10).rio.write_crs(ras_crs).to_netcdf(
         output_path
     )
-
-    # %%
