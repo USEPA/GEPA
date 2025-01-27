@@ -1,6 +1,6 @@
 """
 Name:                   task_coal_surface_and_under_proxy.py
-Date Last Modified:     2025-01-24
+Date Last Modified:     2025-01-27
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script produces proxies for underground and surface coal
                         mines, and post mining for both. The proxies are based on the
@@ -9,15 +9,16 @@ Purpose:                This script produces proxies for underground and surface
                         underground or surface mines. The production data is then joined
                         with the mines database to get the production data for each
                         mine.
-Input Files:            - ghgi_data_dir_path / "1B1a_coal_mining_underground/
+Input Files:            - {ghgi_data_dir_path} / "1B1a_coal_mining_underground/
                             Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        - ghgi_data_dir_path / "1B1a_coal_mining_surface/
+                        - {ghgi_data_dir_path} / "1B1a_coal_mining_surface/
                             Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        - sector_data_dir_path / "abandoned_mines/Mines.zip"
-                        - global_data_dir_path / "tl_2020_us_state.zip"
-                        - EIA_dir_path / "coalpublic{year}.xls"
-Output Files:           - proxy_data_dir_path / "coal_{mine_type.lower()}_proxy.parquet"
-                        - proxy_data_dir_path /
+                        - {sector_data_dir_path} / "abandoned_mines/Mines.zip"
+                        - {global_data_dir_path} / "tl_2020_us_state.zip"
+                        - {EIA_dir_path} / "coalpublic{year}.xls"
+Output Files:           - {proxy_data_dir_path} / 
+                            "coal_{mine_type.lower()}_proxy.parquet"
+                        - {proxy_data_dir_path} /
                             "coal_post_{mine_type.lower()}_proxy.parquet"
 
 NOTE: The 2021 and recent EIA files had to be converted manually to the .xlsx format.
@@ -28,7 +29,7 @@ format or deal with the read_xml method.
 # https://pandas.pydata.org/docs/reference/api/pandas.read_xml.html
 """
 
-# %%
+# %% Import Libraries
 from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
@@ -52,6 +53,8 @@ from gch4i.config import (
 )
 from gch4i.utils import download_url
 
+
+# %% Set Constants & Paths
 pd.set_option("future.no_silent_downcasting", True)
 pd.set_option("float_format", "{:f}".format)
 
@@ -138,9 +141,9 @@ for mine_type in mine_types:
     output_path_coal,
     output_path_coal_post,
 ) = param_dict["Surface"].values()
-# %%
 
 
+# %% Pytask Function
 for _id, kwargs in param_dict.items():
 
     @mark.persist
@@ -228,7 +231,7 @@ for _id, kwargs in param_dict.items():
                 year_mine_df = year_mine_df.iloc[:end_row, :]
                 # print(inv_mine_df["MSHA Mine ID"].isna().sum())
             print(
-                f"{year} found {year_mine_df["MSHA Mine ID"].nunique()} "
+                f"{year} found {year_mine_df['MSHA Mine ID'].nunique()} "
                 "mines in inventory"
             )
             print(
