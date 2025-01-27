@@ -1,4 +1,15 @@
-# %%
+"""
+Name:                  task_pop_proxy.py
+Date Last Modified:    2025-01-27
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Generate population proxy data for emissions.
+Input Files:           - DL URL: https://data.worldpop.org/GIS/Population/
+                        Global_2000_2020_1km/  f"{year}/USA/
+                        usa_ppp_{year}_1km_Aggregated.tif"
+Output Files:          - DST Path: {tmp_data_dir_path}/usa_ppp_{year}_1km_Aggregated.tif
+"""
+
+# %% Import Libraries
 import multiprocessing
 from pathlib import Path
 from typing import Annotated
@@ -15,10 +26,19 @@ from gch4i.utils import download_url, proxy_from_stack, stack_rasters, warp_to_g
 
 NUM_WORKERS = multiprocessing.cpu_count()
 
-# %%
+# %% Functions
 
 
 def get_download_params(years):
+    """
+    Obtain the download parameters for the population data.
+
+    Args:
+        dl_url (str): The download URL for the population data.
+
+    Returns:
+        _id_to_kwargs (dict): A dictionary of the download parameters.
+    """
     _id_to_kwargs = {}
     for year in years:
         dl_url = (
@@ -30,10 +50,12 @@ def get_download_params(years):
     return _id_to_kwargs
 
 
+# Store the download parameters in a dictionary.
 _ID_TO_KWRARGS_DL = get_download_params(years)
 _ID_TO_KWRARGS_DL
 
 
+# Iterate over the id and kwargs in the dictionary and create a task for each.
 for _id, kwargs in _ID_TO_KWRARGS_DL.items():
 
     @mark.persist
