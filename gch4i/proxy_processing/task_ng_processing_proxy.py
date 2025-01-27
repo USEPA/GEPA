@@ -1,21 +1,22 @@
 """
 Name:                   task_ng_processing_proxy.py
-Date Last Modified:     January 24, 2025
-Authors Name:           Hannah Lohman
+Date Last Modified:     2025-01-24
+Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Process natural gas processing proxy data for methane emissions
-Input Files:            - tl_2020_us_state.zip
-                        - Rextag_Natural_Gas.gdb
-                        - GHGRP_Facility_Info_Jan2025.csv
-                        - EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb
-                        - processing_emi.csv
-Output Files:           - ng_processing_proxy.parquet
+Input Files:            - State Geodata: {global_data_dir_path}/tl_2020_us_state.zip
+                        - Enverus : {sector_data_dir_path}/enverus/midstream/
+                            Rextag_Natural_Gas.gdb
+                        - GHGRP Facility: {sector_data_dir_path}/ng_processing/
+                            GHGRP_Facility_Info_Jan2025.csv
+                        - GHGRP Subpart W: {sector_data_dir_path}/ng_processing/
+                            EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb
+                        - NG Processing: {emi_data_dir_path}/processing_emi.csv
+Output Files:           - {proxy_data_dir_path}/ng_processing_proxy.parquet
 """
 
-# %%
+# %% Import Libraries
 from pathlib import Path
-import os
 from typing import Annotated
-from pyarrow import parquet
 import pandas as pd
 import geopandas as gpd
 import numpy as np
@@ -23,7 +24,6 @@ from pytask import Product, task, mark
 from pyxlsb import open_workbook
 
 from gch4i.config import (
-    V3_DATA_PATH,
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
@@ -36,6 +36,7 @@ from gch4i.config import (
 from gch4i.utils import us_state_to_abbrev
 
 
+# %% Pytask Function
 @mark.persist
 @task(id="ng_processing_proxy")
 def task_get_ng_processing_proxy_data(
@@ -45,8 +46,21 @@ def task_get_ng_processing_proxy_data(
     ghgrp_subpart_w_path: Path = sector_data_dir_path / "ng_processing/EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb",
     ng_processing_emi_path: Path = emi_data_dir_path / "processing_emi.csv",
     proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_processing_proxy.parquet",
-    ):
+):
+    """
+    Process natural gas processing proxy data for methane emissions
 
+    Args:
+        state_path (Path): Path to the state geodata
+        enverus_midstream_ng_path (Path): Path to the Enverus Midstream Natural Gas data
+        ghgrp_facilities_path (Path): Path to the GHGRP Facility data
+        ghgrp_subpart_w_path (Path): Path to the GHGRP Subpart W data
+        ng_processing_emi_path (Path): Path to the natural gas processing emissions data
+        proxy_output_path (Path): Path to the output proxy data
+
+    Returns:
+        None. Outputs the processed proxy data to a parquet file.
+    """
     # Load in State ANSI data
     state_gdf = (
         gpd.read_file(state_path)
@@ -65,6 +79,7 @@ def task_get_ng_processing_proxy_data(
         enverus_midstream_ng_path,
         layer="GasProcessingPlants",
         columns=["NAME", "TYPE", "STATUS", "CAPACITY", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
+        # Filter type, status, country, and state columns
         .query("TYPE == 'Processing Plant'")
         .query("STATUS == 'Operational'")
         .query("CNTRY_NAME == 'United States'")
@@ -77,14 +92,16 @@ def task_get_ng_processing_proxy_data(
                          "STATE_NAME": "state_name",
                          })
         .assign(state_code='NaN')
+        # Convert CRS to 4326
         .to_crs(4326)
         .reset_index(drop=True)
         )
-    
+
     central_processing_facilities = (gpd.read_file(
         enverus_midstream_ng_path,
         layer="CentralProcessingFacilities",
         columns=["NAME", "TYPE", "STATUS", "CAPACITY", "CNTY_NAME", "STATE_NAME", "CNTRY_NAME", "geometry"])
+        # Filter type, status, country, and state columns
         .query("TYPE == 'Central Processing Facility'")
         .query("STATUS == 'Operational'")
         .query("CNTRY_NAME == 'United States'")
@@ -97,23 +114,28 @@ def task_get_ng_processing_proxy_data(
                          "STATE_NAME": "state_name",
                          })
         .assign(state_code='NaN')
+        # Convert CRS to 4326
         .to_crs(4326)
         .reset_index(drop=True)
         )
-    
+
+    # Combine gas processing plants and central processing facilities
     enverus_processing_plants = pd.concat([gas_processing_plants, central_processing_facilities]).reset_index(drop=True)
-    
+
+    # Assign state codes to Enverus processing plants
     for istation in np.arange(0, len(enverus_processing_plants)):
         enverus_processing_plants.loc[istation, "state_code"] = us_state_to_abbrev(enverus_processing_plants.loc[istation, "state_name"])
-    
+
+    # Extract latitude and longitude
     enverus_processing_plants['latitude'] = enverus_processing_plants.loc[:, 'geometry'].y
     enverus_processing_plants['longitude'] = enverus_processing_plants.loc[:, 'geometry'].x
-    
+
     # GHGRP Subpart W Processing Plant Emissions
     # Read in the GHGRP facility locations
     ghgrp_facility_info = (pd.read_csv(ghgrp_facilities_path)
                            .loc[:, ["facility_name", "facility_id", "latitude", "longitude", "state", "county", "city", "zip"]]
-                           .rename(columns={"state": "state_code", "zip": "zip_code"})
+                           .rename(columns={"state": "state_code",
+                                            "zip": "zip_code"})
                            .astype({"facility_id": str})
                            .drop_duplicates(subset=['facility_id'], keep='last')
                            )
@@ -126,26 +148,30 @@ def task_get_ng_processing_proxy_data(
                 for row in sheet.rows():
                     data.append([item.v for item in row])
                 return pd.DataFrame(data[1:], columns=data[0])
-    
-    
+
+    # Read in data from GHGRP Subpart W
     ghgrp_facility_emissions = (read_xlsb(ghgrp_subpart_w_path, 'GGDSPUBV2.EF_W_EMISSIONS_SOURC')
                                 .rename(columns=str.lower)
                                 .rename(columns={"total_reported_ch4_emissions": "ch4_emi", "reporting_year": "year"})
                                 .astype({"facility_id": int, "year": int})
                                 .astype({"facility_id": str})
+                                # Filter for onshore natural gas processing
                                 .query("industry_segment == 'Onshore natural gas processing [98.230(a)(3)]'")
+                                # Grab years of interest
                                 .query("year.between(@min_year, @max_year)")
                                 .loc[:, ["facility_name", "facility_id", "year", "ch4_emi"]]
                                 .reset_index(drop=True)
                                 )
+
+    # Filter for emissions greater than 0
     ghgrp_facility_emissions['ch4_emi'] = pd.to_numeric(ghgrp_facility_emissions['ch4_emi'], errors='coerce')
     ghgrp_facility_emissions = ghgrp_facility_emissions.astype({"ch4_emi": float}).query("ch4_emi > 0").reset_index(drop=True)
-    
+
     # Merge GHGRP facility locations with emissions
     ghgrp_facility_emissions = ghgrp_facility_emissions.merge(ghgrp_facility_info, how='left', on='facility_id')
 
     # Add missing county information
-    for iplant in np.arange(0,len(ghgrp_facility_emissions)):
+    for iplant in np.arange(0, len(ghgrp_facility_emissions)):
         if (pd.isna(ghgrp_facility_emissions['county'][iplant])):
             #DEBUG# print(iplant, ghgrp_facility_emissions.loc[iplant,'city'], ghgrp_facility_emissions.loc[iplant,'state_code'], ghgrp_facility_emissions.loc[iplant,'zip_code'])
             if ghgrp_facility_emissions.loc[iplant, 'zip_code'] == 78162:
@@ -214,7 +240,7 @@ def task_get_ng_processing_proxy_data(
                 ghgrp_facility_emissions.loc[iplant, 'county'] = 'Williams'
             elif ghgrp_facility_emissions.loc[iplant, 'zip_code'] == 79754:
                 ghgrp_facility_emissions.loc[iplant, 'county'] = 'Young'
-    
+
     # Format GHGRP facility data
     ghgrp_facility_emissions = (ghgrp_facility_emissions
                                 .rename(columns={"facility_name_x": "facility_name"})
@@ -232,7 +258,7 @@ def task_get_ng_processing_proxy_data(
     rows_to_delete = []
 
     # First, find exact matching lat/lon facilities
-    for iplant in np.arange(0,len(GHGRP_temp_data)):
+    for iplant in np.arange(0, len(GHGRP_temp_data)):
         # Round lat and lon to have a better chance to finding matches
         lat_temp = round(GHGRP_temp_data['latitude'][iplant], 2)
         lon_temp = round(GHGRP_temp_data['longitude'][iplant], 2)
@@ -269,15 +295,16 @@ def task_get_ng_processing_proxy_data(
                         GHGRP_temp_data.loc[iplant, 'Env_state'] = enverus_processing_plants.loc[match_lat[0][idx], 'state_code']
                         GHGRP_temp_data.loc[iplant, 'Env_capacity'] = enverus_processing_plants.loc[match_lat[0][idx], 'capacity']
                         rows_to_delete = np.append(rows_to_delete, match_lat[0][idx])
-                
+
+    # Drop rows
     rows_to_delete = rows_to_delete.astype(int)
     enverus_processing_plants_notmatched = enverus_processing_plants_notmatched.drop(rows_to_delete).reset_index(drop=True)
 
     # Second, find all Enverus plants within each county that did not match and try to match based on proximity to GHGRP plants
     rows_to_delete = []
-    for iplant in np.arange(0,len(GHGRP_temp_data)):
-    
-        if GHGRP_temp_data.loc[iplant,'match_flag'] !=1:
+    for iplant in np.arange(0, len(GHGRP_temp_data)):
+
+        if GHGRP_temp_data.loc[iplant, 'match_flag'] != 1:
             if pd.isna(GHGRP_temp_data['county'][iplant]):
                 continue  # this should no longer trigger since couty data are corrected above
             else:
@@ -322,7 +349,7 @@ def task_get_ng_processing_proxy_data(
                             if vallat < vallon:
                                 GHGRP_temp_data.loc[iplant, 'match_flag'] = 1
                                 GHGRP_temp_data.loc[iplant, 'Env_name'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlat], 'facility_name']
-                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlat],'county']
+                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlat], 'county']
                                 GHGRP_temp_data.loc[iplant, 'Env_state'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlat], 'state_code']
                                 GHGRP_temp_data.loc[iplant, 'Env_capacity'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlat], 'capacity']
                                 rows_to_delete = np.append(rows_to_delete, list_envmat.index[idxlat])
@@ -330,19 +357,19 @@ def task_get_ng_processing_proxy_data(
                             elif vallat > vallon:
                                 GHGRP_temp_data.loc[iplant, 'match_flag'] = 1
                                 GHGRP_temp_data.loc[iplant, 'Env_name'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlon], 'facility_name']
-                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlon],'county']
+                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlon], 'county']
                                 GHGRP_temp_data.loc[iplant, 'Env_state'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlon], 'state_code']
                                 GHGRP_temp_data.loc[iplant, 'Env_capacity'] = enverus_processing_plants_notmatched.loc[list_envmat.index[idxlon], 'capacity']
                                 rows_to_delete = np.append(rows_to_delete, list_envmat.index[idxlon])
                         else:
                             # If some capacities are non-zero, then assign based on whichever of those are closest to GHGRP 
-                            vallat, idxlat = min((val, idx) for (idx, val) in enumerate(abs(list_envmat_filter.loc[:,'latitude']-lat_temp)))
-                            vallon, idxlon = min((val, idx) for (idx, val) in enumerate(abs(list_envmat_filter.loc[:,'longitude']-lon_temp)))
+                            vallat, idxlat = min((val, idx) for (idx, val) in enumerate(abs(list_envmat_filter.loc[:, 'latitude']-lat_temp)))
+                            vallon, idxlon = min((val, idx) for (idx, val) in enumerate(abs(list_envmat_filter.loc[:, 'longitude']-lon_temp)))
                             # Assign to the plant with the closest lat
                             if vallat < vallon:
                                 GHGRP_temp_data.loc[iplant, 'match_flag'] = 1
                                 GHGRP_temp_data.loc[iplant, 'Env_name'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlat], 'facility_name']
-                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlat],'county']
+                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlat], 'county']
                                 GHGRP_temp_data.loc[iplant, 'Env_state'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlat], 'state_code']
                                 GHGRP_temp_data.loc[iplant, 'Env_capacity'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlat], 'capacity']
                                 rows_to_delete = np.append(rows_to_delete, list_envmat_filter.index[idxlat])
@@ -350,12 +377,14 @@ def task_get_ng_processing_proxy_data(
                             elif vallat > vallon:
                                 GHGRP_temp_data.loc[iplant, 'match_flag'] = 1
                                 GHGRP_temp_data.loc[iplant, 'Env_name'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlon], 'facility_name']
-                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlon],'county']
+                                GHGRP_temp_data.loc[iplant, 'Env_county'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlon], 'county']
                                 GHGRP_temp_data.loc[iplant, 'Env_state'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlon], 'state_code']
                                 GHGRP_temp_data.loc[iplant, 'Env_capacity'] = enverus_processing_plants_notmatched.loc[list_envmat_filter.index[idxlon], 'capacity']
                                 rows_to_delete = np.append(rows_to_delete, list_envmat_filter.index[idxlon])
 
+    # Ensure rows to delete are integers
     rows_to_delete = rows_to_delete.astype(int)
+    # Copy temp data to GHGRP facility emissions
     ghgrp_facility_emissions = GHGRP_temp_data.copy()
 
     # Matched and not matched GHGRP and Enverus data sets
@@ -382,9 +411,9 @@ def task_get_ng_processing_proxy_data(
     # Note that in v2, throughput was used instead of capacity. In the future, check to
     # see if the Enverus Midstream data download includes throughput and use if available.
     matched_GHGRP_plants['emis_cap_ratio'] = 0.0
-    for iplant in np.arange(0,len(matched_GHGRP_plants)):
+    for iplant in np.arange(0, len(matched_GHGRP_plants)):
         matched_GHGRP_plants.loc[iplant, 'emis_cap_ratio'] = (matched_GHGRP_plants.loc[iplant, 'ch4_emi'] / matched_GHGRP_plants.loc[iplant, 'Env_capacity'] if matched_GHGRP_plants.loc[iplant, 'Env_capacity'] > 0 else 0)
-    
+
     # Calculate the average emissions/capacity ratio by year
     avg_emis_capacity_ratio = np.zeros(len(years))
     for iyear in np.arange(0, len(years)):
@@ -467,10 +496,10 @@ def task_get_ng_processing_proxy_data(
 
         # Convert to GeoDataFrame
         alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
-        
+
         # Append to grouped_proxy
         processing_plants_gdf = pd.concat([processing_plants_gdf, alt_proxy], ignore_index=True)
-    
+
     # Output proxy parquet files
     processing_plants_gdf.to_parquet(proxy_output_path)
 
