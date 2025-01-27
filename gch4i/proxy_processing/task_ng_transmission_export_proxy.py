@@ -1,7 +1,7 @@
 """
 Name:                  task_ng_transmission_export_proxy.py
 Date Last Modified:    2025-01-27
-Authors Name:          Hannah Lohman  (RTI International)
+Authors Name:          John Bollenbacher  (RTI International)
 Purpose:               Creates proxy data for LNG export terminals based on terminal
                         locations and volumes.
 Input Files:           - {sector_data_dir_path}/lng/lng_importexport_terminals_v3.csv
