@@ -179,10 +179,9 @@ def task_get_railroads_proxy(
     # Dissolve
     railroad_proxy = railroads_filtered.dissolve(by=['STUSPS', 'year']).reset_index()
     # Change column names
-    railroad_proxy = railroad_proxy.rename(columns={'STUSPS': 'state_code',
-                                                    'geometry': 'Geometry'})
+    railroad_proxy = railroad_proxy.rename(columns={'STUSPS': 'state_code'})
     # Set geometry: 4326
-    railroad_proxy = railroad_proxy.set_geometry('Geometry').to_crs("EPSG:4326")
+    railroad_proxy = railroad_proxy.set_geometry('geometry').to_crs("EPSG:4326")
 
     # Save output
     railroad_proxy.to_parquet(reporting_proxy_output)
