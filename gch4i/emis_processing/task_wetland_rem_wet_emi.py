@@ -1,8 +1,9 @@
 """
 Name:                   task_wetlands_rem_wet_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of 4D1 emissions to State, Year, emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of wetlands remaining wetlands emissions to State, Year,
+                            emissions format
 gch4i_name:             4D1_wetlands_remaining_wetlands
 Input Files:            - {ghgi_data_dir_path}/4D1_wetlands_remaining_wetlands/
                             FloodedLands_90-22_State.xlsx [InvDB]
