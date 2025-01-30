@@ -1,7 +1,7 @@
 """
 Name:                   task_anaerobic_digestion_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of anaerobic_digestion emissions to State, Year,
                         emissions format
 gch4i_name:             5B2_anaerobic_digestion
