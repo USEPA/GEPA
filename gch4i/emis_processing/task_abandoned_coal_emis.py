@@ -3,8 +3,10 @@ Name:                  Abandoned_Coal_Emissions
 Date Last Modified:    2024-09-19
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Clean and standardized abandoned coal methane emissions data
+gch4i_name:             1B1a_abandoned_coal
 Input Files:           - gch4i_data_guide_v3.xlsx
-                       - {V3_DATA_PATH}/ghgi/1B1a_abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx
+                       - {V3_DATA_PATH}/ghgi/1B1a_abandoned_coal/
+                            AbandonedCoalMines1990-2022_FRv1.xlsx
 Output Files:          - {emi_data_dir_path}/abd_coal_emi.csv
 """
 
@@ -27,13 +29,14 @@ from gch4i.utils import tg_to_kt
 def read_emi_data(in_path, src):
     """
     Read and process abandoned coal mines methane emissions data from given filepath.
-    
+
     Args:
         in_path (Path): Path to input Excel file
         src (str): Source category string to filter data
-        
+
     Returns:
-        pd.DataFrame: Processed emissions data with columns [state_code, year, ghgi_ch4_kt]
+        pd.DataFrame: Processed emissions data with columns
+        [state_code, year, ghgi_ch4_kt]
     """
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
@@ -69,6 +72,7 @@ def read_emi_data(in_path, src):
         # set the index to state
         .set_index("state_code")
         # covert "NO" string to numeric (will become np.nan)
+        .replace(0, pd.NA)
         .apply(pd.to_numeric, errors="coerce")
         # # drop states that have all nan values
         .dropna(how="all")
@@ -95,9 +99,9 @@ def read_emi_data(in_path, src):
 
 
 # Retrieve input data filepath from data guide sheet
-source_name = "abandoned_coal" #TODO: update (1B1a_abandoned_coal ?)
+source_name = "1B1a_abandoned_coal"
 data_guide_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-proxy_data = pd.read_excel(data_guide_path, sheet_name="testing").query( #TODO: Update sheet name. (emi_proxy_mapping ?)
+proxy_data = pd.read_excel(data_guide_path, sheet_name="emi_proxy_mapping").query(
     f"gch4i_name == '{source_name}'"
 )
 emi_parameters_dict = {}
@@ -126,7 +130,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             individual_emi_df = read_emi_data(input_path, ghgi_group)
             emi_df_list.append(individual_emi_df)
 
-        emission_group_df = ( # Group data from different input files into single table
+        emission_group_df = (  # Group data from different input files into single table
             pd.concat(emi_df_list)
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
