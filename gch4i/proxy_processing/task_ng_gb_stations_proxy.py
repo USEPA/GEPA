@@ -26,13 +26,11 @@ from gch4i.utils import us_state_to_abbrev
 
 # %%
 @mark.persist
-@task(id="ng_compressor_stations_proxy")
-def task_get_ng_compressor_stations_proxy_data(
+@task(id="ng_gb_stations_proxy")
+def task_get_ng_gb_stations_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_midstream_ng_path: Path = sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb",
     gb_stations_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_gb_stations_proxy.parquet",
-    storage_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_storage_comp_station_proxy.parquet",
-    trans_comp_station_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_trans_comp_station_proxy.parquet",
 ):
     """
     Creation of the following proxies using Enverus Midstream Rextag_Natural_Gas.gdb:
@@ -81,21 +79,5 @@ def task_get_ng_compressor_stations_proxy_data(
                         .loc[:, ["facility_name", "state_code", "geometry"]]
                         .reset_index(drop=True))
     gb_stations_proxy_gdf.to_parquet(gb_stations_output_path)
-
-    # storage_comp_station_proxy
-    storage_comp_station_proxy_gdf = (compressor_stations_gdf
-                        .query("type == 'Storage'")
-                        .drop(columns=["type", "state_name"])
-                        .loc[:, ["facility_name", "state_code", "geometry"]]
-                        .reset_index(drop=True))
-    storage_comp_station_proxy_gdf.to_parquet(storage_comp_station_output_path)
-
-    # trans_comp_station_proxy
-    trans_comp_station_proxy_gdf = (compressor_stations_gdf
-                        .query("type == 'Transmission'")
-                        .drop(columns=["type", "state_name"])
-                        .loc[:, ["facility_name", "state_code", "geometry"]]
-                        .reset_index(drop=True))
-    trans_comp_station_proxy_gdf.to_parquet(trans_comp_station_output_path)
 
     return None
