@@ -390,8 +390,6 @@ def task_get_ng_processing_proxy_data(
     # Matched and not matched GHGRP and Enverus data sets
     # Unmatched Enverus plants
     enverus_processing_plants_notmatched = enverus_processing_plants_notmatched.drop(rows_to_delete)
-    # All GHGRP plants
-    ghgrp_facility_emissions = GHGRP_temp_data.copy()
     # Unique GHGRP plants
     unique_GHGRP_plants = ghgrp_facility_emissions['facility_id'].unique()
     # Unmatched GHGRP plants
