@@ -1,9 +1,9 @@
 """
 Name:                   task_livestock_manure_management.py
-Date Last Modified:     2024-12-3
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of Livestock emissions to Year, Month, State, County,
-                        emissions format
+Date Last Modified:     2024-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of Livestock Manure Management emissions to Year, Month,
+                            State, County, emissions format
 gch4i_name:             3B_manure_management
 Input Files:            - {ghgi_data_dir_path}/3B_manure_management/
                             Gridded Methane - Manure emissions by County_v1_17Sept2024

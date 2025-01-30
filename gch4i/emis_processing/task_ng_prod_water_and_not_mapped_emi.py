@@ -1,7 +1,7 @@
 """
 Name:                   task_ng_prod_water_and_not_mapped_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of prod_water and not_mapped emissions
                         to State, Year, emissions format
 gch4i_name:             1B2bii_ng_production

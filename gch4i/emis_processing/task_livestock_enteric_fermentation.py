@@ -1,9 +1,9 @@
 """
 Name:                   task_livestock_enteric_fermentation.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of Livestock emissions to Year, Month, State, County,
-                        emissions format
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of Livestock Enteric Fermentation emissions to Year,
+                            Month, State, County, emissions format
 gch4i_name:             3A_enteric_fermentation
 Input Files:            - {ghgi_data_dir_path}/3A_enteric_fermentation/
                             Gridded Methane - Enteric total emissions by

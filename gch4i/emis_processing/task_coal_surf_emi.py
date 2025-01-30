@@ -1,7 +1,7 @@
 """
 Name:                   task_coal_surf_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 gch4i_name:             1B1a_coal_mining_surface
 Input Files:            - {ghgi_data_dir_path}/1B1a_coal_mining_surface/
@@ -48,6 +48,9 @@ def get_coal_surf_inv_data(in_path, src, params):
         subcategory of interest
     params : dict
         additional parameters
+
+    Returns
+        Saves the emissions data to the output path.
     """
 
     # Read in the data

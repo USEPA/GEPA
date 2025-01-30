@@ -1,8 +1,8 @@
 """
 Name:                   task_petro_transport_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of petroleum systems emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of petroleum transport systems emissions
                         to State, Year, emissions format
 gch4i_name:             1B2aiii_petroleum_transport
 Input Files:            {ghgi_data_dir_path}/1B2aiii_petroleum_transport/

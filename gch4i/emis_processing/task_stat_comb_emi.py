@@ -1,8 +1,8 @@
 """
 Name:                   task_stat_comb_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of mobile combustion emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of stationary combustion emissions
 Input Files:            - {ghgi_data_dir_path}/1A_stationary_combustion/
                             Stationary non-CO2 InvDB State Breakout_2022.xlsx
 Output Files:           - {emi_data_dir_path}/

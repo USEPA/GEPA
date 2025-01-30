@@ -1,8 +1,9 @@
 """
 Name:                   task_land_converted_to_wet_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of 4D1 emissions to State, Year, emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of land converted to wetlands emissions to State, Year,
+                            and emissions format
 gch4i_name:             4D2_land_converted_to_wetlands
 Input Files:            - {ghgi_data_dir_path}/4D2_land_converted_to_wetlands/
                             FloodedLands_90-22_State.xlsx [InvDB]
