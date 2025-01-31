@@ -17,12 +17,12 @@ import rioxarray  # noqa f401
 import seaborn as sns
 import xarray as xr
 from geocube.api.core import make_geocube
-from IPython.display import display
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
 from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
+import logging
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -30,6 +30,8 @@ from gch4i.config import (
     global_data_dir_path,
     years,
 )
+
+logger = logging.getLogger(__name__)
 
 # import warnings
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
@@ -137,7 +139,7 @@ def allocate_emissions_to_proxy(
             )
         # if there are no proxies in that state, print a warning
         if state_proxy_data.shape[0] < 1:
-            Warning(
+            logging.warning(
                 f"there are no proxies in {state} for {year} but there are emissions!"
             )
             continue
@@ -148,7 +150,7 @@ def allocate_emissions_to_proxy(
         # state / year as 0
 
         if state_year_emissions == 0:
-            Warning(
+            logging.critical(
                 f"there are proxies in {state} for {year} but there are no emissions!"
             )
             state_proxy_data["allocated_ch4_kt"] = 0
@@ -167,7 +169,7 @@ def allocate_emissions_to_proxy(
             else:
                 state_proxy_data["allocated_ch4_kt"] = (
                     state_year_emissions / state_proxy_data.shape[0]
-                ).fillna(0)
+                )
         result_list.append(state_proxy_data)
     out_proxy_gdf = pd.concat(result_list).reset_index(drop=True)
     return out_proxy_gdf
@@ -340,7 +342,7 @@ def calculate_flux(
 
 def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
     """take proxy emi allocations and check against state inventory"""
-    print("checking proxy emission allocation by state / year.")
+    logging.info("checking proxy emission allocation by state / year.")
     sum_check = (
         proxy_df.groupby(["state_code", "year"])["allocated_ch4_kt"]
         .sum()
@@ -354,17 +356,21 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
     )
 
     all_equal = sum_check["isclose"].all()
-    print(f"do all proxy emission by state/year equal (isclose): {all_equal}")
-    if not all_equal:
-        print("states and years with emissions that don't match")
-        display(sum_check[~sum_check["isclose"]])
+    if all_equal:
+        logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
+    else:
+        logging.critical("not all proxy emissions match inventory emissions.")
+        logging.info("states and years with emissions that don't match")
+        logging.info(
+            "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
+        )
 
         unique_state_codes = emi_df[~emi_df["state_code"].isin(proxy_df["state_code"])][
             "state_code"
         ].unique()
 
-        print(f"states with no proxy points in them: {unique_state_codes}")
-        print(
+        logging.warning(f"states with no proxy points in them: {unique_state_codes}")
+        logging.info(
             (
                 "states with unaccounted emissions: "
                 f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
@@ -402,7 +408,7 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
 def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
     """compares yearly array sums to inventory emissions"""
 
-    print("checking gridded emissions result by year.")
+    logging.info("checking gridded emissions result by year.")
     check_sum_dict = {}
     for year, arr in raster_dict.items():
         gridded_sum = arr.sum()
@@ -423,10 +429,13 @@ def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
     )
     all_equal = sum_check["isclose"].all()
 
-    print(f"do all gridded emission by year equal (isclose): {all_equal}")
-    if not all_equal:
-        print("if not, these ones below DO NOT equal")
-        display(sum_check[~sum_check["isclose"]])
+    if all_equal:
+        logging.info("QC PASS: all gridded emission by year are equal (isclose)")
+    else:
+        logging.critical("gridded emissions do not equal inventory emissions.")
+        logging.info(
+            "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
+        )
     return sum_check
 
 
@@ -863,7 +872,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 v3_sum = np.nansum(v3_data[year])
                 # percent difference between v2 and v3
                 percent_dif = 100 * (v3_sum - v2_sum) / ((v3_sum + v2_sum) / 2)
-                print(
+                logging.info(
                     f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, "
                     f"percent difference: {percent_dif}"
                 )
@@ -897,7 +906,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     * (v3_mass_sum - v2_mass_sum)
                     / ((v3_mass_sum + v2_mass_sum) / 2)
                 )
-                print(
+                logging.info(
                     f"year: {year}, v2 mass sum: {v2_mass_sum}, "
                     f"v3 mass sum: {v3_mass_sum}, "
                     f"percent difference: {percent_dif_mass}"

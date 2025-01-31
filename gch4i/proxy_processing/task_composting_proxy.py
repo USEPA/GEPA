@@ -1,3 +1,23 @@
+"""
+Name:                   task_composting_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Nick Kruskamp (RTI International)
+Purpose:                This script combined 4 different facility level datasets into
+                        a single composting proxy. The datasets are from the FRS,
+                        Biocycle, Excess Food, and the STA Certified Compost
+                        Participants Map. The script removes duplicate facilities based
+                        on a spatial tolerance and normalizes the emissions by state.
+                        The script also adds a facility for DC since it has no
+                        facilities listed but has reported emissions.
+Input Files:            - CompostingFacilities.xlsx
+                        - NATIONAL_FACILITY_FILE.CSV
+                        - NATIONAL_NAICS_FILE.CSV
+                        - biocycle_locs_clean.csv
+                        - STA Certified Compost Participants Map.kml
+                        - tl_2020_us_state.zip
+Output Files:           - composting_proxy.parquet
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
@@ -6,27 +26,26 @@ from pyarrow import parquet  # noqa
 import osgeo  # noqa
 import duckdb
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from pytask import Product, mark, task
 from shapely import Point, wkb
 
-from gch4i.config import (  # noqa
+from gch4i.config import (
     global_data_dir_path,
-    max_year,
-    min_year,
-    proxy_data_dir_path,
+    proxy_data_dir_path,  # noqa
     sector_data_dir_path,
 )
-from gch4i.utils import name_formatter
+from gch4i.utils import name_formatter, normalize
 
 # gpd.options.io_engine = "pyogrio"
 
 
-# %%
 COMPOSTING_FRS_NAICS_CODE = 562219
 DUPLICATION_TOLERANCE_M = 250
 
 composting_dir = sector_data_dir_path / "composting"
+# %%
 
 
 @mark.persist
@@ -144,7 +163,7 @@ def get_composting_proxy_data(
         .drop(columns="index_right")
         .rename_geometry("geometry")
     )
-
+    # %%
     # NOTE: DC has no facilities listed, but has 1 year (2012) with reported emissions.
     # Erin email note on DC: My understanding is that (industrial) composting in DC has
     # been outsources to MD. Since the inventory is trying to capture the distribution
@@ -152,15 +171,36 @@ def get_composting_proxy_data(
     # for DC. Let’s use the Fort Totten Waste Transfer Station (lat/lon: 38.947624,
     # -77.001213). We can make a note of this in the data and assumptions document and
     # this assumption can be re-visited in later iterations.
-    final_facility_gdf = pd.concat(
-        [
-            final_facility_gdf,
-            state_gdf[state_gdf["state_code"] == "DC"][
-                ["state_code", "geometry"]
-            ].assign(geometry=Point(-77.001213, 38.947624)),
-        ]
-    ).reset_index(drop=True)
-    final_facility_gdf.to_parquet(dst_path)
+    proxy_gdf = (
+        pd.concat(
+            [
+                final_facility_gdf,
+                state_gdf[state_gdf["state_code"] == "DC"][
+                    ["state_code", "geometry"]
+                ].assign(geometry=Point(-77.001213, 38.947624)),
+            ]
+        )
+        .reset_index(drop=True)
+        .assign(emis_kt=1)
+    )
+    proxy_gdf["rel_emi"] = proxy_gdf.groupby("state_code")["emis_kt"].transform(
+        normalize
+    )
+    print("composting facilities with location: ", len(proxy_gdf))
+
+    all_eq_df = (
+        proxy_gdf.groupby("state_code")["rel_emi"]
+        .sum()
+        .rename("sum_check")
+        .to_frame()
+        .assign(is_close=lambda df: (np.isclose(df["sum_check"], 1)))
+    )
+    all_eq_df
+
+    if not all_eq_df["is_close"].all():
+        raise ValueError("not all values are normed correctly!")
+    # %%
+    proxy_gdf.to_parquet(dst_path)
 
 
 # %%

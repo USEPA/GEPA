@@ -1,3 +1,14 @@
+"""
+Name:                   task_iron_steel_emi.py
+Date Last Modified:     2024-12-12
+Authors Name:           Nick Kruskamp
+Purpose:                Mapping of Grassland emissions to State, Year, emissions format
+gch4i_name:             - 1B2bii_ng_production, 1B2biv_ng_transmission_storage
+Input Files:            -
+Output Files:           -
+Notes:                  -
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
@@ -178,7 +189,7 @@ def read_postmeter_data(in_path, sheet_name, src):
 
 
 # %%
-source_name = "gas"
+source_names = ["1B2bii_ng_production", "1B2biv_ng_transmission_storage"]
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 
 # TODO: need to come back when we have ALL the files for gas to remove the dropna
@@ -186,12 +197,12 @@ proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 # match one of the four existing read functions.
 proxy_data = (
     pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping")
-    .query(f"gch4i_name == '{source_name}'")
+    .query(f"gch4i_name.isin({source_names})")
     .dropna(subset="file_name")
 )
 
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
 
     input_paths = []
     for x in data.file_name:
@@ -211,14 +222,12 @@ emi_parameters_dict
 
 # %%
 # FOR TESTING
-# _id = "dist_emi"
-# # _id = "non_assoc_conv_emi"
+# _id = "export_terminals_emi"
 
 # input_paths, sheet_names, source_list, output_path = emi_parameters_dict[_id].values()
 # emi_name = output_path.stem
 # source_list = [x.strip().casefold() for x in source_list]
 # display(source_list)
-
 
 # %%
 for _id, _kwargs in emi_parameters_dict.items():
@@ -309,17 +318,4 @@ for _id, _kwargs in emi_parameters_dict.items():
         emission_group_df.to_csv(output_path)
 
 
-# %%
-"""
-issues:
-
-emi:                        issue:
-postmeter_vehicles_emi      copy code from John
-postmeter_resi_emi          copy code from John
-postmeter_ind_egu_emi       copy code from John
-postmeter_comm_emi          copy code from John
-
-dist_emi                    working on code, but failing QC.
-processing_emi              haven't done yet, new code
-"""
 # %%
