@@ -1,10 +1,13 @@
 """
-Name:                   task_ng_all_well_count_proxy.py.py
+Name:                   task_ng_all_well_count_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas well count proxy emissions
-Input Files:            -
-Output Files:           -
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip",
+                        Enverus: sector_data_dir_path / "enverus/production",
+                        Intermediate: sector_data_dir_path / "enverus/production/intermediate_outputs",
+                        NEI: sector_data_dir_path / "nei_og",
+Output Files:           proxy_data_dir_path / "ng_all_well_count_proxy.parquet"
 """
 
 # %% Import Libriaries
