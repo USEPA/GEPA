@@ -1,6 +1,6 @@
 """
 Name:                   task_petro_production_emi.py
-Date Last Modified:     2024-12-12
+Date Last Modified:     2025-01-17
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of petroleum systems emissions
                         to State, Year, emissions format
@@ -20,12 +20,37 @@ import ast
 
 from gch4i.config import (
     V3_DATA_PATH,
+    tmp_data_dir_path,
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
     min_year
 )
-from gch4i.sector_code.emi_mapping.a_excel_dict import read_excel_params2
+
+
+# %% STEP 0.5 Create Function to Read Excel Parameters
+
+
+def read_excel_params(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+    """
+    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    """
+    # Read in Excel File
+    df = (pd.read_excel(file_path, sheet_name=sheet)
+            .assign(
+                ghgi_group=lambda x: x['Subcategory2'].str.strip().str.casefold()
+            ))
+
+    # Filter for Emissions Dictionary
+    df = df.loc[df['gch4i_name'] == subsector]
+
+    df = df.loc[df['ghgi_group'] == emission, 'add_params']
+
+    # Convert to dictionary
+    result = ast.literal_eval(df.iloc[0])
+
+    return result
+
 
 # %% STEP 1. Create Emi Mapping Functions
 
@@ -100,9 +125,6 @@ def get_petro_production_inv_data(in_path, src, params):
     single source. The function reads in the data and returns the emissions in kt.
 
     ----------
-    NOTE: read_excel_params2 must be imported from a_excel_dict.py for this function
-    to execute.
-    ----------
     Parameters
     ----------
     in_path : str
@@ -123,10 +145,10 @@ def get_petro_production_inv_data(in_path, src, params):
                 'wellheads, separators, headers, heaters',
                 'chemical injection pumps', 'pneumatic devices - total']):
         # Directly overwrite the params dictionary
-        params = read_excel_params2(proxy_file_path,
-                                    source_name,
-                                    src,
-                                    sheet='emi_proxy_mapping')
+        params = read_excel_params(proxy_file_path,
+                                   source_name,
+                                   src,
+                                   sheet='emi_proxy_mapping')
     else:
         params = params
 
@@ -211,19 +233,22 @@ def get_petro_production_inv_data(in_path, src, params):
     if src in ["offshore gom federal waters",
                "offshore pacific federal and state waters",
                "offshore alaska state waters"]:
-        # If True, 'make_up' list for queryign emission_source
+        # If True, 'make_up' list for querying emission_source
         if src == "offshore alaska state waters":
             make_up = ["Offshore Alaska State Waters, Vent/Leak",
                        "Offshore Alaska State Waters, Flare"]
-        # If True, 'make_up' list for queryign emission_source
+            state_name = "ALL"  # I assume AK (Alaska)
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore pacific federal and state waters":
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
-        # If True, 'make_up' list for queryign emission_source
+            state_name = "CAO"  # State_code used in proxy processing
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
                        "Offshore GoM Federal Waters: Flaring"]
+            state_name = "ALL"  # I assume GOM (Gulf of Mexico)
         emi_df = (
             # Rename columns
             emi_df.rename(columns=lambda x: str(x).lower())
@@ -249,7 +274,7 @@ def get_petro_production_inv_data(in_path, src, params):
             # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
             # Make state_code "ALL"
-            .assign(state_code="ALL")
+            .assign(state_code=state_name)
             # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
@@ -345,7 +370,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": tmp_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict

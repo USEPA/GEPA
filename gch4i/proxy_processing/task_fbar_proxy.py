@@ -14,12 +14,14 @@ Notes:                  - pytask.parameterize() is outdated.
                         across the state polygon with averaged generalized proportions
                         calculated from all other monthly crop emissions.
 """
+
 ########################################################################################
 # %% STEP 0.1. Load Packages
 
 from pathlib import Path
 from typing import Annotated
 from pytask import Product, mark, task
+
 # import pytask
 
 import pandas as pd
@@ -34,7 +36,6 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     # ghgi_data_dir_path,
-    # tmp_data_dir_path,
     emi_data_dir_path,
     # max_year,
     # min_year
@@ -45,7 +46,9 @@ from gch4i.config import (
 
 state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 
-GEPA_Field_Burning_Path = V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning"
+GEPA_Field_Burning_Path = (
+    V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning"
+)
 
 InputData_path = GEPA_Field_Burning_Path / "InputData/"
 
@@ -56,7 +59,7 @@ McCarty_years = np.arange(2003, 2008)
 
 
 def create_circle_geometry(row, radius_crs="EPSG:3857"):
-    """"
+    """ "
     Create a circular polygon centered on a lat/lon point using a radius derived from
     the "Acres" columns.
     """
@@ -68,24 +71,25 @@ def create_circle_geometry(row, radius_crs="EPSG:3857"):
     center = Point(row["geometry"])
 
     # Project teh cente rpoint to a metric CRS (EPSG:3857)
-    gdf_point = gpd.GeoDataFrame({'geometry': [center]}, crs="EPSG:4326")
+    gdf_point = gpd.GeoDataFrame({"geometry": [center]}, crs="EPSG:4326")
     gdf_point = gdf_point.to_crs(radius_crs)
 
     # Buffer in metric CRS
     buffered = gdf_point.geometry.buffer(radius_m)
 
     # Reproject back to EPSG:4326
-    buffered = gpd.GeoDataFrame({'geometry': buffered}, crs=radius_crs).to_crs("EPSG:4326")
+    buffered = gpd.GeoDataFrame({"geometry": buffered}, crs=radius_crs).to_crs(
+        "EPSG:4326"
+    )
 
     # Return the geometry
     return buffered.iloc[0].geometry
 
 
 # Base proxy retrieval function. To be used with 7 pytask functions
-def task_get_fbar_proxy_data(
-        filter_condition,
-        state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-        ):
+def get_fbar_proxy_data(
+    filter_condition, state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+):
     """
     This base proxy function will be used in concert with 7 pytask functions to retrieve
     relevant state emissions data, fill in gaps in proxy data from McCarty, et al.
@@ -103,31 +107,31 @@ def task_get_fbar_proxy_data(
     for year in McCarty_years:
         df = (
             # Read in McCarty, et al. (2011) data
-            pd.read_csv(f"{InputData_path}/{year}_ResidueBurning_AllCrops.csv",
-                        usecols=["Crop_Type",
-                                 "Acres",
-                                 "EMCH4_Gg",
-                                 "Burn_Date",
-                                 "Latitude",
-                                 "Longitude"])
+            pd.read_csv(
+                f"{InputData_path}/{year}_ResidueBurning_AllCrops.csv",
+                usecols=[
+                    "Crop_Type",
+                    "Acres",
+                    "EMCH4_Gg",
+                    "Burn_Date",
+                    "Latitude",
+                    "Longitude",
+                ],
+            )
             # Clean and assign month and crop
             .assign(
-                month=lambda x: x['Burn_Date'].str.extract(r'([A-Za-z]{3})')[0],
+                month=lambda x: x["Burn_Date"].str.extract(r"([A-Za-z]{3})")[0],
                 crop=lambda x: np.select(
                     condlist=[
-                        x["Crop_Type"] == 'corn',
+                        x["Crop_Type"] == "corn",
                         x["Crop_Type"].isin(
-                            ['other crop/fallow',
-                                'Kentucky bluegrass',
-                                'lentils'])
+                            ["other crop/fallow", "Kentucky bluegrass", "lentils"]
+                        ),
                     ],
-                    choicelist=[
-                        'maize',
-                        'other'
-                        ],
-                    default=x["Crop_Type"]
-                )
-                )
+                    choicelist=["maize", "other"],
+                    default=x["Crop_Type"],
+                ),
+            )
             # Remove unnecessary columns
             .drop(columns=["Burn_Date", "Crop_Type"])
         )
@@ -136,14 +140,11 @@ def task_get_fbar_proxy_data(
         base_proxy = pd.concat([base_proxy, df], ignore_index=True)
 
     # Convert lat/lon to geometry points
-    base_proxy = (
-        gpd.GeoDataFrame(
-            base_proxy,
-            geometry=gpd.points_from_xy(base_proxy.Longitude, base_proxy.Latitude),
-            crs="EPSG:4326"
-        )
-        .drop(columns=["Latitude", "Longitude"])
-    )
+    base_proxy = gpd.GeoDataFrame(
+        base_proxy,
+        geometry=gpd.points_from_xy(base_proxy.Longitude, base_proxy.Latitude),
+        crs="EPSG:4326",
+    ).drop(columns=["Latitude", "Longitude"])
 
     # Read in State data
     state_gdf = (
@@ -160,7 +161,7 @@ def task_get_fbar_proxy_data(
     # Assign Each row to a State
     base_proxy = (
         gpd.sjoin(base_proxy, state_gdf, how="left", predicate="within")
-        .drop(columns=["index_right", 'state_name', 'statefp'])
+        .drop(columns=["index_right", "state_name", "statefp"])
         .loc[:, ["month", "crop", "state_code", "Acres", "EMCH4_Gg", "geometry"]]
     )
 
@@ -169,28 +170,28 @@ def task_get_fbar_proxy_data(
 
     # Build dictionary to map crop to crop emissions data
     proxy_dict = {
-        'maize': 'maize_emi',
-        'cotton': 'cotton_emi',
-        'rice': 'rice_emi',
-        'soybean': 'soybeans_emi',
-        'sugarcane': 'sugarcane_emi',
-        'wheat': 'wheat_emi',
-        'other': [
-            'barley_emi',
-            'chickpeas_emi',
-            'drybeans_emi',
-            'lentils_emi',
-            'oats_emi',
-            'other_grains_emi',
-            'peanuts_emi',
-            'peas_emi',
-            'potatoes_emi',
-            'sorghum_emi',
-            'sugarbeets_emi',
-            'sunflower_emi',
-            'tobacco_emi',
-            'vegetables_emi'
-        ]
+        "maize": "maize_emi",
+        "cotton": "cotton_emi",
+        "rice": "rice_emi",
+        "soybean": "soybeans_emi",
+        "sugarcane": "sugarcane_emi",
+        "wheat": "wheat_emi",
+        "other": [
+            "barley_emi",
+            "chickpeas_emi",
+            "drybeans_emi",
+            "lentils_emi",
+            "oats_emi",
+            "other_grains_emi",
+            "peanuts_emi",
+            "peas_emi",
+            "potatoes_emi",
+            "sorghum_emi",
+            "sugarbeets_emi",
+            "sunflower_emi",
+            "tobacco_emi",
+            "vegetables_emi",
+        ],
     }
 
     # Filter base_proxy for current_proxy
@@ -204,14 +205,13 @@ def task_get_fbar_proxy_data(
         if isinstance(value, list):
             emi_df = pd.concat(
                 [pd.read_csv(f"{emi_data_dir_path}/{val}.csv") for val in value],
-                ignore_index=True
+                ignore_index=True,
             ).query("ghgi_ch4_kt != 0")
         # If value is a string, read in the single file
         else:
-            emi_df = (
-                pd.read_csv(f"{emi_data_dir_path}/{value}.csv")
-                .query("ghgi_ch4_kt != 0")
-                )
+            emi_df = pd.read_csv(f"{emi_data_dir_path}/{value}.csv").query(
+                "ghgi_ch4_kt != 0"
+            )
 
     # Retrieve unique state codes for emissions without proxy data
     # This step is necessary, as not all emissions data excludes emission-less states
@@ -229,8 +229,10 @@ def task_get_fbar_proxy_data(
         .agg({"EMCH4_Gg": "sum"})
         # Calculate state relative emissions (emissions / state emissions)
         .assign(
-            state_crop_sum=lambda x: x.groupby(['state_code', 'crop'])['EMCH4_Gg'].transform('sum'),
-            rel_emi=lambda x: x['EMCH4_Gg'] / x['state_crop_sum']
+            state_crop_sum=lambda x: x.groupby(["state_code", "crop"])[
+                "EMCH4_Gg"
+            ].transform("sum"),
+            rel_emi=lambda x: x["EMCH4_Gg"] / x["state_crop_sum"],
         )
         # Filter for current crop
         .query("crop == @filter_condition")
@@ -246,8 +248,10 @@ def task_get_fbar_proxy_data(
             base_proxy
             # Create generalized state relative emissions (without respect to crop)
             .assign(
-                state_sum=lambda x: x.groupby(['state_code'])['EMCH4_Gg'].transform('sum'),
-                rel_emi=lambda x: x['EMCH4_Gg'] / x['state_sum']
+                state_sum=lambda x: x.groupby(["state_code"])["EMCH4_Gg"].transform(
+                    "sum"
+                ),
+                rel_emi=lambda x: x["EMCH4_Gg"] / x["state_sum"],
             )
             .drop(columns=["EMCH4_Gg", "state_sum", "crop"])
             # Filter for missing states only
@@ -262,10 +266,7 @@ def task_get_fbar_proxy_data(
     ################################################################################
     # STEP 3. Transform Lat/Lon and Acres to Geometry Polygons
     proxy_gdf = (
-        proxy_gdf
-        .assign(
-            geometry=lambda x: x.apply(create_circle_geometry, axis=1)
-        )
+        proxy_gdf.assign(geometry=lambda x: x.apply(create_circle_geometry, axis=1))
         .drop(columns=["Acres"])
         .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
     )
@@ -285,23 +286,22 @@ def task_get_fbar_proxy_data(
 
         # Get the Proportional EMCH4_Gg per month
         ME_gdf = (
-            base_proxy
-            .groupby("month", as_index=False)
+            base_proxy.groupby("month", as_index=False)
             .agg({"EMCH4_Gg": "sum"})
             .assign(
-                ch4_sum=lambda x: x['EMCH4_Gg'].sum(),
-                rel_emi=lambda x: x['EMCH4_Gg'] / x['ch4_sum'],
+                ch4_sum=lambda x: x["EMCH4_Gg"].sum(),
+                rel_emi=lambda x: x["EMCH4_Gg"] / x["ch4_sum"],
                 geometry=ME_geom,
-                state_code="ME"
+                state_code="ME",
             )
             .drop(columns=["EMCH4_Gg", "ch4_sum"])
-            .loc[:, ['state_code', 'month', 'rel_emi', 'geometry']]
+            .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
         )
 
         # Add ME data to proxy_gdf
         proxy_gdf = pd.concat([proxy_gdf, ME_gdf], ignore_index=True)
         # Set geometry and CRS
-        proxy_gdf = gpd.GeoDataFrame(proxy_gdf, geometry='geometry', crs="EPSG:4326")
+        proxy_gdf = gpd.GeoDataFrame(proxy_gdf, geometry="geometry", crs="EPSG:4326")
 
     # Return proxy data
     return proxy_gdf
@@ -311,15 +311,16 @@ def task_get_fbar_proxy_data(
 ########################################################################################
 # %% Pytask
 
+
 # Cotton Proxy
 @mark.persist
 @task(id="fbar_proxy")
 def task_get_fbar_cotton_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_cotton_proxy.parquet"
+    / "fbar_cotton_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="cotton", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="cotton", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -329,9 +330,9 @@ def task_get_fbar_cotton_proxy_data(
 def task_get_fbar_maize_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_maize_proxy.parquet"
+    / "fbar_maize_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="maize", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="maize", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -341,21 +342,21 @@ def task_get_fbar_maize_proxy_data(
 def task_get_fbar_rice_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_rice_proxy.parquet"
+    / "fbar_rice_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="rice", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="rice", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
 
 # Soybean Proxy
 @mark.persist
-def task_get_fbar_soybean_proxy_data(
+def task_get_fbar_soybeans_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_soybean_proxy.parquet"
+    / "fbar_soybeans_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="soybean", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="soybean", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -365,9 +366,9 @@ def task_get_fbar_soybean_proxy_data(
 def task_get_fbar_sugarcane_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_sugarcane_proxy.parquet"
+    / "fbar_sugarcane_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="sugarcane", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="sugarcane", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -377,9 +378,9 @@ def task_get_fbar_sugarcane_proxy_data(
 def task_get_fbar_wheat_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_wheat_proxy.parquet"
+    / "fbar_wheat_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="wheat", state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="wheat", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
 
@@ -389,8 +390,8 @@ def task_get_fbar_wheat_proxy_data(
 def task_get_fbar_other_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_other_proxy.parquet"
+    / "fbar_other_proxy.parquet",
 ):
-    proxy_gdf = task_get_fbar_proxy_data(filter_condition="other",  state_path=state_path)
+    proxy_gdf = get_fbar_proxy_data(filter_condition="other", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
