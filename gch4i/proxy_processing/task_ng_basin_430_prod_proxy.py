@@ -2,7 +2,7 @@
 Name:                   task_ng_basin_430_prod_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
-Purpose:                Mapping of natural gas production proxy emissions for Basin 220
+Purpose:                Mapping of natural gas production proxy emissions for Basin 430
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
                         Enverus Prod: sector_data_dir_path / "enverus/production"
                         Intermediate: enverus_production_path / "intermediate_outputs"
