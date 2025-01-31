@@ -1,5 +1,5 @@
 """
-Name:                   task_ng_all_well_prod_proxy.py.py.py
+Name:                   task_ng_all_well_prod_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas well production proxy emissions
