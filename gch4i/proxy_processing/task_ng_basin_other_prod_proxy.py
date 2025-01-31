@@ -1,31 +1,35 @@
-# %%
+"""
+Name:                   task_ng_basin_other_prod_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas production proxy emissions for other
+                            basins.
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        Enverus Prod: sector_data_dir_path / "enverus/production"
+                        Intermediate: enverus_production_path / "intermediate_outputs"
+                        NEI: sector_data_dir_path / "nei_og"
+Output Files:           basin Other: proxy_data_dir_path /
+                            "ng_basin_other_prod_proxy.parquet"
+"""
+
+# %% Import Libraries
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
+
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    V3_DATA_PATH,
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
-    max_year,
-    min_year,
     years,
 )
 
-from gch4i.utils import us_state_to_abbrev
 from gch4i.proxy_processing.ng_oil_production_utils import (
     calc_enverus_rel_emi,
     enverus_df_to_gdf,
@@ -35,16 +39,18 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_raw_NEI_data,
 )
 
-# %%
+# %% Pytask Function
+
+
 @mark.persist
 @task(id="ng_basin_other_prod_proxy")
 def task_get_ng_basin_other_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     basin_other_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_basin_other_prod_proxy.parquet",
-    ):
+):
     """
     Data come from Enverus, both Drilling Info and Prism
     The reason 2 datasets are used is because Prism does not include all states
@@ -90,27 +96,34 @@ def task_get_ng_basin_other_prod_proxy_data(
     # but the presence of a well will only be included in maps in months where monthly gas prod > 0
 
     # Proxy Data Dataframes:
-    basin_other_prod_df = pd.DataFrame()  # Gas well gas production in Other Basins in a given month
+    # Gas well gas production in Other Basins in a given month
+    basin_other_prod_df = pd.DataFrame()
 
     ## Enverus DI and Prism Data: 
-    # Read in and query formatted and corrrected Enverus data to create dictionaries of 
+    # Read in and query formatted and corrrected Enverus data to create dictionaries of
     # proxy data (Enverus data is from task_enverus_di_prism_data_processing.py)
     for iyear in years:
         enverus_file_name_iyear = f"formatted_raw_enverus_tempoutput_{iyear}.csv"
         enverus_file_path_iyear = os.path.join(intermediate_outputs_path, enverus_file_name_iyear)
-        ng_data_temp = (pd.read_csv(enverus_file_path_iyear, dtype={3:'str', 'spud_year': str, 'first_prod_year': str})
-                        .query("STATE_CODE.isin(@state_gdf['state_code'])")
-                        .query("OFFSHORE == 'N'")
-                        .query("CUM_GAS > 0")
-                        .assign(gas_to_oil_ratio=lambda df: df['CUM_GAS']/df['CUM_OIL'])
-                        .assign(year=str(iyear))
-                        .replace(np.inf, 0)
-                        .astype({"spud_year": str, "first_prod_year": str})
-                        .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
+        ng_data_temp = (
+            pd.read_csv(
+                enverus_file_path_iyear,
+                dtype={
+                    3: 'str',
+                    'spud_year': str,
+                    'first_prod_year': str})
+            .query("STATE_CODE.isin(@state_gdf['state_code'])")
+            .query("OFFSHORE == 'N'")
+            .query("CUM_GAS > 0")
+            .assign(gas_to_oil_ratio=lambda df: df['CUM_GAS']/df['CUM_OIL'])
+            .assign(year=str(iyear))
+            .replace(np.inf, 0)
+            .astype({"spud_year": str, "first_prod_year": str})
+            .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
                         )
 
         # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)
-        for imonth in range(1,13):
+        for imonth in range(1, 13):
             imonth_str = f"{imonth:02}"  # convert to 2-digit months
             year_month_str = str(iyear)+'-'+imonth_str
             gas_prod_str = 'GASPROD_'+imonth_str
@@ -120,26 +133,29 @@ def task_get_ng_basin_other_prod_proxy_data(
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
-                'HF','WELL_COUNT',gas_prod_str,
-                'comp_year_month','spud_year','first_prod_year']]
+                'year', 'year_month', 'STATE_CODE', 'AAPG_CODE_ERG', 'LATITUDE',
+                'LONGITUDE', 'HF', 'WELL_COUNT', gas_prod_str,
+                'comp_year_month', 'spud_year', 'first_prod_year']]
                 )
             # "Other" Basin Gas Production
-            basin_other_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','AAPG_CODE_ERG',gas_prod_str]]
-                                       .query("AAPG_CODE_ERG != '220' & AAPG_CODE_ERG != '395' & AAPG_CODE_ERG != '430'")
-                                       .assign(proxy_data=lambda df: df[gas_prod_str])
-                                       .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
-                                       .rename(columns=lambda x: str(x).lower())
-                                       .reset_index(drop=True)
+            basin_other_prod_imonth = (
+                ng_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'AAPG_CODE_ERG', gas_prod_str]]
+                .query("AAPG_CODE_ERG != '220' & AAPG_CODE_ERG != '395' & AAPG_CODE_ERG != '430'")
+                .assign(proxy_data=lambda df: df[gas_prod_str])
+                .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])
+                .rename(columns=lambda x: str(x).lower())
+                .reset_index(drop=True)
                                        )
-            basin_other_prod_df = pd.concat([basin_other_prod_df,basin_other_prod_imonth])
+            basin_other_prod_df = pd.concat(
+                [basin_other_prod_df,
+                 basin_other_prod_imonth])
 
     # Delete unused temp data
     del ng_data_temp
     del ng_data_imonth_temp
     del basin_other_prod_imonth
 
-    # Calculate relative emissions and convert to a geodataframe  
+    # Calculate relative emissions and convert to a geodataframe
     basin_other_prod_df = calc_enverus_rel_emi(basin_other_prod_df)
     basin_other_prod_df = enverus_df_to_gdf(basin_other_prod_df)
 
@@ -152,26 +168,30 @@ def task_get_ng_basin_other_prod_proxy_data(
         ifile_name = get_nei_file_name(nei_data_year, ng_gas_prod_file_names)
         nei_iyear = get_raw_NEI_data(iyear, nei_data_year, ifile_name)
         nei_df = pd.concat([nei_df, nei_iyear])
-    
+
     # Convert NEI Data to GDF and polygon to centroid point
     nei_df = gpd.GeoDataFrame(nei_df, crs=4326)
     nei_df = nei_df.to_crs(3857)  # projected CRS for centroid calculation
     nei_df.loc[:, 'geometry'] = nei_df.loc[:, 'geometry'].centroid
     nei_df = nei_df.to_crs(4326)
-    
+
     # Add NEI Data to Enverus Data
-    basin_other_prod_df = pd.concat([basin_other_prod_df, nei_df]).reset_index(drop=True)
+    basin_other_prod_df = pd.concat(
+        [basin_other_prod_df, nei_df]
+        ).reset_index(drop=True)
 
     # Delete unused temp data
     del nei_iyear
     del nei_df
 
     # Check that relative emissions sum to 1.0 each state/year combination
-    sums = basin_other_prod_df.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    # get sums to check normalization
+    sums = basin_other_prod_df.groupby(["state_code", "year"])["rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
 
     # Output Proxy Parquet Files
-    basin_other_prod_df = basin_other_prod_df.astype({'year':str})
+    basin_other_prod_df = basin_other_prod_df.astype({'year': str})
     basin_other_prod_df.to_parquet(basin_other_prod_output_path)
 
     return None
