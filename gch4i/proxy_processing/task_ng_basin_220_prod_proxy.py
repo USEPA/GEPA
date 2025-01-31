@@ -1,5 +1,5 @@
 """
-Name:                   task_ng_basin_220_prod_proxy.py.py.py.py
+Name:                   task_ng_basin_220_prod_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas production proxy emissions for Basin 220
