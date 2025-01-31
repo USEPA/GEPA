@@ -1,12 +1,13 @@
 """
 Name:                   task_grassland_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of Grassland emissions to State, Year, emissions format
 gch4i_name:             4C1_4C2_Grassland_remaining_grassland
-Input Files:            - GrassFires_nonCO2_90-22_FR.xlsx
-Output Files:           - grassland_emi.csv
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/4C1_4C2_Grassland_remaining_grassland/
+                            GrassFires_nonCO2_90-22_FR.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            grassland_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path
@@ -18,7 +19,6 @@ import ast
 
 from gch4i.config import (
     V3_DATA_PATH,
-    tmp_data_dir_path,
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,

@@ -1,13 +1,14 @@
 """
 Name:                   task_forest_land_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of Forest Land emissions to State, Year, emissions
                         format
 gch4i_name:             4A1_4A2_Forest_land_remaining_forest_land
-Input Files:            - ForestCarbon_90-22_State_Gridding.xlsx
-Output Files:           - forest_land_emi.csv
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/
+                            4A1_4A2_Forest_land_remaining_forest_land/
+                            ForestCarbon_90-22_State_Gridding.xlsx
+Output Files:           - {emi_data_dir_path}/forest_land_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

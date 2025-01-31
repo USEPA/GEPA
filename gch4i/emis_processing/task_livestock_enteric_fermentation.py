@@ -1,13 +1,24 @@
 """
 Name:                   task_livestock_enteric_fermentation.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of Livestock emissions to Year, Month, State, County,
-                        emissions format
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of Livestock Enteric Fermentation emissions to Year,
+                            Month, State, County, emissions format
 gch4i_name:             3A_enteric_fermentation
-Input Files:            - Gridded Methane - Enteric total emissions by
-                        County_v2_17Sept2024.xlsx
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/3A_enteric_fermentation/
+                            Gridded Methane - Enteric total emissions by
+                            County_v2_17Sept2024.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            enteric_fermentation_beef_emi.csv
+                            enteric_fermentation_bison_emi.csv
+                            enteric_fermentation_cattle_emi.csv
+                            enteric_fermentation_dairy_emi.csv
+                            enteric_fermentation_goats_emi.csv
+                            enteric_fermentation_horses_emi.csv
+                            enteric_fermentation_mules_emi.csv
+                            enteric_fermentation_onfeed_emi.csv
+                            enteric_fermentation_sheep_emi.csv
+                            enteric_fermentation_swine_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

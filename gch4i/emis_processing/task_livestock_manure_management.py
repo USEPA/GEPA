@@ -1,12 +1,27 @@
 """
 Name:                   task_livestock_manure_management.py
-Date Last Modified:     2024-12-3
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of Livestock emissions to Year, Month, State, County,
-                        emissions format
+Date Last Modified:     2024-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of Livestock Manure Management emissions to Year, Month,
+                            State, County, emissions format
 gch4i_name:             3B_manure_management
-Input Files:            -Gridded Methane - Manure emissions by County_v1_17Sept2024.xlsx
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/3B_manure_management/
+                            Gridded Methane - Manure emissions by County_v1_17Sept2024
+                            .xlsx
+Output Files:           - {emi_data_dir_path}/
+                            manure_management_beef_emi.csv
+                            manure_management_bison_emi.csv
+                            manure_management_broilers_emi.csv
+                            manure_management_chicken_emi.csv
+                            manure_management_dairy_emi.csv
+                            manure_management_goats_emi.csv
+                            manure_management_horses_emi.csv
+                            manure_management_layers_emi.csv
+                            manure_management_mules_emi.csv
+                            manure_management_pullets_emi.csv
+                            manure_management_sheep_emi.csv
+                            manure_management_swine_emi.csv
+                            manure_management_turkeys_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

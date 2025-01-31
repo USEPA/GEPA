@@ -1,11 +1,20 @@
 """
 Name:                   task_stat_comb_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of mobile combustion emissions
-Input Files:            - Stationary non-CO2 InvDB State Breakout_2022.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of stationary combustion emissions
+Input Files:            - {ghgi_data_dir_path}/1A_stationary_combustion/
+                            Stationary non-CO2 InvDB State Breakout_2022.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            not_mapped_emi.csv
+                            stat_comb_comm_emi.csv
+                            stat_comb_indu_emi.csv
+                            stat_comb_res_emi.csv
+                            stat_comb_res_wood_emi.csv
+                            stat_comb_elec_coal_emi.csv
+                            stat_comb_elec_gas_emi.csv
+                            stat_comb_elec_oil_emi.csv
+                            stat_comb_elec_other_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -27,6 +36,7 @@ from gch4i.config import (
 from gch4i.utils import tg_to_kt
 
 # %% Step 1. Create Function
+
 
 def get_comb_stat_inv_data(in_path, src, params):
     """
@@ -101,6 +111,7 @@ def get_comb_stat_inv_data(in_path, src, params):
 
 ################################################################################
 ################################################################################
+
 
 # %% STEP 2. Initialize Parameters
 """

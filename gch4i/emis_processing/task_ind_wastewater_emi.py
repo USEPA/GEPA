@@ -1,12 +1,19 @@
 """
 Name:                   task_ind_wastewater_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of coal emissions to State, Year, emissions format
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of industrial wastewater emissions to State, Year,
+                            emissions format
 gch4i_name:             5D2_industrial_wastewater
-Input Files:            - WW_State-level Estimates_90-22_27June2024.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/5D2_industrial_wastewater/
+                            WW_State-level Estimates_90-22_27June2024.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            ww_brew_emi.csv
+                            ww_ethanol_emi.csv
+                            ww_fv_emi.csv
+                            ww_mp_emi.csv
+                            ww_petrref_emi.csv
+                            ww_pp_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------

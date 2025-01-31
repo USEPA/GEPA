@@ -1,14 +1,25 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 gch4i_name:             1A_mobile_combustion
-Input Files:            - Mobile non-CO2 InvDB State Breakout_2022.xlsx
-                        - SIT Mobile Dataframe 5.24.2023.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  - Relative proportions from "SIT Mobile",
-                        - Emissions numbers from "Mobile non-CO2 InvDB".
+Input Files:            - {ghgi_data_dir_path}/1A_mobile_combustion/
+                            Mobile non-CO2 InvDB State Breakout_2022.xlsx
+                            SIT Mobile Dataframe 5.24.2023.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            emi_passenger_cars.csv
+                            emi_light.csv
+                            emi_heavy.csv
+                            emi_all_roads.csv
+                            emi_waterways.csv
+                            emi_railroads.csv
+                            emi_aircraft.csv
+                            emi_farm.csv
+                            emi_equip.csv
+                            emi_other.csv
+Notes:                  - Relative proportions come from "SIT Mobile" data.
+                        - Emissions numbers from come from "Mobile non-CO2 InvDB" data.
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------

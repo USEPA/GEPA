@@ -1,14 +1,16 @@
 """
 Name:                   task_ng_prod_water_and_not_mapped_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of prod_water and not_mapped emissions
                         to State, Year, emissions format
 gch4i_name:             1B2bii_ng_production
-Input Files:            NG_PROD_StateEstimates_ProdWater.xlsx,
-                        NG_PROD_StateEstimates_AKstateoffshore.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  - This version of emi mapping is draft for mapping .py files
+Input Files:            {ghgi_data_dir_path}/1B2bii_ng_production/
+                            NG_PROD_StateEstimates_ProdWater.xlsx,
+                            NG_PROD_StateEstimates_AKstateoffshore.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            ng_not_mapped_emi.csv
+                            ng_prod_water_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------

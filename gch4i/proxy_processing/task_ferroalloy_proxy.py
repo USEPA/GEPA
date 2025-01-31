@@ -1,4 +1,19 @@
-# %%
+"""
+Name:                  task_ferroalloy_proxy.py
+Date Last Modified:    2025-01-23
+Authors Name:          Nick Kruskamp (RTI International)
+Purpose:               Generate facility-level proxy for ferroalloy emissions
+Input Files:           - EPA Inventory: {ghgi_data_dir_path}/State_Ferroalloys_1990-2022
+                        .xlsx
+                       - FRS Facility: {global_data_dir_path}/NATIONAL_FACILITY_FILE.CSV
+                       - Subpart K: https://data.epa.gov/efservice/
+                        k_subpart_level_information/pub_dim_facility/ghg_name/=/
+                        Methane/CSV
+                       - State Geo: {global_data_dir_path}/tl_2020_us_state.zip
+Output Files:          - DST: {proxy_data_dir_path}/ferro_proxy.parquet
+"""
+
+# %% Import Packages
 from pathlib import Path
 from typing import Annotated
 
@@ -22,7 +37,7 @@ from gch4i.utils import name_formatter
 # gpd.options.io_engine = "pyogrio"
 
 
-# %%
+# %% Pytask Function
 @mark.persist
 @task(id="ferro_proxy")
 def task_ferro_proxy_data(
@@ -37,14 +52,15 @@ def task_ferro_proxy_data(
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     dst_path: Annotated[Path, Product] = proxy_data_dir_path / "ferro_proxy.parquet",
 ) -> None:
+    """
+    The facilities have multiple reporting units for each year. This will read in the
+    facilities data and compute the facility level sum of emissions for each year.
+    This pulls from the raw table but ends in the same form as the table on sheet
+    'GHGRP_kt_Totals'
+    """
+    # Read in the SUMMARY facilities emissions data
 
-    # The facilities have multiple reporting units for each year. This will read in the
-    # facilities data and compute the facility level sum of emissions for each
-    # year. This pulls from the raw table but ends in the same form as the table on
-    # sheet "GHGRP_kt_Totals"
-
-    # read in the SUMMARY facilities emissions data
-    # %%
+    # read in state geometries and filter to lower 48 + DC
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -56,6 +72,7 @@ def task_ferro_proxy_data(
         .to_crs(4326)
     )
 
+    # read in the ferroalloy facilities data
     ferro_facilities_df = (
         pd.read_excel(
             EPA_inventory_path,
@@ -67,23 +84,29 @@ def task_ferro_proxy_data(
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"facility": "facility_name", "state": "state_name"})
         .drop(columns=["year opened"])
+        # melt the data to long format
         .melt(
             id_vars=["facility_name", "state_name"],
             var_name="year",
             value_name="est_ch4",
         )
+        # convert the year dtype to int
         .astype({"year": int})
         .assign(formatted_fac_name=lambda df: name_formatter(df["facility_name"]))
+        # merge state geometries to get the state code
         .merge(state_gdf[["state_code", "state_name"]], on="state_name")
+        # filter to the years we want
         .query("year.between(@min_year, @max_year)")
     )
 
-    # STEP 3.1: Get and format FRS and Subpart K facility locations data
-    # this will read in both datasets, format the columns for the facility name, 2
-    # letter state code, latitude and longitude. Then merge the two tables together,
-    # and create a formatted facility name that eases matching of our needed facilities
-    # to the location data.
+    """
+    STEP 3.1: Get and format FRS and Subpart K facility locations data this will read in
+    both datasets, format the columns for the facility name, 2 letter state code,
+    latitude and longitude. Then merge the two tables together, and create a formatted
+    facility name that eases matching of our needed facilities to the location data.
+    """
 
+    # read in the FRS and Subpart K facility location data
     frs_raw = duckdb.execute(
         (
             "SELECT primary_name, state_code, latitude83, longitude83 "
@@ -93,6 +116,7 @@ def task_ferro_proxy_data(
 
     subpart_k_raw = pd.read_csv(subpart_k_url)
 
+    # drop duplicates based on facility name and state code
     frs_df = (
         frs_raw.rename(columns=str.lower)
         .drop_duplicates(subset=["primary_name", "state_code"])
@@ -131,11 +155,14 @@ def task_ferro_proxy_data(
         facility_locations, on=["formatted_fac_name", "state_code"], how="left"
     )
 
-    # NOTE: We are missing 4 facilities. Manually, we checked the 4 missing facilities
-    # for partial name matches in the subpart/frs facility data. We found 3 facilities.
-    # 1 was still missing. Using partial matching of name and state, we assign the
-    # coords to our records.
+    """ 
+    NOTE: We are missing 4 facilities. Manually, we checked the 4 missing facilities
+    for partial name matches in the subpart/frs facility data. We found 3 facilities.
+    1 was still missing. Using partial matching of name and state, we assign the
+    coords to our records.
+    """
 
+    # manually assign the missing facilities
     matching_facilities.loc[
         matching_facilities["formatted_fac_name"] == "bear metallurgical co",
         ["facility_name", "latitude", "longitude"],
@@ -148,6 +175,7 @@ def task_ferro_proxy_data(
         .values
     )
 
+    # manually assign the missing facilities
     matching_facilities.loc[
         matching_facilities["formatted_fac_name"] == "stratcor inc",
         ["facility_name", "latitude", "longitude"],
@@ -160,6 +188,7 @@ def task_ferro_proxy_data(
         .values
     )
 
+    # manually assign the missing facilities
     matching_facilities.loc[
         matching_facilities["formatted_fac_name"] == "metallurg vanadium corp",
         ["facility_name", "latitude", "longitude"],
@@ -172,21 +201,24 @@ def task_ferro_proxy_data(
         .values
     )
 
-    # NOTE: The final facility, thompson creek, has no name match in the facilities
-    # data, so we use the city and state provided in the inventory data to get its
-    # location.
-    # https://en.wikipedia.org/wiki/Thompson_Creek_Metals.
-    # thompson creek metals co inc was acquired in 2016 by Centerra Gold.
-    # A search for Centerra in PA turns up 2 records in the combine subpart K and FRS
-    # dataset. But Centerra Co-op is an agricultural firm, not a ferroalloy facility.
-    # https://www.centerracoop.com/locations
-    # display(
-    #     facility_locations[
-    #         facility_locations["formatted_fac_name"].str.contains("centerra")
-    #         & facility_locations["state_code"].eq("PA")
-    #     ]
-    # )
+    """
+    NOTE: The final facility, thompson creek, has no name match in the facilities
+    data, so we use the city and state provided in the inventory data to get its
+    location.
+    https://en.wikipedia.org/wiki/Thompson_Creek_Metals.
+    thompson creek metals co inc was acquired in 2016 by Centerra Gold.
+    A search for Centerra in PA turns up 2 records in the combine subpart K and FRS
+    dataset. But Centerra Co-op is an agricultural firm, not a ferroalloy facility.
+    https://www.centerracoop.com/locations
+    display(
+        facility_locations[
+            facility_locations["formatted_fac_name"].str.contains("centerra")
+            & facility_locations["state_code"].eq("PA")
+        ]
+    )
+    """
 
+    # manually assign 'Thomas Creek Metals Co.' location
     fac_locations = pd.read_excel(
         EPA_inventory_path,
         sheet_name="USGS_2008_Facilities",
@@ -212,6 +244,8 @@ def task_ferro_proxy_data(
         on=["formatted_fac_name", "state_code"],
         how="left",
     )
+
+    # convert the facilities to a geodataframe
     ferro_facilities_gdf = gpd.GeoDataFrame(
         ferro_facilities_gdf.drop(columns=["latitude", "longitude"]),
         geometry=gpd.points_from_xy(
@@ -231,4 +265,3 @@ def task_ferro_proxy_data(
     #     tmp_data_dir_path / "v3_ferro_facilities.shp.zip", driver="ESRI Shapefile"
     # )
     ferro_facilities_gdf.to_parquet(dst_path)
-    # %%

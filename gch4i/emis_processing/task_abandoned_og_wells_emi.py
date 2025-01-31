@@ -4,9 +4,11 @@ Date Last Modified:     2024-12-12
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of wells emissions to State, Year, emissions format
 gch4i_name:             1B2ab_abandoned_og_wells
-Input Files:            - Abandoned_Wells_90-22_FR.xlsx
-Output Files:           - aog_gas_wells_emi.csv, aog_oil_wells_emi.csv
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/1B2ab_abandoned_og_wells/
+                            Abandoned_Wells_90-22_FR.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            aog_gas_wells_emi.csv
+                            aog_oil_wells_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

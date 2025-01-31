@@ -1,12 +1,13 @@
 """
 Name:                   task_anaerobic_digestion_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of anaerobic_digestion emissions to State, Year,
                         emissions format
-Input Files:            - State_AD_1990-2022_LA.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  - This version of emi mapping is draft for mapping .py files
+gch4i_name:             5B2_anaerobic_digestion
+Input Files:            - {ghgi_data_dir_path}/5B2_anaerobic_digestion/
+                            State_AD_1990-2022_LA.xlsx
+Output Files:           - anaerobic_digestion_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------

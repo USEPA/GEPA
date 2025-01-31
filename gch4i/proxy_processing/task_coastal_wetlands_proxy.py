@@ -116,6 +116,7 @@ def task_prep_coastal_wetlands_mask(
 #       the raster to binary, we take the average of the binary values in the gepa grid
 #       to get the proportion of the grid cell that is considered to be a coastal
 #       wetlands.
+
 prep_dict = dict()
 for ccap_year in CCAP_YEARS:
     ccap_path = cw_dir_path / f"conus_{ccap_year}_ccap_landcover_20200311.tif"
@@ -208,6 +209,7 @@ def task_coastal_wetlands_proxy(
     with rasterio.open(ccap_path) as src:
         ras_crs = src.crs
 
+    # Read in the state geometries
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -261,11 +263,11 @@ def task_coastal_wetlands_proxy(
             | (np.isclose(df["sum_check"], 0))
         )
     )
-    all_eq_df
 
     if not all_eq_df["is_close"].all():
         raise ValueError("not all values are normed correctly!")
 
+    # Write output to netcdf
     proxy_xr.transpose("year", "y", "x").round(10).rio.write_crs(ras_crs).to_netcdf(
         output_path
     )

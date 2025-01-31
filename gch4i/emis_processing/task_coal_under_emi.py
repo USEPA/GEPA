@@ -1,12 +1,14 @@
 """
 Name:                   task_coal_under_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of coal emissions to State, Year, emissions format
 gch4i_name:             1B1a_coal_mining_underground
-Input Files:            - Coal_90-22_FRv1-InvDBcorrection.xlsx
-Output Files:           - coal_post_under_emi.csv, coal_under_emi.csv
-Notes:                  - This version of emi mapping is draft for mapping .py files
+Input Files:            - {ghgi_data_dir_path}/1B1a_coal_mining_underground/
+                            Coal_90-22_FRv1-InvDBcorrection.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            coal_post_under_emi.csv
+                            coal_under_emi.csv
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

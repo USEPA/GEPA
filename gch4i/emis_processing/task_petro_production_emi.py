@@ -1,13 +1,46 @@
 """
 Name:                   task_petro_production_emi.py
-Date Last Modified:     2025-01-17
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of petroleum systems emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of petroleum production systems emissions
                         to State, Year, emissions format
 gch4i_name:             1B2aii_petroleum_production
-Input Files:            1B2aii_petroleum_production Input Files
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  -
+Input Files:            {ghgi_data_dir_path}/1B2aii_petroleum_production/
+                            ChemicalInjectionPumps_StateEstimates_2024.xlsx
+                            Completions+Workovers_StateEstimates_2024.xlsx
+                            Emi_Basin220.xlsx
+                            Emi_Basin360.xlsx
+                            Emi_Basin395.xlsx
+                            Emi_Basin430.xlsx
+                            Emi_BasinOther.xlsx
+                            Emi_Both.xlsx
+                            Emi_ConvOilWell.xlsx
+                            Emi_GOMoffshore_PetroState.xlsx
+                            Emi_OilProd.xlsx
+                            Emi_OilWellDrilledProd.xlsx
+                            Emi_OilWellProd.xlsx
+                            Emi_ProdWater.xlsx
+                            EquipLeaks_StateEstimates.xlsx
+                            PetroleumSystems_90-22_FR.xlsx
+                            PneumaticControllers_StateEstimates_2024.xlsx
+                            Tanks_StateEstimates_2024.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            both_emi.csv
+                            conv_oil_well_emi.csv
+                            oil_gom_federal_emi.csv
+                            oil_gom_state_emi.csv
+                            oil_pac_federal_state_emi.csv
+                            oil_prod_emi.csv
+                            oil_well_drilled_prod_emi.csv
+                            oil_well_prod_emi.csv
+                            pet_hf_oilwell_emi.csv
+                            petr_basin_220_emi.csv
+                            petr_basin_360_emi.csv
+                            petr_basin_395_emi.csv
+                            petr_basin_430_emi.csv
+                            petr_basin_other_emi.csv
+                            petro_not_mapped_emi.csv
+                            prod_water_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -28,10 +61,8 @@ from gch4i.config import (
 )
 
 
-# %% STEP 0.5 Create Function to Read Excel Parameters
-
-
-def read_excel_params(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+# %% STEP 0.5. Define Functions --------------------------------------------------------
+def read_excel_params2(file_path, subsector, emission, sheet='emi_proxy_mapping'):
     """
     Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
     """
@@ -145,10 +176,10 @@ def get_petro_production_inv_data(in_path, src, params):
                 'wellheads, separators, headers, heaters',
                 'chemical injection pumps', 'pneumatic devices - total']):
         # Directly overwrite the params dictionary
-        params = read_excel_params(proxy_file_path,
-                                   source_name,
-                                   src,
-                                   sheet='emi_proxy_mapping')
+        params = read_excel_params2(proxy_file_path,
+                                    source_name,
+                                    src,
+                                    sheet='emi_proxy_mapping')
     else:
         params = params
 
@@ -233,17 +264,15 @@ def get_petro_production_inv_data(in_path, src, params):
     if src in ["offshore gom federal waters",
                "offshore pacific federal and state waters",
                "offshore alaska state waters"]:
-        # If True, 'make_up' list for querying emission_source
+        # If True, 'make_up' list for queryign emission_source
         if src == "offshore alaska state waters":
             make_up = ["Offshore Alaska State Waters, Vent/Leak",
                        "Offshore Alaska State Waters, Flare"]
-            state_name = "ALL"  # I assume AK (Alaska)
-        # If True, 'make_up' list for querying emission_source
+        # If True, 'make_up' list for queryign emission_source
         elif src == "offshore pacific federal and state waters":
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
-            state_name = "CAO"  # State_code used in proxy processing
-        # If True, 'make_up' list for querying emission_source
+        # If True, 'make_up' list for queryign emission_source
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
@@ -274,7 +303,7 @@ def get_petro_production_inv_data(in_path, src, params):
             # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
             # Make state_code "ALL"
-            .assign(state_code=state_name)
+            .assign(state_code="ALL")
             # Ensure state/year grouping is unique
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
@@ -291,8 +320,10 @@ def get_petro_production_inv_data(in_path, src, params):
     # 1. Offshore Pacific Federal and State Waters, Flare
     # 2. Offshore Pacific Federal and State Waters, Vent/Leak
 
-    # 1. Offshore GoM Federal Waters: Major Complexes (there are THREE instances of this source, which need to be summed)
-    # 2. Offshore GoM Federal Waters: Minor Complexes (there are THREE instances of this source, which need to be summed)
+    # 1. Offshore GoM Federal Waters: Major Complexes
+    #       (there are THREE instances of this source, which need to be summed)
+    # 2. Offshore GoM Federal Waters: Minor Complexes
+    #       (there are THREE instances of this source, which need to be summed)
     # 3. Offshore GoM Federal Waters: Flaring
 
     # Clean and format the data

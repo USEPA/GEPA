@@ -1,13 +1,15 @@
 """
 Name:                   task_dom_wastewater_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of domestic wastewater emissions to State, Year,
                         emissions format
 gch4i_name:             5D1_domestic_wastewater
-Input Files:            - WW_State-level Estimates_90-22_27June2024.xlsx
-Output Files:           - ww_dom_nonseptic_emi.csv, ww_sep_emi.csv
-Notes:                  -
+Input Files:            - {ghgi_data_dir_path}/5D1_domestic_wastewater/
+                            WW_State-level Estimates_90-22_27June2024.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            ww_dom_nonseptic_emi.csv
+                            ww_sep_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -18,12 +20,12 @@ from pytask import Product, mark, task
 import pandas as pd
 import ast
 
-from gch4i.config import (
+from gch4i.config import (  # noqa
     V3_DATA_PATH,
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
-    min_year
+    min_year,
 )
 
 # %% STEP 1. Create Emi Mapping Functions
@@ -49,7 +51,6 @@ def get_dom_ww_inv_data(in_path, src, params):
         additional parameters
     """
 
-    # Read in the data
     emi_df = (
         pd.read_excel(
             in_path,
@@ -87,7 +88,7 @@ def get_dom_ww_inv_data(in_path, src, params):
         .groupby(["state_code", "year"])["ghgi_ch4_kt"]
         .sum()
         .reset_index()
-        )
+    )
     return emi_df
 
 
@@ -119,7 +120,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory1.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
 emi_parameters_dict

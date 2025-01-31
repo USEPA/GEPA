@@ -1,136 +1,222 @@
-# %%
+"""
+Name:                   task_msw_landfills_emis.py
+Date Last Modified:     2024-12-16
+Authors Name:           A. Burnette (RTI International)
+Purpose:                Mapping of msw_landfill emissions to State, Year, emissions
+                        format
+gch4i_name:             5A_msw_landfills
+Input Files:            - {ghgi_data_dir_path}/{5A_msw_landfills}/
+                            State_MSW_LF_1990-2022_LA.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            msw_landfills_r_emi.csv
+                            msw_landfills_nr_emi.csv
+Notes:                  - This version of task_msw_landfills_emis.py is an updated
+                        version of the non-data_guide pytask file
+"""
+# %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
-
-from pyarrow import parquet
-import pandas as pd
-import osgeo
-import geopandas as gpd
-import numpy as np
-import seaborn as sns
 from pytask import Product, task, mark
-import geopy
-from geopy.geocoders import Nominatim
-import duckdb
+
+import geopandas as gpd
+import pandas as pd
+import ast
 
 from gch4i.config import (
     V3_DATA_PATH,
-    proxy_data_dir_path,
+    emi_data_dir_path,
     global_data_dir_path,
     ghgi_data_dir_path,
-    emi_data_dir_path,
     max_year,
-    min_year,
-    years,
-)
+    min_year
+    )
 
-from gch4i.utils import name_formatter
+# from gch4i.utils import tg_to_kt
+tg_to_kt = 1000
 
-tg_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
-mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
-year_range = [*range(min_year, max_year+1,1)] #List of emission years
-year_range_str=[str(i) for i in year_range]
-num_years = len(year_range)
+state_path = Path(global_data_dir_path) / "tl_2020_us_state.zip"
+
+# %% Step 1. Create Function
 
 
-@mark.persist
-@task(id="msw_landfills_emi")
-def task_get_msw_landfills_inv_data(
-    input_path: Path = ghgi_data_dir_path
-    / "landfills/State_MSW_LF_1990-2022_LA.xlsx",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_emi_output_path: Annotated[Path, Product] = emi_data_dir_path / "msw_landfills_r_emi.csv",
-    nonreporting_emi_output_path: Annotated[Path, Product] = emi_data_dir_path / "msw_landfills_nr_emi.csv",
-) -> None:
-    
+def get_msw_landfills_inv_data(in_path, src, params):
+    """
+    read in the ghgi_ch4_kt values for each state.
+
+    Non-reporting emissions are calculated by scaling reporting emissions:
+        Assume emissions are 9% of reporting emissions for 2016 and earlier
+        Assume emissiosn are 11% of reporting emissions for 2017 and later
+
+    Parameters
+    ----------
+    in_path : str
+        path to the input file
+    src : str
+        subcategory of interest
+    params : dict
+        additional parameters
+    """
     # Get state vectors and state_code for use with inventory and proxy data
     state_gdf = (
-    gpd.read_file(state_path)
-    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-    .rename(columns=str.lower)
-    .rename(columns={"stusps": "state_code", "name": "state_name"})
-    .astype({"statefp": int})
-    # get only lower 48 + DC
-    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-    .to_crs(4326)
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
     )
 
-    """read in the ghgi_ch4_kt values for each state"""
+    # Read in the data
+    emi_df = pd.read_excel(
+        in_path,
+        sheet_name="InvDB",
+        skiprows=15,
+        nrows=58,
+        )
+    # Specify years to keep
+    year_list = [str(x) for x in list(range(min_year, max_year + 1))]
+    # Clean and format the data
     emi_df = (
-        # read in the data
-        pd.read_excel(
-            input_path,
-            sheet_name="InvDB",
-            skiprows=15,
-            nrows=58,
-            usecols="A:BA",
+        # Rename columns
+        emi_df.rename(columns=lambda x: str(x).lower())
+        .assign(
+            ghgi_source=lambda df: df["subcategory1"]
+            .astype(str)
+            .str.strip()
+            .str.casefold()
         )
-        # name column names lower
-        .rename(columns=lambda x: str(x).lower())
-        # drop columns we don't need
-        # # get just methane emissions
-        .query("(ghg == 'CH4')")
-        .drop(
-            columns=[
-                "sector",
-                "category",
-                "subcategory1",
-                "subcategory2",
-                "subcategory3",
-                "subcategory4",
-                "subcategory5",
-                "carbon pool",
-                "fuel1",
-                "fuel2",
-                "exclude",
-                "id",
-                "sensitive (y or n)",
-                "data type",
-                "subsector",
-                "crt code",
-                "units",
-                "ghg",
-                "gwp",
-            ]
-        )
-        # set the index to state
         .rename(columns={"georef": "state_code"})
+        # Query for CH4 emissions and the source of interest
+        .query(f"(ghg == 'CH4') & (ghgi_source == '{src}')")
+        # Query for lower 48 + DC state_codes
+        .query("state_code in @state_gdf.state_code")
+        # Filter state code and years
+        .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
-        # covert "NO" string to numeric (will become np.nan)
+        # Replace NA values with 0
+        .replace(0, pd.NA)
         .apply(pd.to_numeric, errors="coerce")
-        # drop states that have all nan values
         .dropna(how="all")
-        # reset the index state back to a column
+        .fillna(0)
         .reset_index()
-        # make the table long by state/year
+        # Melt the data: unique state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")
+        # Convert tg to kt
         .assign(ghgi_ch4_kt=lambda df: df["ch4_tg"] * tg_to_kt)
         .drop(columns=["ch4_tg"])
-        # make the columns types correcet
         .astype({"year": int, "ghgi_ch4_kt": float})
         .fillna({"ghgi_ch4_kt": 0})
-        # get only the years we need
+        # Ensure only years between min_year and max_year are included
         .query("year.between(@min_year, @max_year)")
-        .query("state_code.isin(@state_gdf['state_code'])")
-        .reset_index(drop=True)
+        # Ensure state/year grouping is unique
+        .groupby(["state_code", "year"])["ghgi_ch4_kt"]
+        .sum()
+        .reset_index()
+        )
+
+    # Calculate Reporting vs Non-reporting emissions
+    # Initiliaze non-reporting emissions
+    nonreporting_emi_df = pd.DataFrame()
+    # Scale non-reporting emissions
+    emi_09 = (
+        emi_df
+        .query("year <= 2016")
+        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.09)
+        )
+    emi_11 = (
+        emi_df
+        .query("year >= 2017")
+        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.11)
+        )
+    # Concatenate non-reporting emissions
+    nonreporting_emi_df = pd.concat([nonreporting_emi_df, emi_09, emi_11],
+                                    axis=0)
+    # Calculate reporting emissions by subtracting non-reporting emissions from the base
+    reporting_emi_df = (
+        pd.merge(
+            emi_df,
+            nonreporting_emi_df,
+            on=["state_code", "year"],
+            how="left",
+            suffixes=("_base", "_nr")
+        )
+        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt_base"] - df["ghgi_ch4_kt_nr"])
+        .drop(columns=["ghgi_ch4_kt_base", "ghgi_ch4_kt_nr"])
     )
 
-    reporting_emi_df = emi_df.copy()
-    nonreporting_emi_df = pd.DataFrame()
+    # Return the emissions data
+    if params["arguments"][0] == "non-reporting":
+        return nonreporting_emi_df
+    elif params["arguments"][0] == "reporting":
+        return reporting_emi_df
+    else:
+        print("Invalid argument. Please check data_guide parameters.")
 
-    # Get non-reporting emissions by scaling reporting emissions.
-    # Assume emissions are 9% of reporting emissions for 2016 and earlier.
-    # Assume emissions are 11% of reporting emissions for 2017 and later.
-    emi_09 = emi_df.query("year <= 2016").assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.09)
-    emi_11 = emi_df.query("year >= 2017").assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.11)
-    nonreporting_emi_df = pd.concat([nonreporting_emi_df, emi_09, emi_11], axis=0)
 
-    nonreporting_emi_df.to_csv(nonreporting_emi_output_path, index=False)
+# %% STEP 2. Initialize Parameters
+"""
+This section initializes the parameters for the task and stores them in the
+emi_parameters_dict.
 
-    reporting_emi_df["ghgi_ch4_kt"] = emi_df["ghgi_ch4_kt"] - nonreporting_emi_df["ghgi_ch4_kt"]
-    reporting_emi_df.to_csv(reporting_emi_output_path, index=False)
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+file. The parameters are used to create the pytask task for the emi.
+"""
+# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
+source_name = "5A_msw_landfills"
+# Directory name for GHGI data
+source_path = "5A_msw_landfills"
 
-# %%
+# Data Guide Directory
+proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+# Read and query for the source name (ghch4i_name)
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+    f"gch4i_name == '{source_name}'"
+)
+
+# Initialize the emi_parameters_dict
+emi_parameters_dict = {}
+# Loop through the proxy data and store the parameters in the emi_parameters_dict
+for emi_name, data in proxy_data.groupby("emi_id"):
+    emi_parameters_dict[emi_name] = {
+        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
+        "source_list": [x.strip().casefold() for x in data.Subcategory1.to_list()],
+        "parameters": ast.literal_eval(data.add_params.iloc[0]),
+        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+    }
+
+emi_parameters_dict
+
+
+# %% STEP 3. Create Pytask Function and Loop
+
+for _id, _kwargs in emi_parameters_dict.items():
+
+    @mark.persist
+    @task(id=_id, kwargs=_kwargs)
+    def task_msw_landfills_emi(
+        input_paths: list[Path],
+        source_list: list[str],
+        parameters: dict,
+        output_path: Annotated[Path, Product],
+    ) -> None:
+
+        # Initialize the emi_df_list
+        emi_df_list = []
+        # Loop through the input paths and source list to get the emissions data
+        for input_path, ghgi_group in zip(input_paths, source_list):
+            individual_emi_df = get_msw_landfills_inv_data(input_path,
+                                                           ghgi_group,
+                                                           parameters)
+            emi_df_list.append(individual_emi_df)
+
+        # Concatenate the emissions data and group by state and year
+        emission_group_df = (
+            pd.concat(emi_df_list)
+            .groupby(["state_code", "year"])["ghgi_ch4_kt"]
+            .sum()
+            .reset_index()
+        )
+        # Save the emissions data to the output path
+        emission_group_df.to_csv(output_path)

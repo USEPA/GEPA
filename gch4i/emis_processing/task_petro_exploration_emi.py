@@ -1,15 +1,17 @@
 """
 Name:                   task_petro_exploration.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of petroleum systems emissions
+Date Last Modified:     2025-01-30
+Authors Name:           Andrew Burnette (RTI International)
+Purpose:                Mapping of petroleum exploration systems emissions
                         to State, Year, emissions format
 gch4i_name:             1B2ai_petroleum_exploration
-Input Files:            Completions+Workovers_StateEstimates_2024.xlsx
-                        Petro_Exploration_AllWell_OilWellDrilled_StateCH4.xlsx
-                        Petro_Exploration_AllWell_OilWellDrilled_StateCH4.xlsx
-Output Files:           - Emissions by State, Year for each subcategory
-Notes:                  - This version of emi mapping is draft for mapping .py files
+Input Files:            {ghgi_data_dir_path}/1B2ai_petroleum_exploration/
+                            Completions+Workovers_StateEstimates_2024.xlsx
+                            Petro_Exploration_AllWell_OilWellDrilled_StateCH4.xlsx
+Output Files:           - {emi_data_dir_path}/
+                            oil_well_drilled_exp_emi.csv
+                            oil_well_exp_emi.csv
+                            pet_hf_comp_emi.csv
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
