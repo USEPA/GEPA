@@ -1,31 +1,34 @@
-# %%
+"""
+Name:                   task_ng_conv_well_comp_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas proxies.
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        Enverus Prod: sector_data_dir_path / "enverus/production"
+                        Intermediate: enverus_production_path / "intermediate_outputs"
+                        NEI: sector_data_dir_path / "nei_og"
+Output Files:           proxy_data_dir_path /
+                            "ng_conv_well_comp_proxy.parquet"
+"""
+
+# %% Import Libraries
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
+
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    V3_DATA_PATH,
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
-    max_year,
-    min_year,
     years,
 )
 
-from gch4i.utils import us_state_to_abbrev
 from gch4i.proxy_processing.ng_oil_production_utils import (
     calc_enverus_rel_emi,
     enverus_df_to_gdf,
@@ -35,16 +38,18 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_raw_NEI_data,
 )
 
-# %%
+# %% Pytask Function
+
+
 @mark.persist
 @task(id="ng_conv_well_comp_proxy")
 def task_get_ng_conv_well_comp_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     conv_well_comp_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_conv_well_comp_proxy.parquet",
-    ):
+):
     """
     Data come from Enverus, both Drilling Info and Prism
     The reason 2 datasets are used is because Prism does not include all states
