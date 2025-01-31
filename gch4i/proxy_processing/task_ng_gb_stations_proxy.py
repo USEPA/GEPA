@@ -1,30 +1,33 @@
+"""
+Name:                   task_ng_gb_stations_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas proxies.
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        Enverus Prod: sector_data_dir_path / "enverus/production"
+Output Files:           proxy_data_dir_path /
+                            "ng_gb_stations_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
-import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    V3_DATA_PATH,
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
-    max_year,
-    min_year,
 )
 
 from gch4i.utils import us_state_to_abbrev
 
-# %%
+# %% Pytask Function
+
+
 @mark.persist
 @task(id="ng_gb_stations_proxy")
 def task_get_ng_gb_stations_proxy_data(
@@ -55,7 +58,7 @@ def task_get_ng_gb_stations_proxy_data(
         enverus_midstream_ng_path,
         layer="CompressorStations",
         columns=["NAME", "TYPE", "STATUS", "STATE_NAME", "CNTRY_NAME", "geometry"])
-        
+
         .query("STATUS == 'Operational'")
         .query("CNTRY_NAME == 'United States'")
         .query("STATE_NAME.isin(@state_gdf['state_name'])")
@@ -68,16 +71,20 @@ def task_get_ng_gb_stations_proxy_data(
         .to_crs(4326)
         .reset_index(drop=True)
         )
-    
+
     for istation in np.arange(0, len(compressor_stations_gdf)):
-        compressor_stations_gdf.loc[istation, "state_code"] = us_state_to_abbrev(compressor_stations_gdf.loc[istation, "state_name"])
-    
+        compressor_stations_gdf.loc[istation, "state_code"] = (
+            us_state_to_abbrev(compressor_stations_gdf.loc[istation, "state_name"])
+        )
+
     # gb_stations_proxy
-    gb_stations_proxy_gdf = (compressor_stations_gdf
-                        .query("type == 'Gathering'")
-                        .drop(columns=["type", "state_name"])
-                        .loc[:, ["facility_name", "state_code", "geometry"]]
-                        .reset_index(drop=True))
+    gb_stations_proxy_gdf = (
+        compressor_stations_gdf
+        .query("type == 'Gathering'")
+        .drop(columns=["type", "state_name"])
+        .loc[:, ["facility_name", "state_code", "geometry"]]
+        .reset_index(drop=True)
+        )
     gb_stations_proxy_gdf.to_parquet(gb_stations_output_path)
 
     return None
