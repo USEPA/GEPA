@@ -142,9 +142,9 @@ def allocate_emissions_to_proxy(
             )
         # if there are no proxies in that state, print a warning
         if state_proxy_data.shape[0] < 1:
-            logging.warning(
-                f"there are no proxies in {state} for {year} but there are emissions!"
-            )
+            # logging.warning(
+            #     f"there are no proxies in {state} for {year} but there are emissions!"
+            # )
             continue
         # get the value of emissions for that state/year
         state_year_emissions = data["ghgi_ch4_kt"].iat[0]
@@ -153,7 +153,7 @@ def allocate_emissions_to_proxy(
         # state / year as 0
 
         if state_year_emissions == 0:
-            logging.critical(
+            logging.info(
                 f"there are proxies in {state} for {year} but there are no emissions!"
             )
             state_proxy_data["allocated_ch4_kt"] = 0
@@ -345,7 +345,7 @@ def calculate_flux(
 
 def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
     """take proxy emi allocations and check against state inventory"""
-    logging.info("checking proxy emission allocation by state / year.")
+    # logging.info("checking proxy emission allocation by state / year.")
     sum_check = (
         proxy_df.groupby(["state_code", "year"])["allocated_ch4_kt"]
         .sum()
@@ -362,7 +362,7 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
     if all_equal:
         logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
     else:
-        logging.critical("not all proxy emissions match inventory emissions.")
+        logging.critical("QC FAIL: not all proxy emissions match inventory emissions.")
         logging.info("states and years with emissions that don't match")
         logging.info(
             "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
@@ -411,7 +411,7 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
 def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
     """compares yearly array sums to inventory emissions"""
 
-    logging.info("checking gridded emissions result by year.")
+    # logging.info("checking gridded emissions result by year.")
     check_sum_dict = {}
     for year, arr in raster_dict.items():
         gridded_sum = arr.sum()
@@ -435,7 +435,7 @@ def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
     if all_equal:
         logging.info("QC PASS: all gridded emission by year are equal (isclose)")
     else:
-        logging.critical("gridded emissions do not equal inventory emissions.")
+        logging.critical("QC FAIL: gridded emissions do not equal inventory emissions.")
         logging.info(
             "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
         )
@@ -674,7 +674,7 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
         plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Show the plot for review
-        plt.show()
+        # plt.show()
 
         # close the plot
         plt.close()
@@ -766,7 +766,7 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
 
     # Show the plot for review
-    plt.show()
+    # plt.show()
 
     # close the plot
     plt.close()
@@ -982,7 +982,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png"
                 )
                 # Show the plot for review
-                plt.show()
+                # plt.show()
                 # Close the plot
                 plt.close()
 
@@ -1008,7 +1008,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                     + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png"
                 )
                 # Show the plot for review
-                plt.show()
+                # plt.show()
                 # Close the plot
                 plt.close()
 
@@ -1308,36 +1308,37 @@ def proxy_from_stack(
         ras_crs
     ).to_netcdf(output_path)
 
+
 def geocode_address(df, address_column):
     """
     Geocode addresses using Nominatim, handling missing values
-    
+
     Parameters:
     df: DataFrame containing addresses
     address_column: Name of column containing addresses
-    
+
     Returns:
     DataFrame with added latitude and longitude columns
     """
     # Check if address column exists
     if address_column not in df.columns:
         raise ValueError(f"Column {address_column} not found in DataFrame")
-        
+
     # Initialize geocoder
     geolocator = Nominatim(user_agent="my_app")
-    
+
     # Create cache dictionary
     geocode_cache = {}
-    
+
     def get_lat_long(address):
         # Handle missing values
-        if pd.isna(address) or str(address).strip() == '':
+        if pd.isna(address) or str(address).strip() == "":
             return (None, None)
-            
+
         # Check cache first
         if address in geocode_cache:
             return geocode_cache[address]
-        
+
         try:
             # Add delay to respect Nominatim's usage policy
             time.sleep(1)
@@ -1347,35 +1348,42 @@ def geocode_address(df, address_column):
                 geocode_cache[address] = result
                 return result
             return (None, None)
-            
+
         except (GeocoderTimedOut, GeocoderServiceError):
             return (None, None)
-    
+
     # Create lat_long column
-    df['lat_long'] = None
-    
+    df["lat_long"] = None
+
     # Check if longitude column exists
-    if 'longitude' not in df.columns:
-        df['longitude'] = None
-        
+    if "longitude" not in df.columns:
+        df["longitude"] = None
+
     # Only geocode rows where both latitude and longitude are missing
-    mask = ((df['longitude'].isna() | (df['longitude'] == '')) & 
-            (df['latitude'].isna() | (df['latitude'] == '')) & 
-            df[address_column].notna())
-    
+    mask = (
+        (df["longitude"].isna() | (df["longitude"] == ""))
+        & (df["latitude"].isna() | (df["latitude"] == ""))
+        & df[address_column].notna()
+    )
+
     # Apply geocoding only to rows that need it
-    df.loc[mask, 'lat_long'] = df.loc[mask, address_column].apply(get_lat_long)
-    
+    df.loc[mask, "lat_long"] = df.loc[mask, address_column].apply(get_lat_long)
+
     # Update latitude/longitude only for rows that were geocoded
-    df.loc[mask, 'latitude'] = df.loc[mask, 'lat_long'].apply(lambda x: x[0] if x else None) 
-    df.loc[mask, 'longitude'] = df.loc[mask, 'lat_long'].apply(lambda x: x[1] if x else None)
-    
+    df.loc[mask, "latitude"] = df.loc[mask, "lat_long"].apply(
+        lambda x: x[0] if x else None
+    )
+    df.loc[mask, "longitude"] = df.loc[mask, "lat_long"].apply(
+        lambda x: x[1] if x else None
+    )
+
     # Drop temporary column
-    df = df.drop('lat_long', axis=1)
-    
+    df = df.drop("lat_long", axis=1)
+
     return df
 
-def create_final_proxy_df(proxy_df):   
+
+def create_final_proxy_df(proxy_df):
     """
     Function to create the final proxy df that is ready for gridding
 
@@ -1385,26 +1393,39 @@ def create_final_proxy_df(proxy_df):
     Returns:
     - final_proxy_df: DataFrame containing the processed emissions data for each state.
     """
-    
+
     # Create a GeoDataFrame and generate geometry from longitude and latitude
     proxy_gdf = gpd.GeoDataFrame(
         proxy_df,
-        geometry=gpd.points_from_xy(proxy_df['longitude'], proxy_df['latitude'], crs='EPSG:4326')
+        geometry=gpd.points_from_xy(
+            proxy_df["longitude"], proxy_df["latitude"], crs="EPSG:4326"
+        ),
     )
 
     # subset to only include the columns we want to keep
-    proxy_gdf = proxy_gdf[['state_code', 'year', 'emis_kt', 'geometry']]
-    
+    proxy_gdf = proxy_gdf[["state_code", "year", "emis_kt", "geometry"]]
+
     # Normalize relative emissions to sum to 1 for each year and state
-    proxy_gdf = proxy_gdf.groupby(['state_code', 'year']).filter(lambda x: x['emis_kt'].sum() > 0) #drop state-years with 0 total volume
-    proxy_gdf['rel_emi'] = proxy_gdf.groupby(['year', 'state_code'])['emis_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0) #normalize to sum to 1
-    sums = proxy_gdf.groupby(["state_code", "year"])["rel_emi"].sum() #get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
-    
+    proxy_gdf = proxy_gdf.groupby(["state_code", "year"]).filter(
+        lambda x: x["emis_kt"].sum() > 0
+    )  # drop state-years with 0 total volume
+    proxy_gdf["rel_emi"] = proxy_gdf.groupby(["year", "state_code"])[
+        "emis_kt"
+    ].transform(
+        lambda x: x / x.sum() if x.sum() > 0 else 0
+    )  # normalize to sum to 1
+    sums = proxy_gdf.groupby(["state_code", "year"])[
+        "rel_emi"
+    ].sum()  # get sums to check normalization
+    # assert that the sums are close to 1
+    assert np.isclose(
+        sums, 1.0, atol=1e-8
+    ).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
     # Drop the original emissions column
-    proxy_gdf = proxy_gdf.drop(columns=['emis_kt'])
+    proxy_gdf = proxy_gdf.drop(columns=["emis_kt"])
 
     # Rearrange columns
-    proxy_gdf = proxy_gdf[['state_code', 'year', 'rel_emi', 'geometry']]
+    proxy_gdf = proxy_gdf[["state_code", "year", "rel_emi", "geometry"]]
 
     return proxy_gdf

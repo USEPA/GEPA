@@ -80,11 +80,11 @@ def check_emi_file(input_path):
 def check_proxy_file(input_path):
     in_gdf = duckdb.execute(f"SELECT * FROM '{input_path}' LIMIT 0").df()
     col_list = list(in_gdf.columns.str.lower())
-    # display(proxy_name)
 
     proxy_has_state_col = "state_code" in col_list
     proxy_has_county_col = "county" in col_list
     proxy_has_year_col = "year" in col_list
+    proxy_has_year_month_col = "year_month" in col_list
     proxy_has_month_col = "month" in col_list
     proxy_has_geom_col = "geometry" in col_list
     proxy_has_rel_emi_col = any(x in col_list for x in REL_EMI_COL_LIST)
@@ -99,6 +99,7 @@ def check_proxy_file(input_path):
         proxy_has_county_col=proxy_has_county_col,
         proxy_has_year_col=proxy_has_year_col,
         proxy_has_month_col=proxy_has_month_col,
+        proxy_has_year_month_col=proxy_has_year_month_col,
         proxy_has_geom_col=proxy_has_geom_col,
         proxy_has_rel_emi_col=proxy_has_rel_emi_col,
         proxy_rel_emi_col=proxy_rel_emi_col,
