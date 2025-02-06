@@ -28,12 +28,10 @@ from gch4i.utils import name_formatter
 @mark.persist
 @task(id="petrochemicals_proxy")
 def task_get_petrochemicals_proxy_data(
-    inventory_workbook_path: Path = ghgi_data_dir_path
-    / "industry/State_Petrochemicals_1990-2022.xlsx",
+    inventory_workbook_path: Path = ghgi_data_dir_path / "2B8_petrochemicals/State_Petrochemicals_1990-2022.xlsx",
     subpart_x_path = "https://data.epa.gov/efservice/x_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "petrochemicals_proxy.parquet",
+    output_path: Annotated[Path, Product] = proxy_data_dir_path / "petrochemicals_proxy.parquet",
 ):
     """
     Four petrochemical production facilities with Arylonitrile production report
@@ -119,18 +117,19 @@ def task_get_petrochemicals_proxy_data(
 
     # Get and format Subpart X facility locations
     facility_locations_df = (
-    pd.read_csv(
-        subpart_x_path,
-        usecols=("facility_name",
-                 "facility_id",
-                 "latitude",
-                 "longitude",
-                 "city",
-                 "state"))
-    .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"state": "state_code"})
-    .drop_duplicates(subset=['facility_id', 'city'], keep='first')
-    .reset_index(drop=True)
+        pd.read_csv(
+            subpart_x_path,
+            usecols=("facility_name",
+                     "facility_id",
+                     "latitude",
+                     "longitude",
+                     "city",
+                     "state")
+            )
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"state": "state_code"})
+        .drop_duplicates(subset=['facility_id', 'city'], keep='first')
+        .reset_index(drop=True)
     )
 
     # Match GHGI facilities to Subpart X facility locations
@@ -143,8 +142,8 @@ def task_get_petrochemicals_proxy_data(
 
     # Format proxy data to consolidate years into a single column
     ghgi_facilities_w_locations_df = ghgi_facilities_df.melt(id_vars=[
-        'facility_name', 'state_code', 'lat', 'lon'], 
-        value_vars=list(ghgi_facilities_df.columns.values)[3:14], 
+        'facility_name', 'state_code', 'lat', 'lon'],
+        value_vars=list(ghgi_facilities_df.columns.values)[3:14],
         var_name='year', value_name='capacity_kt')
     
     ghgi_facilities_w_locations_df['rel_emi'] = ghgi_facilities_w_locations_df.groupby(["state_code", "year"])['capacity_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
@@ -152,17 +151,18 @@ def task_get_petrochemicals_proxy_data(
     
     # Create proxy gdf
     proxy_gdf = (
-    gpd.GeoDataFrame(
-        ghgi_facilities_w_locations_df,
-        geometry=gpd.points_from_xy(
-            ghgi_facilities_w_locations_df["lon"],
-            ghgi_facilities_w_locations_df["lat"],
-            crs=4326,
-        ),
-    )
-    .drop(columns=["lat", "lon"])
-    .astype({"year":int})
-    .loc[:, ["facility_name", "state_code", "geometry", "year", "rel_emi"]]
+        gpd.GeoDataFrame(
+            ghgi_facilities_w_locations_df,
+            geometry=gpd.points_from_xy(
+                ghgi_facilities_w_locations_df["lon"],
+                ghgi_facilities_w_locations_df["lat"],
+                crs=4326,
+                ),
+            )
+        .drop(columns=["lat", "lon"])
+        .astype({"year": int})
+        .loc[:, ["year", "facility_name", "state_code", "geometry", "rel_emi"]]
+        )
 
     proxy_gdf.to_parquet(output_path)
     return None
