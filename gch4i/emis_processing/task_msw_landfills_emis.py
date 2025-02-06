@@ -216,6 +216,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             pd.concat(emi_df_list)
             .groupby(["state_code", "year"])["ghgi_ch4_kt"]
             .sum()
+            .query("ghgi_ch4_kt > 0")
             .reset_index()
         )
         # Save the emissions data to the output path

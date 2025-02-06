@@ -38,8 +38,7 @@ num_years = len(year_range)
 def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "ind_landfills_pp_r_proxy.parquet",
+    reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -99,7 +98,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
             ),
         )
         .drop(columns=["facility_id", "latitude", "longitude", "city", "zip"])
-        .loc[:, ["facility_name", "state_code", "geometry", "year", "rel_emi"]]
+        .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
     reporting_pulp_paper_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
@@ -112,8 +111,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
             frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
             mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
-            nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "ind_landfills_pp_nr_proxy.parquet",
+            nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
 ):
     """
     The Mills OnLine database of facilities is compared against the Subpart HH 
@@ -243,7 +241,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 
     FRS_facility_locs = frs_naics.merge(frs_main, how='inner', on='registry_id')
 
-    #try to match mills database with FRS database, based on state and city - 
+    # try to match mills database with FRS database, based on state and city - 
     # only need to find locations for where 'ghgrp_match' = 0
     mills_locs['FRS_match'] = 0
     for ifacility in np.arange(0, len(mills_locs)):
@@ -256,11 +254,11 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
                 mills_locs.loc[ifacility,'FRS_match'] = 1
             elif len(imatch)>1:
                 FRS_temp = FRS_facility_locs.loc[imatch,:]
-                new_match = np.where(np.max(FRS_temp['accuracy_value']))[0]
-                if len(new_match) >0:
-                    mills_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[imatch[new_match[0]],'latitude']
-                    mills_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[imatch[new_match[0]],'longitude']
-                    mills_locs.loc[ifacility,'FRS_match'] = 1
+                # use the location of the first occurance of the facility with the highest accuracy value
+                new_match = np.argmax(np.max(FRS_temp['accuracy_value']))
+                mills_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[new_match,'latitude']
+                mills_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[new_match,'longitude']
+                mills_locs.loc[ifacility,'FRS_match'] = 1
             else:
                 continue
 
@@ -268,17 +266,12 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 
     # keep mills that only have FRS locations (mills that are not already covered by
     # subpart tt and mills that are not missing locations)
-    mills_locs = mills_locs.query(
-        "ghgrp_match == 0 & FRS_match == 1").drop(
-            columns=["state_name", "county", "city", "grades", "ghgrp_match", "FRS_match"]).rename(
-                columns={"lat": "latitude", "lon": "longitude"}).dropna()
-    
-    # add a column to equally allocate unaccounted for GHGI emissions to all non-reporting mills
-    mills_locs["ch4_kt"] = 1.0
-    mills_locs = mills_locs.reset_index(drop=True)
-
-    nonreporting_pulp_paper_df['rel_emi'] = nonreporting_pulp_paper_df.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    nonreporting_pulp_paper_df = nonreporting_pulp_paper_df.drop(columns='ch4_kt')
+    mills_locs = (mills_locs
+                  .query("ghgrp_match == 0 & FRS_match == 1")
+                  .drop(columns=["state_name", "county", "city", "grades", "ghgrp_match", "FRS_match"])
+                  .rename(columns={"lat": "latitude", "lon": "longitude"})
+                  .dropna()
+                  )
 
     nonreporting_pulp_paper_gdf = (
         gpd.GeoDataFrame(
@@ -290,7 +283,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             ),
         )
         .drop(columns=["facility_id", "latitude", "longitude"])
-        .loc[:, ["state_code", "geometry", "rel_emi"]]
+        .loc[:, ["state_code", "geometry"]]
     )
 
     nonreporting_pulp_paper_gdf.to_parquet(nonreporting_pulp_paper_proxy_output_path)
@@ -300,8 +293,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "ind_landfills_fb_r_proxy.parquet",
+    reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_fb_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -362,7 +354,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
             ),
         )
         .drop(columns=["latitude", "longitude", "city", "zip"])
-        .loc[:, ["facility_id", "facility_name", "state_code", "geometry", "year", "rel_emi"]]
+        .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
     reporting_food_beverage_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
@@ -370,13 +362,12 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
 
 
 def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
-            state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-            subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-            frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
-            frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
-            food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
-            nonreporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
-            / "ind_landfills_fb_nr_proxy.parquet",
+    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
+    frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
+    frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
+    food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
+    nonreporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_fb_nr_proxy.parquet",
 ):
     """
 
@@ -547,24 +538,26 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                 food_beverage_facilities_locs.loc[ifacility,'FRS_match'] = 1
             elif len(imatch)>1:
                 FRS_temp = FRS_facility_locs.loc[imatch,:]
-                new_match = np.where(np.max(FRS_temp['accuracy_value']))[0]
-                if len(new_match) >0:
-                    food_beverage_facilities_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[imatch[new_match[0]],'latitude']
-                    food_beverage_facilities_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[imatch[new_match[0]],'longitude']
-                    food_beverage_facilities_locs.loc[ifacility,'FRS_match'] = 1
+                # use the location of the first occurance of the facility with the highest accuracy value
+                new_match = np.argmax(FRS_temp['accuracy_value'])
+                food_beverage_facilities_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[imatch[new_match],'latitude']
+                food_beverage_facilities_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[imatch[new_match],'longitude']
+                food_beverage_facilities_locs.loc[ifacility,'FRS_match'] = 1
             else:
                 continue
 
     print('Not Found:',len(food_beverage_facilities_locs)-(np.sum(food_beverage_facilities_locs.loc[:,'FRS_match'])+np.sum(food_beverage_facilities_locs.loc[:,'ghgrp_match'])), 'of',len(food_beverage_facilities_locs))
 
     # Find missing locations by Geocoding addresses
+    # If this portion of the code fails due to timeout error (1), just re-run and it will work.
+    # This section takes ~152 minutes to run.
     geolocator = Nominatim(user_agent="myGeocode")
     geopy.geocoders.options.default_timeout = None
     print(geolocator.timeout)
 
     food_beverage_facilities_locs['geo_match'] = 0
     for ifacility in np.arange(0,len(food_beverage_facilities_locs)):
-        if food_beverage_facilities_locs.loc[ifacility,'FRS_match'] ==0 and food_beverage_facilities_locs.loc[ifacility,'ghgrp_match'] == 0:
+        if food_beverage_facilities_locs.loc[ifacility,'FRS_match'] == 0 and food_beverage_facilities_locs.loc[ifacility,'ghgrp_match'] == 0:
             location = geolocator.geocode(food_beverage_facilities_locs['full_address'][ifacility])
             if location is None:
                 continue
@@ -602,7 +595,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                     #count -= 1
                     food_beverage_facilities_locs.loc[ifacility,'lat'] = location2.latitude
                     food_beverage_facilities_locs.loc[ifacility,'lon'] = location2.longitude
-                    food_beverage_facilities_locs.loc[ifacility,'geo_match']=1
+                    food_beverage_facilities_locs.loc[ifacility,'geo_match'] = 1
             else:
                 #count -= 1
                 food_beverage_facilities_locs.loc[ifacility,'lat'] = location.latitude
@@ -631,7 +624,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                        "excessfood_tonyear_lowest", "excessfood_tonyear_highest", 
                        "full_address", "partial_address", "lat", "lon", 
                        "ghgrp_match", "FRS_match", "geo_match"])
-        .loc[:, ["facility_id", "state_code", "geometry", "rel_emi"]]
+        .loc[:, ["state_code", "geometry", "rel_emi"]]
     )
 
     nonreporting_food_beverage_gdf.to_parquet(nonreporting_food_beverage_proxy_output_path)

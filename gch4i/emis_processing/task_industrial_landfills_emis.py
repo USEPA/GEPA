@@ -404,6 +404,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
                                    .drop(columns=["tot_ch4_kt", "nr_ch4_kt"])
                                    .rename(columns={"r_ch4_kt": "ghgi_ch4_kt"})
                                    .dropna()
+                                   .query("ghgi_ch4_kt > 0")
                                    .reset_index(drop=True)
                                    )
 
@@ -411,6 +412,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
                                    .drop(columns=["tot_ch4_kt", "r_ch4_kt"])
                                    .rename(columns={"nr_ch4_kt": "ghgi_ch4_kt"})
                                    .dropna()
+                                   .query("ghgi_ch4_kt > 0")
                                    .reset_index(drop=True)
                                    )
 
