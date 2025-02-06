@@ -44,15 +44,13 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
 
 from pyarrow import parquet  # noqa
 import osgeo  # noqa
 import geopandas as gpd
-import numpy as np
 import pandas as pd
-from pytask import Product, mark, task
-from tqdm.auto import tqdm, trange
+import xarray as xr
+from tqdm.auto import tqdm
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -61,10 +59,12 @@ from gch4i.config import (
     proxy_data_dir_path,
     tmp_data_dir_path,
 )
+from gch4i.create_emi_proxy_mapping import get_gridding_mapping_df
 from gch4i.utils import (
     QC_emi_raster_sums,
     QC_flux_emis,
     QC_proxy_allocation,
+    allocate_emis_to_array,
     allocate_emissions_to_proxy,
     calculate_flux,
     combine_gridded_emissions,
@@ -73,72 +73,18 @@ from gch4i.utils import (
     plot_raster_data_difference,
     write_ncdf_output,
     write_tif_output,
+    check_state_year_match,
 )
 
+# import matplotlib.pyplot as plt
+# import numpy as np
+# from pytask import Product, mark, task
+
+
+# from typing import Annotated
+
+
 # from pytask import Product, task
-
-
-def create_gridding_params(in_df):
-
-    # this formats the arguments to the gridding function
-    gridding_params = {}
-    for gch4i_name, data in in_df.groupby("gch4i_name"):
-
-        GRIDDING_NAME = data.gch4i_name.iloc[0].lower()
-        # v2_name = data.v2_name.iloc[0]
-        IPCC_ID, SOURCE_NAME = gch4i_name.split("_", maxsplit=1)
-
-        netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
-        netcdf_description = (
-            f"Gridded EPA Inventory - {GRIDDING_NAME} - "
-            f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
-        )
-
-        emi_list = [list(emi_data_dir_path.glob(f"{x}.*"))[0] for x in data.emi_id]
-        proxy_file_list = [
-            list(proxy_data_dir_path.glob(f"{x}.*"))[0] for x in data.proxy_id
-        ]
-
-        emi_time_cols = []
-        proxy_time_cols = []
-        for row in data.itertuples():
-            if row.emi_has_year_col & row.emi_has_month_col:
-                emi_time_cols.append(["year", "month"])
-            elif row.emi_has_year_col:
-                emi_time_cols.append(["year"])
-            if row.proxy_has_year_col & row.proxy_has_month_col:
-                proxy_time_cols.append(["year", "month"])
-            elif row.proxy_has_year_col:
-                proxy_time_cols.append(["year"])
-        for emi_timestep, proxy_timestep in zip(emi_time_cols, proxy_time_cols):
-            if not emi_timestep == proxy_timestep:
-                logging.warning(
-                    f"{gch4i_name}: issue with timestep alignment "
-                    f"{row.emi_id}, {row.proxy_id}"
-                )
-
-        gridding_params[gch4i_name] = dict(
-            source_name=gch4i_name,
-            # v2_name=data.v2_name.iloc[0],
-            emi_input_paths=emi_list,
-            emi_has_state_col=data.emi_has_state_col.to_list(),
-            emi_timestep_list=emi_time_cols,
-            proxy_input_paths=proxy_file_list,
-            proxy_timtestep_list=proxy_time_cols,
-            proxy_has_prop_list=data.proxy_has_rel_emi_col.to_list(),
-            proxy_prop_col_list=data.proxy_rel_emi_col.to_list(),
-            nc_flux_output_path=tmp_data_dir_path / f"{GRIDDING_NAME}_ch4_emi_flux.nc",
-            nc_kt_output_path=tmp_data_dir_path / f"{GRIDDING_NAME}_ch4_kt_per_year.nc",
-            tif_flux_output_path=tmp_data_dir_path
-            / f"{GRIDDING_NAME}_ch4_emi_flux.tif",
-            tif_kt_output_path=tmp_data_dir_path
-            / f"{GRIDDING_NAME}_ch4_kt_per_year.tif",
-            netcdf_title=netcdf_title,
-            netcdf_description=netcdf_description,
-            # "annual_plot_output_path = "",
-            # "diff_plot_output_path = "",
-        )
-    return gridding_params
 
 
 gpd.options.io_engine = "pyogrio"
@@ -166,24 +112,56 @@ logging.basicConfig(
 # this currently comes out of the prototype test_emi_proxy_mapping.py script
 # I think this data driven approach to emi proxy mapping would be a good step into
 # gridding automation.
-mapping_path = V3_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv"
-mapping_df = pd.read_csv(mapping_path)
+mapping_df = get_gridding_mapping_df()
+mapping_df
 
-# currently we are missing some proxies, so we drop any gridding group that does not
-# have all the proxies ready.
-groups_ready_for_gridding = mapping_df.groupby("gch4i_name")["proxy_has_file"].all()
-groups_ready_for_gridding = groups_ready_for_gridding[groups_ready_for_gridding]
-# filter the mapping df to only include the groups that are ready for gridding.
-ready_mapping_df = mapping_df[
-    mapping_df.gch4i_name.isin(groups_ready_for_gridding.index)
-]
-ready_mapping_df
+mapping_df.set_index(["gch4i_name", "emi_id", "proxy_id"]).drop(
+    columns="proxy_rel_emi_col"
+).drop_duplicates(keep="last").reset_index(drop=True).to_clipboard()
 
+
+def create_gridding_params(in_df):
+
+    # this formats the arguments to the gridding function
+    gridding_params = {}
+    for gch4i_name, data in in_df.groupby("gch4i_name"):
+
+        GRIDDING_NAME = data.gch4i_name.iloc[0].lower()
+        # v2_name = data.v2_name.iloc[0]
+        IPCC_ID, SOURCE_NAME = gch4i_name.split("_", maxsplit=1)
+
+        netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
+        netcdf_description = (
+            f"Gridded EPA Inventory - {GRIDDING_NAME} - "
+            f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
+        )
+
+        gridding_params[gch4i_name] = dict(
+            source_name=gch4i_name,
+            group_data=data,
+            nc_flux_output_path=tmp_data_dir_path / f"{GRIDDING_NAME}_ch4_emi_flux.nc",
+            nc_kt_output_path=tmp_data_dir_path / f"{GRIDDING_NAME}_ch4_kt_per_year.nc",
+            tif_flux_output_path=tmp_data_dir_path
+            / f"{GRIDDING_NAME}_ch4_emi_flux.tif",
+            tif_kt_output_path=tmp_data_dir_path
+            / f"{GRIDDING_NAME}_ch4_kt_per_year.tif",
+            netcdf_title=netcdf_title,
+            netcdf_description=netcdf_description,
+            # "annual_plot_output_path = "",
+            # "diff_plot_output_path = "",
+        )
+    return gridding_params
+
+
+gridding_params = create_gridding_params(mapping_df)
+# %%
 # %%
 
 # we need this as a reference file to filter out the states that are not in the gridding
 # region of lower 48 + DC.
 state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+county_geo_path: Path = global_data_dir_path / "tl_2020_us_county.zip"
+
 state_gdf = (
     gpd.read_file(state_geo_path)
     .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -195,8 +173,15 @@ state_gdf = (
     .to_crs(4326)
 )
 
-
-gridding_params = create_gridding_params(ready_mapping_df)
+county_gdf = (
+    gpd.read_file(county_geo_path)
+    .loc[:, ["NAME", "STATEFP", "COUNTYFP", "geometry"]]
+    .rename(columns=str.lower)
+    .rename(columns={"name": "county_name"})
+    .astype({"statefp": int, "countyfp": int})
+    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+    .to_crs(4326)
+)
 # %%
 
 # once this is ready for production, we would adjust this loop to take in the
@@ -235,17 +220,13 @@ gridding_params = create_gridding_params(ready_mapping_df)
 # the emi/proxy pairs.
 logging.info(f"Started gridding at {formatted_datetime}")
 N_SOURCES_READY = len(gridding_params)
-for i, (_id, kwargs) in tqdm(enumerate(gridding_params.items()), total=N_SOURCES_READY):
+for i, (_id, kwargs) in tqdm(
+    enumerate(gridding_params.items(), 1), total=N_SOURCES_READY
+):
 
     (
         source_name,
-        emi_input_paths,
-        emi_has_state_col,
-        emi_timestep_list,
-        proxy_input_paths,
-        proxy_timtestep_list,
-        proxy_has_prop_list,
-        proxy_prop_col_list,
+        data,
         nc_flux_output_path,
         nc_kt_output_path,
         tif_flux_output_path,
@@ -254,7 +235,10 @@ for i, (_id, kwargs) in tqdm(enumerate(gridding_params.items()), total=N_SOURCES
         netcdf_description,
     ) = kwargs.values()
 
-    logging.info(f"\n\n#{i}/{N_SOURCES_READY} Starting {source_name}")
+    logging.info(
+        f"\n\n#{i}/{N_SOURCES_READY} ========================================"
+        f"\nStarting {source_name}"
+    )
 
     file_status = [
         x.exists()
@@ -265,177 +249,217 @@ for i, (_id, kwargs) in tqdm(enumerate(gridding_params.items()), total=N_SOURCES
             tif_kt_output_path,
         ]
     ]
-    if all(file_status):
-        logging.info(f"{source_name} already gridded.\n")
-        continue
 
-    # get the iterator for the emi/proxy pairs.
-    emi_proxy_gridding_iter = zip(
-        emi_input_paths,
-        emi_has_state_col,
-        emi_timestep_list,
-        proxy_input_paths,
-        proxy_timtestep_list,
-        proxy_has_prop_list,
-        proxy_prop_col_list,
-    )
+    # if all(file_status):
+    #     logging.info(f"{source_name} already gridded.\n")
+    #     continue
 
     # a dictionary to hold the gridding group gridding results for all emi/proxy pairs
-    emi_dict = {}
+    source_group_dict = {}
     # for each emi/proxy pair in the gridding group
-    for (
-        emi_input_path,
-        emi_has_state_col,
-        emi_timestep,
-        proxy_input_path,
-        proxy_timestep,
-        proxy_has_prop,
-        proxy_prop_col,
-    ) in emi_proxy_gridding_iter:
+    for row in data.itertuples(index=False):
+        logging.info(f"Processing {row.emi_id}, {row.proxy_id}")
+        # add key to dictionary for this emi/proxy pair
+        source_group_dict[row.emi_id] = {}
+        emi_input_path = list(emi_data_dir_path.glob(f"{row.emi_id}.csv"))[0]
+        proxy_input_path = list(proxy_data_dir_path.glob(f"{row.proxy_id}.*"))[0]
         # break
-        emi_name = emi_input_path.stem
-        proxy_name = proxy_input_path.stem
-        logging.info(f"Processing {emi_name}, {proxy_name}")
+
         # STEP 2: Read In EPA State/year GHGI Emissions
-        emi_dict[emi_name] = {}
         # read the emi file and filter out the states that are not in the lower 48 + DC
         # and remove any records with 0 emissions.
 
-        if emi_has_state_col:
+        # there are 3 types of emi files:
+        # 1. state+county/year+month/emissions
+        # 2. state/year/emissions
+        # 3. national/year/emissions
+        if row.emi_has_fips_col & row.emi_has_month_col:
+            emi_timestep = ["year", "month"]
+            emi_geo_level = "county"
+            emi_df = (
+                pd.read_csv(
+                    emi_input_path,
+                    usecols=emi_timestep + ["state_code", "fips", "ghgi_ch4_kt"],
+                )
+                .merge(state_gdf[["state_code", "statefp"]], on="state_code")
+                .rename(columns={"fips": "geoid"})
+                .assign(
+                    month=lambda df: pd.to_datetime(df["month"], format="%B").dt.month
+                )
+            )
+            logging.info(f"{row.emi_id} is at county/month level.")
+        # the to the state/year emi files
+        elif row.emi_has_state_col:
+            emi_timestep = ["year"]
+            emi_geo_level = "state"
             emi_cols = emi_timestep + ["state_code", "ghgi_ch4_kt"]
             emi_df = pd.read_csv(emi_input_path, usecols=emi_cols).query(
                 "(state_code.isin(@state_gdf.state_code)) & (ghgi_ch4_kt > 0)"
             )
+            logging.info(f"{row.emi_id} is at state/year level.")
+        # otherwise it is a national/year emi file
         else:
+            emi_timestep = ["year"]
+            emi_geo_level = "national"
             emi_cols = emi_timestep + ["ghgi_ch4_kt"]
             emi_df = pd.read_csv(emi_input_path, usecols=emi_cols)
-
+            logging.info(f"{row.emi_id} is at national/year level.")
+        # %%
         # STEP 3: GET AND FORMAT PROXY DATA
         # we apply a different set of functions depending on the proxy type.
         # if vector type
-        if proxy_input_path.suffix == ".parquet":
+
+        if row.proxy_has_year_col & (row.proxy_has_month_col):
+            proxy_timestep = ["year", "month"]
+        elif row.proxy_has_year_col & (not row.proxy_has_month_col):
+            proxy_timestep = ["year"]
+        # TODO elif proxy has a year_month column
+        else:
+            proxy_timestep = None
+
+        if row.file_type == "parquet":
+
+            # filter 1: national yearly emis
+            if (emi_timestep == ["year"]) | (not row.emi_has_state_col):
+                logging.warning(
+                    f"{row.emi_id}, {row.proxy_id} not implemented yet\n"
+                    f"emi has state: {row.emi_has_state_col}\n"
+                    f"time: {emi_timestep}, {proxy_timestep}\n"
+                    f"state: {row.emi_has_state_col}\n"
+                    f"rel_emis: {row.proxy_has_rel_emi_col}, {row.proxy_rel_emi_col}\n"
+                )
+                break
 
             # read the file, catch any errors and log them.
             try:
                 proxy_gdf = gpd.read_parquet(proxy_input_path).reset_index()
             except Exception as e:
-                logging.critical(f"Error reading {proxy_input_path.name}: {e}")
+                logging.critical(f"Error reading {row.proxy_id}: {e}")
                 continue
 
-            # if the emi_time and proxy_time are the same, we can allocate the emissions
-            # directly to the proxies since everything aligns.
+            # if the emi_time and proxy_time are both year, or the proxy timestep is
+            # None (i.e. the same data gets repeated every year) we can allocate the
+            # emissions directly to the proxies since everything aligns.
             # TODO: add an arg to the allocate_emissions_to_proxy function to take in
             # the timestep columns and use them as groupers instead of hardcoding year.
-            # TODO: add emi_timestep == ["year"] | ["year", "month"] to the if statement
             if (
                 (emi_timestep == ["year"])
-                & (emi_timestep == proxy_timestep)
-                & emi_has_state_col
+                & ((proxy_timestep == ["year"]) | (proxy_timestep is None))
+                & (emi_geo_level == "state")
+                & row.proxy_has_state_col
             ):
                 # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES
                 # embedded in this function is the check that the proxy has the same
                 # year as the emissions and same set of states. It will log when that is
                 # not the case since it is a critical error that needs to be corrected.
 
-                # check if all the proxy state / time columns are in the emissions data
-                # NOTE: this check happens again later, but at a siginificant time cost
-                # if the data are large. It is here to catch the error early and break
-                # the loop with critical message.
-                proxy_unique = (
-                    proxy_gdf[["state_code", "year"]]
-                    .drop_duplicates()
-                    .assign(proxy=1)
-                    .set_index(["state_code", "year"])
-                    .sort_index()
-                )
-                emi_unique = (
-                    emi_df[["state_code", "year"]]
-                    .drop_duplicates()
-                    .assign(emi=1)
-                    .set_index(["state_code", "year"])
-                    .sort_index()
-                )
-                match_check = emi_unique.join(proxy_unique, how="left")
+                match_check = check_state_year_match(emi_df, proxy_gdf, row)
 
                 if match_check["proxy"].isna().any():
                     logging.critical(
-                        f"QC FAILED: {emi_name}, {proxy_name} "
+                        f"QC FAILED: {row.emi_id}, {row.proxy_id} "
                         "proxy state/year columns do not match emissions\n"
                         f"{match_check[match_check["proxy"].isna()].to_string().replace("\n", "\n\t")}"
                         "\n"
                     )
                     break
 
-                emi_dict[emi_name]["allocated"] = allocate_emissions_to_proxy(
-                    proxy_gdf,
-                    emi_df,
-                    proxy_has_year=True,
-                    use_proportional=proxy_has_prop,
-                    proportional_col_name=proxy_prop_col,
+                source_group_dict[row.emi_id]["allocated"] = (
+                    allocate_emissions_to_proxy(
+                        proxy_gdf,
+                        emi_df,
+                        proxy_has_year=row.proxy_has_year_col,
+                        use_proportional=row.proxy_has_rel_emi_col,
+                        proportional_col_name=row.proxy_rel_emi_col,
+                    )
                 )
                 # STEP X: QC ALLOCATION
                 # check that the allocated emissions sum to the original emissions
-                emi_dict[emi_name]["allocation_qc"] = QC_proxy_allocation(
-                    emi_dict[emi_name]["allocated"], emi_df
+                source_group_dict[row.emi_id]["allocation_qc"] = QC_proxy_allocation(
+                    source_group_dict[row.emi_id]["allocated"], emi_df
                 )
                 # if the allocation failed, log the error and break the loop.
-                if not emi_dict[emi_name]["allocation_qc"].isclose.all():
+                if not source_group_dict[row.emi_id]["allocation_qc"].isclose.all():
                     logging.critical(
-                        f"QC FAIL: {emi_name}, {proxy_name}." f"allocation failed."
+                        f"QC FAIL: {row.emi_id}, {row.proxy_id}." f"allocation failed."
                     )
                     break
 
                 try:
                     # STEP X: GRID EMISSIONS
-                    emi_dict[emi_name]["rasters"] = grid_allocated_emissions(
-                        emi_dict[emi_name]["allocated"]
+                    source_group_dict[row.emi_id]["rasters"] = grid_allocated_emissions(
+                        source_group_dict[row.emi_id]["allocated"]
                     )
                 except Exception as e:
-                    logging.critical(f"{emi_name}, {proxy_name} gridding failed {e}")
+                    logging.critical(
+                        f"{row.emi_id}, {row.proxy_id} gridding failed {e}"
+                    )
                     # break out of outer loop if gridding fails.
                     break
 
                 # STEP X: QC GRIDDED EMISSIONS ---------------------------------------------
                 # TODO: update this to do state+year QC instead of just year.
-                emi_dict[emi_name]["raster_qc"] = QC_emi_raster_sums(
-                    emi_dict[emi_name]["rasters"], emi_df
+                source_group_dict[row.emi_id]["raster_qc"] = QC_emi_raster_sums(
+                    source_group_dict[row.emi_id]["rasters"], emi_df
                 )
             else:
                 logging.warning(
-                    f"{emi_name}, {proxy_name} not implemented yet\n"
-                    f"emi has state: {emi_has_state_col}\n"
+                    f"{row.emi_id}, {row.proxy_id} not implemented yet\n"
+                    f"emi has state: {row.emi_has_state_col}\n"
                     f"time: {emi_timestep}, {proxy_timestep}\n"
-                    f"state: {emi_has_state_col}\n"
-                    f"rel_emis: {proxy_has_prop}, {proxy_prop_col}\n"
+                    f"state: {row.emi_has_state_col}\n"
+                    f"rel_emis: {row.proxy_has_rel_emi_col}, {row.proxy_rel_emi_col}\n"
                 )
         # raster proxies will probably need a different process from read to
         # allocate. Then QC_emi_raster_sums and beyond would be the same.
         # if proxy_type == "raster":
         #     pass
-        if proxy_input_path.suffix == ".nc":
-            logging.warning("raster proxies not implemented yet")
-            continue
+        elif row.file_type == "netcdf":
+            logging.info(f"{row.proxy_id} is a raster.")
+            # TODO we have to account here for the livestock emis that has MONTHLY
+            # emissions at county level against yearly+county proxy. This is a special
+            # case that will need to be handled differently.
+            if row.emi_has_fips_col & row.emi_has_month_col:
+                logging.warning(
+                    f"{row.emi_id}, {row.proxy_id} has cnty+month. Not implemented yet."
+                )
+
+            else:
+                proxy_ds = xr.open_dataset(proxy_input_path)
+                source_group_dict[row.emi_id]["rasters"] = allocate_emis_to_array(
+                    proxy_ds, emi_df, row
+                )
+                source_group_dict[row.emi_id]["raster_qc"] = QC_emi_raster_sums(
+                    source_group_dict[row.emi_id]["rasters"], emi_df
+                )
 
     # STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER ------------------------------
     # if all the emi/proxy pairs were successful, we can combine the rasters and
     # calculate the flux.
 
-    gridded_emis = list(emi_dict.keys())
-    if len(gridded_emis) == 0:
-        # logging.critical(f"No successful emi/proxy pairs for {source_name}")
-        continue
-    if len(gridded_emis) != len(emi_input_paths):
-        # logging.critical(f"missing emi/proxy pair(s) for {source_name}")
+    gridded_emis = list(source_group_dict.keys())
+    expected_emis = data.emi_id.unique().tolist()
+    all_emis_created = all([x in gridded_emis for x in expected_emis])
+    if [x for x in expected_emis if x not in gridded_emis]:
+        missing_emis = ", ".join([x for x in expected_emis if x not in gridded_emis])
+        logging.critical(
+            f"{source_name} has failed\n" f"missing emi/proxy pairs for {missing_emis}"
+        )
         continue
 
     rasters_exist = [
-        "rasters" in emi_dict[emi_name].keys() for emi_name in emi_dict.keys()
+        "rasters" in source_group_dict[emi_name].keys()
+        for emi_name in source_group_dict.keys()
     ]
     if not all(rasters_exist):
-        # logging.critical(f"No raster data for {source_name}")
+        logging.critical(
+            f"{source_name} has failed\n" f"No raster data for {source_name}"
+        )
         continue
 
-    raster_list = [emi_dict[emi_name]["rasters"] for emi_name in emi_dict.keys()]
+    raster_list = [
+        source_group_dict[emi_name]["rasters"] for emi_name in source_group_dict.keys()
+    ]
     ch4_kt_result_rasters = combine_gridded_emissions(raster_list)
     ch4_flux_result_rasters = calculate_flux(ch4_kt_result_rasters)
 
@@ -464,8 +488,82 @@ for i, (_id, kwargs) in tqdm(enumerate(gridding_params.items()), total=N_SOURCES
     # %%
     i = 0
     for id, values in gridding_params.items():
-        i += len([x for x in values["proxy_input_paths"] if x.suffix==".parquet"])
+        i += len([x for x in values["proxy_input_paths"] if x.suffix == ".parquet"])
     i
+
+
+# %%
+_id = "3A_enteric_fermentation"
+kwargs = gridding_params[_id]
+
+(
+    source_name,
+    data,
+    nc_flux_output_path,
+    nc_kt_output_path,
+    tif_flux_output_path,
+    tif_kt_output_path,
+    netcdf_title,
+    netcdf_description,
+) = kwargs.values()
 # %%
 
+file_status = [
+    x.exists()
+    for x in [
+        nc_flux_output_path,
+        # nc_kt_output_path,
+        tif_flux_output_path,
+        tif_kt_output_path,
+    ]
+]
+# if all(file_status):
+
+# get the iterator for the emi/proxy pairs.
+emi_proxy_gridding_iter = zip(
+    emi_input_paths,
+    emi_has_state_col,
+    emi_timestep_list,
+    proxy_input_paths,
+    proxy_timtestep_list,
+    proxy_has_prop_list,
+    proxy_prop_col_list,
+)
+
+for (
+    emi_input_path,
+    emi_has_state_col,
+    emi_timestep,
+    proxy_input_path,
+    proxy_timestep,
+    proxy_has_prop,
+    proxy_prop_col,
+) in emi_proxy_gridding_iter:
+
+    if emi_has_state_col:
+        emi_cols = emi_timestep + ["state_code", "ghgi_ch4_kt"]
+        emi_df = pd.read_csv(emi_input_path, usecols=emi_cols).query(
+            "(state_code.isin(@state_gdf.state_code)) & (ghgi_ch4_kt > 0)"
+        )
+    else:
+        emi_cols = emi_timestep + ["ghgi_ch4_kt"]
+        emi_df = pd.read_csv(emi_input_path, usecols=emi_cols)
+
+    if proxy_input_path.suffix == ".nc":
+        # break
+        proxy_ds = xr.open_dataset(proxy_input_path)
+
+        emi_df = emi_df.merge(state_gdf[["state_code", "statefp"]], on="state_code")
+        tmp = allocate_emis_to_array(proxy_ds, emi_df, proxy_var_name=proxy_prop_col)
+        [x.sum() for x in tmp.values()]
+
+    # %%
+    # split a numpy array along the first axis into a dictionary of numpy arrays
+
+# %%
+proxy_path = proxy_data_dir_path / "coal_post_surface_proxy.parquet"
+proxy_path.exists()
+# %%
+proxy_gdf = gpd.read_parquet(proxy_path).reset_index()
+proxy_gdf.head()
 # %%

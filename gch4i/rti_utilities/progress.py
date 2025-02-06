@@ -2,7 +2,12 @@
 from datetime import datetime
 from numpy import nan
 import pandas as pd
-from gch4i.config import emi_data_dir_path, proxy_data_dir_path, V3_DATA_PATH
+from gch4i.config import (
+    emi_data_dir_path,
+    proxy_data_dir_path,
+    V3_DATA_PATH,
+    tmp_data_dir_path,
+)
 
 
 final_gridded_data_dir = V3_DATA_PATH / "final_gridded_methane"
@@ -48,7 +53,9 @@ def main():
         )  # all proxies present as files
         # create dictionary/row for gch4i_name and add to list of gch4i rows
 
-        final_path = final_gridded_data_dir / f"{groups}_ch4_emi_flux.nc"
+        prelim_path = tmp_data_dir_path / f"{g}_ch4_emi_flux.nc"
+        prelim_data_done = prelim_path.exists()
+        final_path = final_gridded_data_dir / f"{g}_ch4_emi_flux.nc"
         final_data_done = final_path.exists()
 
         gch4i_row = {
@@ -56,6 +63,7 @@ def main():
             "has_emi_inputs": has_emi_inputs,
             "all_emis_done": emis_done,
             "all_proxies_done": proxies_done,
+            "prelim_data_done": prelim_data_done,
             "final_data_done": final_data_done,
         }
         gch4i_rows.append(gch4i_row)
@@ -94,11 +102,11 @@ def main():
             f"$A$2:$A${gch4i_len}", {"type": "no_blanks", "format": format0}
         )
         prog_sheet.conditional_format(
-            f"$B$2:$E${gch4i_len}",
+            f"$B$2:$F${gch4i_len}",
             {"type": "cell", "criteria": "=", "value": False, "format": format1},
         )
         prog_sheet.conditional_format(
-            f"$B$2:$E${gch4i_len}",
+            f"$B$2:$F${gch4i_len}",
             {"type": "cell", "criteria": "=", "value": True, "format": format2},
         )
         prog_sheet.autofit()

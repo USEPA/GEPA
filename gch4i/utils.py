@@ -73,6 +73,57 @@ def normalize_xr(x):
     return x / x.sum()
 
 
+def check_state_year_match(emi_df, proxy_gdf, row):
+
+    # check if all the proxy state / time columns are in the emissions data
+    # NOTE: this check happens again later, but at a siginificant time cost
+    # if the data are large. It is here to catch the error early and break
+    # the loop with critical message.
+
+    if row.proxy_has_year_col & row.proxy_has_rel_emi_col:
+
+        proxy_unique = proxy_gdf.groupby(["state_code", "year"])[
+            row.proxy_rel_emi_col
+        ].sum()
+        match_check = (
+            emi_df.set_index(["state_code", "year"])
+            .join(proxy_unique, how="left")
+            .rename(columns={row.proxy_rel_emi_col: "proxy"})
+        )
+    elif row.proxy_has_year_col & (not row.proxy_has_rel_emi_col):
+        proxy_unique = (
+            proxy_gdf.groupby(["state_code", "year"])["geometry"].count().to_frame()
+        )
+        match_check = (
+            emi_df.set_index(["state_code", "year"])
+            .join(proxy_unique, how="left")
+            .rename(columns={"geometry": "proxy"})
+        )
+    elif (not row.proxy_has_year_col) & (row.proxy_has_rel_emi_col):
+        proxy_unique = proxy_gdf.groupby(["state_code"])[row.proxy_rel_emi_col].sum()
+        match_check = (
+            emi_df.groupby(["state_code"])["ghgi_ch4_kt"]
+            .sum()
+            .to_frame()
+            .join(proxy_unique, how="left")
+            .rename(columns={row.proxy_rel_emi_col: "proxy"})
+        )
+    elif (not row.proxy_has_year_col) & (not row.proxy_has_rel_emi_col):
+
+        proxy_unique = (
+            proxy_gdf.groupby(["state_code", "year"])["geometry"].count().to_frame()
+        )
+        match_check = (
+            emi_df.set_index(["state_code", "year"])
+            .join(proxy_unique, how="left")
+            .rename(columns={"geometry": "proxy"})
+        )
+    else:
+        raise ValueError("this should not happen")
+
+    return match_check
+
+
 def allocate_emissions_to_proxy(
     proxy_gdf: gpd.GeoDataFrame,
     emi_df: pd.DataFrame,
@@ -1027,6 +1078,85 @@ def download_url(url, output_path):
     except requests.exceptions.RequestException as e:
         # print("Error downloading the file:", e)
         raise e
+
+
+def allocate_emis_to_array(proxy_ds, emi_df, row) -> np.array:
+
+    GEPA_PROFILE = GEPA_spatial_profile()
+
+    # this is a bandaid fix that has been noted for a future update.
+    # When statefp is na, the grouper to allocated emissions skips that part of
+    # the array, reducing the dimensions of the results and making the results
+    # incompatible with other raster stacks. So we fill in the statefp with 0
+    # for now.
+    if row.emi_has_fips_col & row.emi_has_month_col:
+        proxy_ds["geoid"] = proxy_ds["geoid"].fillna(0)
+        group_cols = ["year", "geoid"]
+    else:
+        proxy_ds["statefp"] = proxy_ds["statefp"].fillna(0)
+
+    results = []
+    for (year, geo_id), data in proxy_ds.groupby(group_cols):
+        geo_id = int(geo_id)
+        year = int(year)
+        tmp_emi_df = emi_df.query(f"cntyfp == {geo_id} & year=={year}").sort_values(
+            "month"
+        )
+        for _, month_emi in tmp_emi_df.iterrows():
+            month_emi
+            # print(month_emi)
+            # print(month_emi["ghgi_ch4_kt"])
+            # print(month_emi["month"])
+            val = month_emi["ghgi_ch4_kt"]
+            tmp = data[row.proxy_rel_emi_col] * val
+            results.append(tmp)
+        tmp_emi_df
+        try:
+            val = emi_df.query(f"statefp == {geo_id} & year=={year}")[
+                "ghgi_ch4_kt"
+            ].values[0]
+            # print(val)
+            tmp = data[row.proxy_rel_emi_col] * val
+            results.append(tmp)
+            # print(f"res state {statefp}, {year}: {tmp.sum().values}, {val}")
+        except IndexError:
+            # print(f"rel emi val = {data['rel_emi'].sum().values}")
+            # if the state/year is missing from the emissions data, we assume 0
+            # emissions
+            tmp = data[row.proxy_rel_emi_col] * 0
+            results.append(tmp)
+            # print(f"missing {statefp}, {year}")
+            # continue
+    # put the results back together
+    results_ds = (
+        xr.concat(results, dim="stacked_year_y_x")
+        .unstack("stacked_year_y_x")
+        .rename("emissions")
+        # .drop_vars("geoid")
+        .sortby(["year", "y", "x"])
+        .rio.set_spatial_dims(x_dim="x", y_dim="y")
+        # .where(lambda x: x > 0)
+        .rio.write_crs(4326)
+        .rio.write_transform(proxy_ds.rio.transform())
+        .rio.set_attrs(proxy_ds.attrs)
+    )
+
+    tmp_file = rasterio.MemoryFile(ext=".tif")
+    results_ds.rio.to_raster(tmp_file.name, profile=GEPA_PROFILE.profile)
+    results_ds = (
+        rioxarray.open_rasterio(tmp_file)
+        .rename({"band": "year"})
+        .assign_coords(year=years)
+        .fillna(0)
+    )
+    # results_ds.sel(year=2020).plot()
+    # plt.show()
+
+    def split_array(arr, keys):
+        return {key: arr[i] for i, key in enumerate(keys)}
+
+    arr_dict = split_array(results_ds.values, years)
+    return arr_dict
 
 
 # %%
