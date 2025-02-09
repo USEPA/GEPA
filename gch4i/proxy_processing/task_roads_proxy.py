@@ -1,6 +1,6 @@
 '''
 THE FINAL OUTPUT FOR THIS SCRIPT CAN BE FOUND ON ONE DRIVE/SHARE POINT AT THE FOLLOWING PATH:
-C:\Users\<USERNAME>\Environmental Protection Agency (EPA)\Gridded CH4 Inventory - RTI 2024 Task Order\Task 2\ghgi_v3_working\v3_data\global\raw_roads\task_outputs\gridwise_outputs\*cell.csv
+C:/Users/<USERNAME>/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/global/raw_roads/task_outputs/gridwise_outputs/*cell.csv
 
 The files named gridwise_mapping_YYYY_cell.csv are the estimated methane output aggregated to the cell level.
     The variable for methane emission allocation ('methane_emission_allocation') represents the proportion of 
@@ -883,3 +883,5 @@ for year in range(min_year, max_year+1):
         long_table.groupby(['year', 'cell_id'])['methane_emission_allocation'].sum()\
             .reset_index().to_csv(task_outputs_path / f"gridwise_mapping_{year}_cell.csv", index=False)
 
+
+#%%
