@@ -435,12 +435,8 @@ def task_get_ng_processing_proxy_data(
     processing_plants['rel_emi'] = processing_plants.groupby(["state_code", "year"])['ch4_emi'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
     processing_plants = processing_plants.drop(columns='ch4_emi')
 
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = processing_plants.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    # assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
-
     # Convert proxy to geodataframe
-    processing_plants_gdf = (
+    processing_plants_all_gdf = (
         gpd.GeoDataFrame(
             processing_plants,
             geometry=gpd.points_from_xy(
@@ -451,55 +447,80 @@ def task_get_ng_processing_proxy_data(
         )
         .drop(columns=["facility_name", "latitude", "longitude"])
         .loc[:, ["year", "state_code", "rel_emi", "geometry"]]
+        .astype({"rel_emi":float})
     )
+
+    # Make a list of unique state_code-year pairs in original proxy gdf including
+    # facilities that may have 0 relative emissions.
+    proxy_states_all = set(processing_plants_all_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Remove facilities with 0 relative emissions
+    processing_plants_clean_gdf = processing_plants_all_gdf.query("rel_emi > 0.0").reset_index(drop=True)
 
     # Check for missing proxy data and create alternative proxy data
     """
     Steps:
         - Check if proxy data is missing for a state and year
-        - Create alternative proxy data by assigning rel_emi = 1 and geometry = state polygon
-            - This distributes emissions evenly across the state
+        - Check to see if facilities exist for the state in processing_plants
+            - If the state has facilities, create alternative proxy data by uniformly
+              assigning the emissions to these locations. These locations had
+              capacity = 0 which is why they did not have emissions initially.
+            - If the state does not have facilities, create alternative proxy data by
+              assigning rel_emi = 1 and geometry = state polygon. This distributes the
+              emissions evenly across the state.
     """
-    # Check if proxy data exists for emissions data
+    # Read in emissions data and drop states with 0 emissions
     emi_df = (pd.read_csv(ng_processing_emi_path)
               .query("state_code.isin(@state_gdf['state_code'])")
-              .query("ghgi_ch4_kt > 0")
-              .reset_index(drop=True)
+              .query("ghgi_ch4_kt > 0.0")
               )
 
     # Retrieve unique state codes for emissions without proxy data
     # This step is necessary, as not all emissions data excludes emission-less states
     emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
-    proxy_states = set(processing_plants_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states_clean = set(processing_plants_clean_gdf[['state_code', 'year']].itertuples(index=False, name=None))
 
     # Find missing states
-    missing_states = emi_states.difference(proxy_states)
+    missing_states = emi_states.difference(proxy_states_clean)
 
     # Add missing states alternative data to grouped_proxy
     if missing_states:
-        # Create alternative proxy from missing states
-        alt_proxy = (
-            pd.DataFrame(missing_states, columns=['state_code', 'year'])
-            # Assign well type and make rel_emi = 1
-            .assign(
-                rel_emi=1
-            )
-            # Merge state polygon geometry
-            .merge(
-                state_gdf[['state_code', 'geometry']],
-                on='state_code',
-                how='left'
-            )
-        )
+        alt_proxy = gpd.GeoDataFrame()
+        for istate_year in np.arange(0, len(missing_states)):
+            istate = str(list(missing_states)[istate_year])[2:4]
+            iyear = int(str(list(missing_states)[istate_year])[7:11])
+            # If the missing state code-year pair is in the processing plants list,
+            # assign emissions to those facility locations.
+            if list(missing_states)[istate_year] in list(proxy_states_all):
+                iproxy = (processing_plants_all_gdf
+                          .query("year == @iyear")
+                          .query("state_code == @istate")
+                          .reset_index(drop=True)
+                          )
+                ifacility_count = len(iproxy)
+                iproxy['rel_emi'] = 1.0/ifacility_count
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
+            else:
+                # Create alternative proxy from missing states
+                iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
+                iproxy.columns = ['state_code', 'year']
+                iproxy['rel_emi'] = 1.0
+                iproxy = iproxy.merge(
+                    state_gdf[['state_code', 'geometry']],
+                    on='state_code',
+                    how='left')
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
+        # Add missing proxy to original proxy
+        proxy_gdf_final = gpd.GeoDataFrame(pd.concat([processing_plants_clean_gdf, alt_proxy], ignore_index=True).reset_index(drop=True))
+    else:
+        proxy_gdf_final = processing_plants_all_gdf.copy()
 
-        # Convert to GeoDataFrame
-        alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
-
-        # Append to grouped_proxy
-        processing_plants_gdf = pd.concat([processing_plants_gdf, alt_proxy], ignore_index=True)
+    # Check that relative emissions sum to 1.0 each state/year combination
+    sums = proxy_gdf_final.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
 
     # Output proxy parquet files
-    processing_plants_gdf.to_parquet(proxy_output_path)
+    proxy_gdf_final.to_parquet(proxy_output_path)
 
     return None
 
