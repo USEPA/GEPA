@@ -1,4 +1,14 @@
-#%%
+"""
+Name:                   task_trans_pipelines_proxy.py
+Date Last Modified:     2025-02-07
+Authors Name:           John Bollenbacher (RTI International)
+Purpose:                This file builds spatial proxies for natural gas pipelines on farmlands. 
+                        Reads pipeline geometries, splits them by state,
+                        and saves out a table of the resulting pipeline geometries for each year and state.
+Input Files:            - {sector_data_dir_path}/enverus/midstream/Rextag_Natural_Gas.gdb
+                        - {V3_DATA_PATH}/geospatial/cb_2018_us_state_500k/cb_2018_us_state_500k.shp
+Output Files:           - farm_pipelines_proxy.parquet
+"""
 from pathlib import Path
 from typing import Annotated
 
@@ -28,10 +38,11 @@ lower_48_and_DC = ('AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'IA', '
 def get_trans_pipeline_proxy_data(
     #Inputs
     enverus_midstream_pipelines_path: Path = sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb",
+    state_shapes_path: Path = V3_DATA_PATH / 'geospatial/cb_2018_us_state_500k/cb_2018_us_state_500k.shp'
 
     #Outputs
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "trans_pipeline_proxy.parquet"
+        proxy_data_dir_path / "trans_pipelines_proxy.parquet"
     ),
 ):
     ###############################################################
@@ -39,7 +50,7 @@ def get_trans_pipeline_proxy_data(
     ###############################################################
 
     # load state geometries for continental US
-    state_shapes = gpd.read_file(V3_DATA_PATH / 'geospatial/cb_2018_us_state_500k/cb_2018_us_state_500k.shp')
+    state_shapes = gpd.read_file(state_shapes_path)
     state_shapes = state_shapes.rename(columns={'STUSPS': 'state_code'})[['state_code', 'geometry']]
     state_shapes = state_shapes[state_shapes['state_code'].isin(lower_48_and_DC)]
     state_shapes = state_shapes.to_crs(epsg=4326)  # Ensure state_shapes is in EPSG:4326
