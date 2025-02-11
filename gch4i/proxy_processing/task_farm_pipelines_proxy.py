@@ -33,7 +33,7 @@ def get_farm_pipeline_proxy_data(
     croplands_path_template: Path = sector_data_dir_path / "nass_cdl/{year}_30m_cdls_all_crop_binary.tif",
 
     #Outputs
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "farms_pipeline_proxy.parquet"
+    output_path: Annotated[Path, Product] = proxy_data_dir_path / "farm_pipeline_proxy.parquet"
 ):
     
     ###############################################################
