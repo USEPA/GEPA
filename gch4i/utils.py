@@ -121,7 +121,17 @@ def check_state_year_match(emi_df, proxy_gdf, row):
     else:
         raise ValueError("this should not happen")
 
-    return match_check
+    if match_check["proxy"].isna().any():
+        logging.critical(
+            f"QC FAILED: {row.emi_id}, {row.proxy_id} "
+            "proxy state/year columns do not match emissions\n"
+            f"{match_check[match_check["proxy"].isna()].to_string().replace("\n", "\n\t")}"
+            "\n"
+        )
+
+        return False
+    else:
+        return True
 
 
 def allocate_emissions_to_proxy(
@@ -131,8 +141,8 @@ def allocate_emissions_to_proxy(
     use_proportional: bool = False,
     proportional_col_name: str = None,
     # proxy_has_month: bool = False, # TODO: update code to have month.
-    # emi_column = "state_code",
-    # date_col: str = "year",
+    geo_col="state_code",
+    time_col: str = "year",
 ) -> gpd.GeoDataFrame:
     """
     Allocation state emissions by year to all proxies within the state by year.
@@ -164,32 +174,32 @@ def allocate_emissions_to_proxy(
             "must provide 'proportional_col_name' if 'use_proportional' is True."
         )
 
-    if proxy_has_year and ("year" not in proxy_gdf.columns):
+    if proxy_has_year and (time_col not in proxy_gdf.columns):
         raise ValueError(
-            "proxy data must have 'year' column if 'proxy_has_year' is True."
+            f"proxy data must have {time_col} column if 'proxy_has_year' is True."
         )
 
-    if "state_code" not in proxy_gdf.columns:
-        raise ValueError("proxy data must have 'state_code' column")
+    if geo_col not in proxy_gdf.columns:
+        raise ValueError(f"proxy data must have {geo_col} column")
 
-    if "state_code" not in emi_df.columns:
-        raise ValueError("inventory data must have 'state_code' column")
+    if geo_col not in emi_df.columns:
+        raise ValueError(f"inventory data must have {geo_col} column")
 
-    if "year" not in emi_df.columns:
-        raise ValueError("inventory data must have 'year' column")
+    if time_col not in emi_df.columns:
+        raise ValueError(f"inventory data must have {time_col} column")
 
     result_list = []
     # for each state and year in the inventory data
-    for (state, year), data in emi_df.groupby(["state_code", "year"]):
+    for (state, year), data in emi_df.groupby([geo_col, time_col]):
         # if the proxy has a year, get the proxies for that state / year
         if proxy_has_year:
             state_proxy_data = proxy_gdf[
-                (proxy_gdf["state_code"] == state) & (proxy_gdf["year"] == year)
+                (proxy_gdf[geo_col] == state) & (proxy_gdf[time_col] == year)
             ].copy()
         # else just get the proxy in the state
         else:
             state_proxy_data = (
-                proxy_gdf[(proxy_gdf["state_code"] == state)].copy().assign(year=year)
+                proxy_gdf[(proxy_gdf[geo_col] == state)].copy().assign(year=year)
             )
         # if there are no proxies in that state, print a warning
         if state_proxy_data.shape[0] < 1:
@@ -1092,41 +1102,54 @@ def allocate_emis_to_array(proxy_ds, emi_df, row) -> np.array:
     if row.emi_has_fips_col & row.emi_has_month_col:
         proxy_ds["geoid"] = proxy_ds["geoid"].fillna(0)
         group_cols = ["year", "geoid"]
+        geo_col = "cntyfp"
     else:
         proxy_ds["statefp"] = proxy_ds["statefp"].fillna(0)
-
+        group_cols = ["year", "statefp"]
+        geo_col = "statefp"
     results = []
-    for (year, geo_id), data in proxy_ds.groupby(group_cols):
-        geo_id = int(geo_id)
-        year = int(year)
-        tmp_emi_df = emi_df.query(f"cntyfp == {geo_id} & year=={year}").sort_values(
-            "month"
-        )
-        for _, month_emi in tmp_emi_df.iterrows():
-            month_emi
-            # print(month_emi)
-            # print(month_emi["ghgi_ch4_kt"])
-            # print(month_emi["month"])
-            val = month_emi["ghgi_ch4_kt"]
-            tmp = data[row.proxy_rel_emi_col] * val
-            results.append(tmp)
-        tmp_emi_df
+    for emi_row in emi_df.itertuples():
+
         try:
-            val = emi_df.query(f"statefp == {geo_id} & year=={year}")[
-                "ghgi_ch4_kt"
-            ].values[0]
-            # print(val)
-            tmp = data[row.proxy_rel_emi_col] * val
-            results.append(tmp)
-            # print(f"res state {statefp}, {year}: {tmp.sum().values}, {val}")
-        except IndexError:
-            # print(f"rel emi val = {data['rel_emi'].sum().values}")
-            # if the state/year is missing from the emissions data, we assume 0
-            # emissions
-            tmp = data[row.proxy_rel_emi_col] * 0
-            results.append(tmp)
-            # print(f"missing {statefp}, {year}")
-            # continue
+            arr = (
+                proxy_ds.where(
+                    (proxy_ds[geo_col] == emi_row.statefp)
+                    & (proxy_ds["year"] == emi_row.year),
+                    drop=True,
+                )[row.proxy_rel_emi_col]
+                * emi_row.ghgi_ch4_kt
+            )
+            results.append(arr)
+        except Exception as e:
+            print(e)
+            continue
+
+
+        # for _, emi_val in tmp_emi_df.iterrows():
+        #     emi_val
+        #     # print(month_emi)
+        #     # print(month_emi["ghgi_ch4_kt"])
+        #     # print(month_emi["month"])
+        #     val = emi_val["ghgi_ch4_kt"]
+        #     tmp = data[row.proxy_rel_emi_col] * val
+        #     results.append(tmp)
+        # tmp_emi_df
+        # try:
+        #     val = emi_df.query(f"{geo_col} == {geo_id} & year=={year}")[
+        #         "ghgi_ch4_kt"
+        #     ].values[0]
+        #     # print(val)
+        #     tmp = data[row.proxy_rel_emi_col] * val
+        #     results.append(tmp)
+        #     # print(f"res state {statefp}, {year}: {tmp.sum().values}, {val}")
+        # except IndexError:
+        #     # print(f"rel emi val = {data['rel_emi'].sum().values}")
+        #     # if the state/year is missing from the emissions data, we assume 0
+        #     # emissions
+        #     tmp = data[row.proxy_rel_emi_col] * 0
+        #     results.append(tmp)
+        #     # print(f"missing {statefp}, {year}")
+        #     # continue
     # put the results back together
     results_ds = (
         xr.concat(results, dim="stacked_year_y_x")

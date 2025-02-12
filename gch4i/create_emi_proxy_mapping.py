@@ -55,10 +55,24 @@ def check_emi_file(input_path):
     emi_has_month_col = "month" in col_list
     emi_has_emi_col = "ghgi_ch4_kt" in col_list
 
+    if emi_has_county_col:
+        emi_geo_level = "county"
+    elif emi_has_state_col:
+        emi_geo_level = "state"
+    else:
+        emi_geo_level = "national"
+
+    if emi_has_month_col:
+        emi_time_step = "monthly"
+    else:
+        emi_time_step = "annual"
+
     emi_res_dict = dict(
+        emi_geo_level=emi_geo_level,
+        emi_time_step=emi_time_step,
         emi_has_state_col=emi_has_state_col,
         emi_has_fips_col=emi_has_county_col,
-        # emi_has_county_col=emi_has_county_col,
+        emi_has_county_col=emi_has_county_col,
         emi_has_year_col=emi_has_year_col,
         emi_has_month_col=emi_has_month_col,
         emi_has_emi_col=emi_has_emi_col,
@@ -83,7 +97,21 @@ def check_proxy_file(input_path):
     else:
         proxy_rel_emi_col = None
 
+    if proxy_has_year_month_col | proxy_has_month_col:
+        proxy_time_step = "monthly"
+    else:
+        proxy_time_step = "annual"
+
+    if proxy_has_county_col:
+        proxy_geo_level = "county"
+    elif proxy_has_state_col:
+        proxy_geo_level = "state"
+    else:
+        proxy_geo_level = "national"
+
     res_dict = dict(
+        proxy_time_step=proxy_time_step,
+        proxy_geo_level=proxy_geo_level,
         proxy_has_file=True,
         proxy_has_state_col=proxy_has_state_col,
         proxy_has_county_col=proxy_has_county_col,
@@ -121,7 +149,19 @@ def check_proxy_nc(input_path):
     proxy_has_year_col = "year" in coords
     proxy_has_geom_col = all(x in coords for x in ["x", "y"])
 
+    if proxy_has_year_col:
+        proxy_time_step = "annual"
+    else:
+        proxy_time_step = "monthly"
+
+    if proxy_has_county_col:
+        proxy_geo_level = "county"
+    else:
+        proxy_geo_level = "state"
+
     res_dict = dict(
+        proxy_time_step=proxy_time_step,
+        proxy_geo_level=proxy_geo_level,
         proxy_has_file=True,
         proxy_has_state_col=proxy_has_state_col,
         proxy_has_county_col=proxy_has_county_col,
