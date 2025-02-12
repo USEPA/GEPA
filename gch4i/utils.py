@@ -73,7 +73,7 @@ def normalize_xr(x):
     return x / x.sum()
 
 
-def check_state_year_match(emi_df, proxy_gdf, row):
+def check_state_year_match(emi_df, proxy_gdf, row, match_cols=["state_code", "year"]):
 
     # check if all the proxy state / time columns are in the emissions data
     # NOTE: this check happens again later, but at a siginificant time cost
@@ -82,20 +82,16 @@ def check_state_year_match(emi_df, proxy_gdf, row):
 
     if row.proxy_has_year_col & row.proxy_has_rel_emi_col:
 
-        proxy_unique = proxy_gdf.groupby(["state_code", "year"])[
-            row.proxy_rel_emi_col
-        ].sum()
+        proxy_unique = proxy_gdf.groupby(match_cols)[row.proxy_rel_emi_col].sum()
         match_check = (
-            emi_df.set_index(["state_code", "year"])
+            emi_df.set_index(match_cols)
             .join(proxy_unique, how="left")
             .rename(columns={row.proxy_rel_emi_col: "proxy"})
         )
     elif row.proxy_has_year_col & (not row.proxy_has_rel_emi_col):
-        proxy_unique = (
-            proxy_gdf.groupby(["state_code", "year"])["geometry"].count().to_frame()
-        )
+        proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
         match_check = (
-            emi_df.set_index(["state_code", "year"])
+            emi_df.set_index(match_cols)
             .join(proxy_unique, how="left")
             .rename(columns={"geometry": "proxy"})
         )
@@ -110,11 +106,9 @@ def check_state_year_match(emi_df, proxy_gdf, row):
         )
     elif (not row.proxy_has_year_col) & (not row.proxy_has_rel_emi_col):
 
-        proxy_unique = (
-            proxy_gdf.groupby(["state_code", "year"])["geometry"].count().to_frame()
-        )
+        proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
         match_check = (
-            emi_df.set_index(["state_code", "year"])
+            emi_df.set_index(match_cols)
             .join(proxy_unique, how="left")
             .rename(columns={"geometry": "proxy"})
         )
@@ -137,12 +131,12 @@ def check_state_year_match(emi_df, proxy_gdf, row):
 def allocate_emissions_to_proxy(
     proxy_gdf: gpd.GeoDataFrame,
     emi_df: pd.DataFrame,
-    proxy_has_year: bool = False,
-    use_proportional: bool = False,
+    # proxy_has_year: bool = False,
+    use_proportional: bool = True,
     proportional_col_name: str = None,
-    # proxy_has_month: bool = False, # TODO: update code to have month.
-    geo_col="state_code",
-    time_col: str = "year",
+    match_cols: list[str] = ["state_code", "year"],
+    # geo_col: str = "state_code",
+    # time_col: str = "year",
 ) -> gpd.GeoDataFrame:
     """
     Allocation state emissions by year to all proxies within the state by year.
@@ -174,68 +168,75 @@ def allocate_emissions_to_proxy(
             "must provide 'proportional_col_name' if 'use_proportional' is True."
         )
 
-    if proxy_has_year and (time_col not in proxy_gdf.columns):
-        raise ValueError(
-            f"proxy data must have {time_col} column if 'proxy_has_year' is True."
-        )
+    # if proxy_has_year and (time_col not in proxy_gdf.columns):
+    #     raise ValueError(
+    #         f"proxy data must have {time_col} column if 'proxy_has_year' is True."
+    #     )
 
-    if geo_col not in proxy_gdf.columns:
-        raise ValueError(f"proxy data must have {geo_col} column")
+    # if geo_col not in proxy_gdf.columns:
+    #     raise ValueError(f"proxy data must have {geo_col} column")
 
-    if geo_col not in emi_df.columns:
-        raise ValueError(f"inventory data must have {geo_col} column")
+    # if geo_col not in emi_df.columns:
+    #     raise ValueError(f"inventory data must have {geo_col} column")
 
-    if time_col not in emi_df.columns:
-        raise ValueError(f"inventory data must have {time_col} column")
+    # if time_col not in emi_df.columns:
+    #     raise ValueError(f"inventory data must have {time_col} column")
 
-    result_list = []
-    # for each state and year in the inventory data
-    for (state, year), data in emi_df.groupby([geo_col, time_col]):
-        # if the proxy has a year, get the proxies for that state / year
-        if proxy_has_year:
-            state_proxy_data = proxy_gdf[
-                (proxy_gdf[geo_col] == state) & (proxy_gdf[time_col] == year)
-            ].copy()
-        # else just get the proxy in the state
-        else:
-            state_proxy_data = (
-                proxy_gdf[(proxy_gdf[geo_col] == state)].copy().assign(year=year)
-            )
-        # if there are no proxies in that state, print a warning
-        if state_proxy_data.shape[0] < 1:
-            # logging.warning(
-            #     f"there are no proxies in {state} for {year} but there are emissions!"
-            # )
-            continue
-        # get the value of emissions for that state/year
-        state_year_emissions = data["ghgi_ch4_kt"].iat[0]
+    # if time_col not in proxy_gdf.columns:
+    #     raise ValueError(f"proxy data must have {time_col} column")
 
-        # if there are no state inventory emissions, assign all proxy for that
-        # state / year as 0
+    out_proxy_gdf = proxy_gdf.merge(emi_df, on=match_cols, how="left").assign(
+        allocated_ch4_kt=lambda df: df[proportional_col_name] * df["ghgi_ch4_kt"]
+    )
 
-        if state_year_emissions == 0:
-            logging.info(
-                f"there are proxies in {state} for {year} but there are no emissions!"
-            )
-            state_proxy_data["allocated_ch4_kt"] = 0
-        # else, compute the emission for each proxy record
-        else:
-            # if the proxy has a proportional value, say from subpart data, use it
-            if use_proportional:
-                state_proxy_data["allocated_ch4_kt"] = (
-                    (
-                        state_proxy_data[proportional_col_name]
-                        / state_proxy_data[proportional_col_name].sum()
-                    )
-                    * state_year_emissions
-                ).fillna(0)
-            # else allocate emissions equally to all proxies in state
-            else:
-                state_proxy_data["allocated_ch4_kt"] = (
-                    state_year_emissions / state_proxy_data.shape[0]
-                )
-        result_list.append(state_proxy_data)
-    out_proxy_gdf = pd.concat(result_list).reset_index(drop=True)
+    # result_list = []
+    # # for each state and year in the inventory data
+    # for (state, year), data in emi_df.groupby([geo_col, time_col]):
+    #     # if the proxy has a year, get the proxies for that state / year
+    #     if proxy_has_year:
+    #         state_proxy_data = proxy_gdf[
+    #             (proxy_gdf[geo_col] == state) & (proxy_gdf[time_col] == year)
+    #         ].copy()
+    #     # else just get the proxy in the state
+    #     else:
+    #         state_proxy_data = (
+    #             proxy_gdf[(proxy_gdf[geo_col] == state)].copy().assign(year=year)
+    #         )
+    #     # if there are no proxies in that state, print a warning
+    #     if state_proxy_data.shape[0] < 1:
+    #         # logging.warning(
+    #         #     f"there are no proxies in {state} for {year} but there are emissions!"
+    #         # )
+    #         continue
+    #     # get the value of emissions for that state/year
+    #     state_year_emissions = data["ghgi_ch4_kt"].iat[0]
+
+    #     # if there are no state inventory emissions, assign all proxy for that
+    #     # state / year as 0
+
+    #     if state_year_emissions == 0:
+    #         logging.info(
+    #             f"there are proxies in {state} for {year} but there are no emissions!"
+    #         )
+    #         state_proxy_data["allocated_ch4_kt"] = 0
+    #     # else, compute the emission for each proxy record
+    #     else:
+    #         # if the proxy has a proportional value, say from subpart data, use it
+    #         if use_proportional:
+    #             state_proxy_data["allocated_ch4_kt"] = (
+    #                 (
+    #                     state_proxy_data[proportional_col_name]
+    #                     / state_proxy_data[proportional_col_name].sum()
+    #                 )
+    #                 * state_year_emissions
+    #             ).fillna(0)
+    #         # else allocate emissions equally to all proxies in state
+    #         else:
+    #             state_proxy_data["allocated_ch4_kt"] = (
+    #                 state_year_emissions / state_proxy_data.shape[0]
+    #             )
+    #     result_list.append(state_proxy_data)
+    # out_proxy_gdf = pd.concat(result_list).reset_index(drop=True)
     return out_proxy_gdf
 
 
@@ -404,14 +405,26 @@ def calculate_flux(
     return ch4_flux_result_rasters
 
 
-def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
+def QC_proxy_allocation(
+    proxy_df, emi_df, row, geo_col, time_col, plot=True
+) -> pd.DataFrame:
     """take proxy emi allocations and check against state inventory"""
     # logging.info("checking proxy emission allocation by state / year.")
+
+    grouper_cols = [geo_col, time_col]
+
+    if row.emi_time_step == "month":
+        match_cols = [geo_col, "year_month"]
+        emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
+    else:
+        match_cols = [geo_col, "year"]
+        emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
+
     sum_check = (
-        proxy_df.groupby(["state_code", "year"])["allocated_ch4_kt"]
+        proxy_df.groupby(match_cols)["allocated_ch4_kt"]
         .sum()
         .reset_index()
-        .merge(emi_df, on=["state_code", "year"], how="outer")
+        .merge(emi_sums, on=match_cols, how="outer")
         .assign(
             isclose=lambda df: df.apply(
                 lambda x: np.isclose(x["allocated_ch4_kt"], x["ghgi_ch4_kt"]), axis=1
@@ -429,8 +442,8 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
             "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
         )
 
-        unique_state_codes = emi_df[~emi_df["state_code"].isin(proxy_df["state_code"])][
-            "state_code"
+        unique_state_codes = emi_df[~emi_df[geo_col].isin(proxy_df[geo_col])][
+            geo_col
         ].unique()
 
         logging.warning(f"states with no proxy points in them: {unique_state_codes}")
@@ -446,9 +459,9 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
         fig.suptitle("compare inventory to allocated emissions by state")
         sns.lineplot(
             data=sum_check,
-            x="year",
+            x=time_col,
             y="allocated_ch4_kt",
-            hue="state_code",
+            hue=geo_col,
             palette="tab20",
             legend=False,
             ax=axs[0],
@@ -457,9 +470,9 @@ def QC_proxy_allocation(proxy_df, emi_df, plot=True) -> pd.DataFrame:
 
         sns.lineplot(
             data=sum_check,
-            x="year",
+            x=time_col,
             y="ghgi_ch4_kt",
-            hue="state_code",
+            hue=geo_col,
             palette="tab20",
             legend=False,
             ax=axs[1],
@@ -1124,7 +1137,6 @@ def allocate_emis_to_array(proxy_ds, emi_df, row) -> np.array:
             print(e)
             continue
 
-
         # for _, emi_val in tmp_emi_df.iterrows():
         #     emi_val
         #     # print(month_emi)
@@ -1182,7 +1194,6 @@ def allocate_emis_to_array(proxy_ds, emi_df, row) -> np.array:
     return arr_dict
 
 
-# %%
 class GEPA_spatial_profile:
     lon_left = -130  # deg
     lon_right = -60  # deg
@@ -1218,7 +1229,6 @@ class GEPA_spatial_profile:
         return base_profile
 
 
-# %%
 def make_raster_binary(
     input_path: Path, output_path: Path, true_vals: np.array, num_workers: int = 1
 ):
@@ -1359,7 +1369,6 @@ def vector_to_gepa_grid():
     pass
 
 
-# %%
 def stack_rasters(input_paths: list[Path], output_path: Path):
     profile = GEPA_spatial_profile().profile
     raster_list = []
@@ -1582,3 +1591,66 @@ def create_final_proxy_df(proxy_df):
     proxy_gdf = proxy_gdf[["state_code", "year", "rel_emi", "geometry"]]
 
     return proxy_gdf
+
+
+def scale_emi_to_month(proxy_gdf, emi_df, row):
+    """
+    Function to scale the emissions data to a monthly basis
+    Parameters:
+
+    - proxy_gdf: GeoDataFrame containing proxy data with relative emissions.
+    - emi_df: DataFrame containing emissions data with monthly values.
+    Returns:
+    - month_check: DataFrame containing the check for monthly emissions.
+    """
+    # calculate the relative MONTHLY proxy emissions
+    logging.info("Calculating monthly scaling factors for emissions data")
+    monthly_scaling = (
+        proxy_gdf.groupby(["year", "month"])[row.proxy_rel_emi_col]
+        .sum()
+        .rename("month_scale")
+        .reset_index()
+    )
+    monthly_scaling["month_normed"] = monthly_scaling.groupby("year")[
+        "month_scale"
+    ].transform(normalize)
+    tmp_df = (
+        emi_df.sort_values(["state_code", "year"])
+        .assign(month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])])
+        .explode("month")
+        .reset_index(drop=True)
+        .assign(
+            year_month=lambda df: pd.to_datetime(
+                df[["year", "month"]].assign(DAY=1)
+            ).dt.strftime("%Y-%m"),
+        )
+        .merge(
+            monthly_scaling[["month_normed", "year", "month"]],
+            on=["year", "month"],
+            how="left",
+        )
+        .assign(
+            ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * df["month_normed"],
+        )
+    )
+    month_check = (
+        tmp_df.groupby(["state_code", "year"])["ghgi_ch4_kt"]
+        .sum()
+        .rename("month_check")
+        .to_frame()
+        .join(emi_df.set_index(["state_code", "year"]))
+        .assign(
+            isclose=lambda df: df.apply(
+                lambda x: np.isclose(x["month_check"], x["ghgi_ch4_kt"]), axis=1
+            )
+        )
+    )
+    if not month_check["isclose"].all():
+        logging.critical("Monthly emissions do not sum to the expected values")
+        raise ValueError(
+            "Monthly emissions do not sum to the expected values. Check the log for "
+            "details."
+        )
+    else:
+        logging.info("Monthly emissions check passed!")
+    return tmp_df
