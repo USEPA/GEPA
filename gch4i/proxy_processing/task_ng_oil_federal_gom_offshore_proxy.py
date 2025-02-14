@@ -20,12 +20,15 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
+    emi_data_dir_path,
     max_year,
     min_year,
     years,
 )
 
-from gch4i.utils import us_state_to_abbrev
+from gch4i.proxy_processing.ng_oil_production_utils import (
+    create_alt_proxy,
+)
 
 # %%
 @mark.persist
@@ -36,13 +39,27 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
     GOADS_14_path: Path = sector_data_dir_path / "boem" / "2014_Gulfwide_Platform_Inventory.accdb",
     GOADS_17_path: Path = sector_data_dir_path / "boem" / "2017_Gulfwide_Platform_Inventory.accdb",
     ERG_GOADSEmissions_path: Path = sector_data_dir_path / "boem" / "BOEM GEI Emissions Data_EmissionSource_2020-03-11.xlsx",
-    ng_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_federal_gom_offshore_proxy.parquet",
+    federal_gom_offshore_emi_path: Path = emi_data_dir_path / "federal_gom_offshore_emi.csv",
+    oil_gom_federal_emi_path: Path = emi_data_dir_path / "oil_gom_federal_emi.csv",
     ng_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_federal_gom_offshore_proxy.parquet",
     oil_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_federal_gom_offshore_proxy.parquet",
 ):
     """
     # TODO:
     """
+
+    # Load in State ANSI data
+    state_gdf = (
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .reset_index(drop=True)
+        .to_crs(4326)
+    )
 
     # Get and format BOEM GOM data for 2011, 2014, and 2017
 
@@ -358,16 +375,49 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                                    .loc[:, ["boem_complex_id", "year", "month", 
                                             "year_month", "state_code", "geometry", 
                                             "rel_emi"]]
+                                   .astype({'year': int})
                                    .reset_index(drop=True)
                                    )
     oil_federal_gom_offshore_gdf = (oil_federal_gom_offshore_gdf
                                    .loc[:, ["boem_complex_id", "year", "month", 
                                             "year_month", "state_code", "geometry", 
-                                            "rel_emi"]]                                    
+                                            "rel_emi"]]
+                                    .astype({'year': int})                                   
                                     .reset_index(drop=True)
                                     )
 
-    ng_federal_gom_offshore_gdf.to_parquet(ng_output_path)
-    oil_federal_gom_offshore_gdf.to_parquet(oil_output_path)
+    # Correct for missing proxy data
+    # 1. Find missing state_code-year pairs
+    # 2. Check to see if proxy data exists for state in another year
+    #   2a. If the data exists, use proxy data from the closest year
+    #   2b. If the data does not exist, assign emissions uniformly across the state
+
+    # Read in emissions data and drop states with 0 emissions
+    ng_emi_df = (pd.read_csv(federal_gom_offshore_emi_path)
+                          .query("state_code.isin(@state_gdf['state_code'])")
+                          .query("ghgi_ch4_kt > 0.0")
+                          )
+    oil_emi_df = (pd.read_csv(oil_gom_federal_emi_path)
+                          .query("state_code.isin(@state_gdf['state_code'])")
+                          .query("ghgi_ch4_kt > 0.0")
+                          )
+
+    # Retrieve unique state codes for emissions without proxy data
+    # This step is necessary, as not all emissions data excludes emission-less states
+    ng_emi_states = set(ng_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    ng_proxy_states = set(ng_federal_gom_offshore_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+    oil_emi_states = set(oil_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    oil_proxy_states = set(oil_federal_gom_offshore_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Find missing states
+    ng_missing_states = ng_emi_states.difference(ng_proxy_states)
+    oil_missing_states = oil_emi_states.difference(oil_proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    ng_proxy_gdf_final = create_alt_proxy(ng_missing_states, ng_federal_gom_offshore_gdf)
+    oil_proxy_gdf_final = create_alt_proxy(oil_missing_states, oil_federal_gom_offshore_gdf)
+
+    ng_proxy_gdf_final.to_parquet(ng_output_path)
+    oil_proxy_gdf_final.to_parquet(oil_output_path)
 
     return None

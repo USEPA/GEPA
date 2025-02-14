@@ -20,6 +20,7 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
+    emi_data_dir_path,
     max_year,
     min_year,
     years,
@@ -33,6 +34,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_nei_file_name,
     oil_oil_prod_file_names,
     get_raw_NEI_data,
+    create_alt_proxy,
 )
 
 # %%
@@ -43,6 +45,8 @@ def task_get_oil_all_well_prod_proxy_data(
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
+    oil_prod_emi_path: Path = emi_data_dir_path / "oil_prod_emi.csv",
+    trans_onshore_emi: Path = emi_data_dir_path / "trans_onshore_emi.csv",
     all_well_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_all_well_prod_proxy.parquet",
     ):
     """
@@ -160,18 +164,48 @@ def task_get_oil_all_well_prod_proxy_data(
     nei_df = nei_df.to_crs(4326)
     
     # Add NEI Data to Enverus Data
-    all_well_prod_df = pd.concat([all_well_prod_df, nei_df]).reset_index(drop=True)
+    all_well_prod_df = pd.concat([all_well_prod_df, nei_df]).astype({'year': int}).reset_index(drop=True)
 
     # Delete unused temp data
     del nei_iyear
     del nei_df
 
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = all_well_prod_df.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    # Correct for missing proxy data
+    # 1. Find missing state_code-year pairs
+    # 2. Check to see if proxy data exists for state in another year
+    #   2a. If the data exists, use proxy data from the closest year
+    #   2b. If the data does not exist, assign emissions uniformly across the state
+
+    # Function to find the closest year (for step 2a approach)
+    # arr is the array of all years with data and target is the year missing data
+    def find_closest(arr, target):
+        arr = np.array(arr)
+        idx = (np.abs(arr - target)).argmin()
+        return arr[idx]
+
+    # Read in emissions data and drop states with 0 emissions
+    oil_prod_emi_df = (pd.read_csv(oil_prod_emi_path)
+                       .query("state_code.isin(@state_gdf['state_code'])")
+                       .query("ghgi_ch4_kt > 0.0")
+                       )
+    trans_onshore_emi_df = (pd.read_csv(trans_onshore_emi)
+                            .query("state_code.isin(@state_gdf['state_code'])")
+                            .query("ghgi_ch4_kt > 0.0")
+                            )
+    emi_df = pd.concat([oil_prod_emi_df, trans_onshore_emi_df]).reset_index(drop=True)
+
+    # Retrieve unique state codes for emissions without proxy data
+    # This step is necessary, as not all emissions data excludes emission-less states
+    emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(all_well_prod_df[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Find missing states
+    missing_states = emi_states.difference(proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    proxy_gdf_final = create_alt_proxy(missing_states, all_well_prod_df)
 
     # Output Proxy Parquet Files
-    all_well_prod_df = all_well_prod_df.astype({'year':str})
-    all_well_prod_df.to_parquet(all_well_prod_output_path)
+    proxy_gdf_final.to_parquet(all_well_prod_output_path)
 
     return None

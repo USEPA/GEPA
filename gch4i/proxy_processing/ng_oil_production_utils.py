@@ -291,3 +291,83 @@ def get_raw_NEI_data(ghgi_year, data_year, file_name):
         .reset_index(drop=True)
         )
     return nei_proxy_data
+
+
+# Function to find the closest year (for step 2a approach)
+# arr is the array of all years with data and target is the year missing data
+def find_closest_year(arr, target):
+    arr = np.array(arr)
+    idx = (np.abs(arr - target)).argmin()
+    return arr[idx]
+
+
+# Function to correct for missing proxy data
+# 1. Find missing state_code-year pairs
+# 2. Check to see if proxy data exists for state in another year
+#   2a. If the data exists, use proxy data from the closest year
+#   2b. If the data does not exist, assign emissions uniformly across the state
+
+def create_alt_proxy(missing_states, original_proxy_df):
+    # Add missing states alternative data to grouped_proxy
+    if missing_states:
+        alt_proxy = gpd.GeoDataFrame()
+        # List of states with proxy data in any year
+        proxy_unique_states = original_proxy_df['state_code'].unique()
+        for istate_year in np.arange(0, len(missing_states)):
+            # Missing state
+            istate = str(list(missing_states)[istate_year])[2:4]
+            # Missing year
+            iyear = int(str(list(missing_states)[istate_year])[7:11])
+            # If the missing state code-year pair has data for another year, assign
+            # the proxy data for the next available previous year
+            if istate in proxy_unique_states:
+                # Get proxy data for the state for all years
+                iproxy = (original_proxy_df
+                            .query("state_code == @istate")
+                            .reset_index(drop=True)
+                            )
+                # Get years that have proxy data
+                iproxy_unique_years = iproxy['year'].unique()
+                # Find the closest year to the missing proxy year
+                iyear_closest = find_closest_year(iproxy_unique_years, iyear)
+                # Assign proxy data of the closest year to the missing proxy year
+                iproxy = (iproxy
+                          .query("year == @iyear_closest")
+                          .assign(year=iyear)
+                          .reset_index(drop=True)
+                          )
+                # Update year_month column to be the correct year
+                for ifacility in np.arange(0, len(iproxy)):
+                    imonth_str = str(iproxy['year_month'][ifacility][5:8])
+                    iyear_month_str = str(iyear)+'-'+imonth_str
+                    iproxy.loc[ifacility, 'year_month'] = iyear_month_str
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
+            else:
+                # Create alternative proxy from missing states
+                iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
+                iproxy.columns = ['state_code', 'year']
+                iproxy['rel_emi'] = 1/12  # Assign emissions evenly across the state
+                iproxy = iproxy.merge(
+                    state_gdf[['state_code', 'geometry']],
+                    on='state_code',
+                    how='left')
+                for imonth in range(1, 13):
+                    imonth_str = f"{imonth:02}"  # convert to 2-digit months
+                    year_month_str = str(iyear)+'-'+imonth_str
+                    imonth_proxy = iproxy.copy().assign(year_month=year_month_str)
+                    alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, imonth_proxy], ignore_index=True))
+        # Add missing proxy to original proxy
+        proxy_gdf_final = gpd.GeoDataFrame(pd.concat([original_proxy_df, alt_proxy], ignore_index=True).reset_index(drop=True))
+        # Delete unused temp data
+        del original_proxy_df
+        del alt_proxy
+    else:
+        proxy_gdf_final = original_proxy_df.copy()
+        # Delete unused temp data
+        del original_proxy_df
+
+    # Check that relative emissions sum to 1.0 each state/year combination
+    sums = proxy_gdf_final.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+
+    return proxy_gdf_final

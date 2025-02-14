@@ -20,6 +20,7 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
+    emi_data_dir_path,
     max_year,
     min_year,
     years,
@@ -29,6 +30,7 @@ from gch4i.utils import us_state_to_abbrev
 from gch4i.proxy_processing.ng_oil_production_utils import (
     calc_enverus_rel_emi,
     enverus_df_to_gdf,
+    create_alt_proxy,
 )
 
 # %%
@@ -38,6 +40,7 @@ def task_get_oil_basin_430_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    basin_430_emi_path: Path = emi_data_dir_path / "petr_basin_430_emi.csv",
     basin_430_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_basin_430_prod_proxy.parquet",
     ):
     """
@@ -138,17 +141,36 @@ def task_get_oil_basin_430_prod_proxy_data(
     # Calculate relative emissions and convert to a geodataframe
     basin_430_prod_df = calc_enverus_rel_emi(basin_430_prod_df)
     basin_430_prod_df = enverus_df_to_gdf(basin_430_prod_df)
+    basin_430_prod_df = basin_430_prod_df.astype({'year': int})
 
     # NEI Data:
     # No addition of NEI data because IL and IN are not in this basin. We are adding
     # them to the "other" basin.
     
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = basin_430_prod_df.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    # Correct for missing proxy data
+    # 1. Find missing state_code-year pairs
+    # 2. Check to see if proxy data exists for state in another year
+    #   2a. If the data exists, use proxy data from the closest year
+    #   2b. If the data does not exist, assign emissions uniformly across the state
+
+    # Read in emissions data and drop states with 0 emissions
+    emi_df = (pd.read_csv(basin_430_emi_path)
+                          .query("state_code.isin(@state_gdf['state_code'])")
+                          .query("ghgi_ch4_kt > 0.0")
+                          )
+
+    # Retrieve unique state codes for emissions without proxy data
+    # This step is necessary, as not all emissions data excludes emission-less states
+    emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(basin_430_prod_df[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Find missing states
+    missing_states = emi_states.difference(proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    proxy_gdf_final = create_alt_proxy(missing_states, basin_430_prod_df)
 
     # Output Proxy Parquet Files
-    basin_430_prod_df = basin_430_prod_df.astype({'year':str})
-    basin_430_prod_df.to_parquet(basin_430_prod_output_path)
+    proxy_gdf_final.to_parquet(basin_430_prod_output_path)
 
     return None
