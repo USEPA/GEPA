@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 # %%
 
 import logging
@@ -51,6 +51,7 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 from tqdm.auto import tqdm
+import numpy as np
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -60,6 +61,7 @@ from gch4i.config import (
     tmp_data_dir_path,
     years,
 )
+from rasterio.features import rasterize
 from gch4i.create_emi_proxy_mapping import get_gridding_mapping_df
 from gch4i.utils import (
     QC_emi_raster_sums,
@@ -77,6 +79,7 @@ from gch4i.utils import (
     check_state_year_match,
     normalize,
     scale_emi_to_month,
+    make_emi_grid
 )
 
 # import matplotlib.pyplot as plt
@@ -200,6 +203,11 @@ county_gdf = (
     .rename(columns={"name": "county_name"})
     .astype({"statefp": int, "countyfp": int})
     .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+    .assign(
+        fips=lambda df: (
+            df["statefp"].astype(str) + df["countyfp"].astype(str).str.zfill(3)
+        ).astype(int)
+    )
     .to_crs(4326)
 )
 # %%
@@ -275,6 +283,7 @@ for i, (_id, kwargs) in tqdm(
     #     continue
 
     # a dictionary to hold the gridding group gridding results for all emi/proxy pairs
+    # %%
     source_group_dict = {}
     # for each emi/proxy pair in the gridding group
     for row in data.itertuples(index=False):
@@ -405,11 +414,19 @@ for i, (_id, kwargs) in tqdm(
             if (row.proxy_time_step == "monthly") & (not row.proxy_has_year_month_col):
                 logging.info(f"{row.proxy_id} adding a year_month column.")
                 # add a year_month column to the proxy data
-                proxy_gdf = proxy_gdf.assign(
-                    year_month=lambda df: pd.to_datetime(
-                        df[["year", "month"]].assign(DAY=1)
-                    ).dt.strftime("%Y-%m"),
-                )
+                try:
+                    proxy_gdf = proxy_gdf.assign(
+                        year_month=lambda df: pd.to_datetime(
+                            df[["year", "month"]].assign(DAY=1)
+                        ).dt.strftime("%Y-%m"),
+                    )
+                except ValueError:
+                    proxy_gdf = proxy_gdf.assign(
+                        month=lambda df: pd.to_datetime(df["month"], format="%b").dt.month,
+                        year_month=lambda df: pd.to_datetime(
+                            df[["year", "month"]].assign(DAY=1)
+                        ).dt.strftime("%Y-%m"),
+                    )
 
             # if the proxy data are monthly, but don't have the month column,
             # create it.
@@ -443,12 +460,11 @@ for i, (_id, kwargs) in tqdm(
             # NOTE: this is going to arise when the proxy data are lacking adequate
             # spatial or temporal coverage. Failure here will require finding new data
             # and/or filling in missing state/years.
-            match_check = check_state_year_match(
+            time_geo_qc_pass = check_state_year_match(
                 emi_df, proxy_gdf, row, match_cols=match_cols
             )
-
             # if the proxy data do not match the emi, fail, break out of this pair
-            if not match_check:
+            if not time_geo_qc_pass:
                 break
 
             # if we have passed the check that the proxy matches the emi by geographic
@@ -465,23 +481,20 @@ for i, (_id, kwargs) in tqdm(
 
             # STEP X: QC ALLOCATION
             # check that the allocated emissions sum to the original emissions
-            allocation_qc_df = QC_proxy_allocation(
+            allocation_qc_pass = QC_proxy_allocation(
                 allocation_gdf, emi_df, row, geo_col=geo_col, time_col=time_col
             )
-            # if the allocation failed, log the error and break the loop.
+            # if the allocation failed, break the loop.
             # NOTE: if the process fails here, this is likely an issue with the
             # calculation of the proxy relative values (i.e. they do not all sum to 1
             # by the geo/time level)
-            if not allocation_qc_df.isclose.all():
-                logging.critical(
-                    f"QC FAIL: {row.emi_id}, {row.proxy_id}." f"allocation failed."
-                )
+            if not allocation_qc_pass:
                 break
 
             try:
                 # STEP X: GRID EMISSIONS
                 # turn the vector proxy into a grid
-                source_group_dict[row.emi_id]["rasters"] = grid_allocated_emissions(
+                gridded_results = grid_allocated_emissions(
                     allocation_gdf
                 )
             except Exception as e:
@@ -490,131 +503,65 @@ for i, (_id, kwargs) in tqdm(
             # STEP X: QC GRIDDED EMISSIONS -----------------------------------------
             # TODO: update this to generalize geo/time levels QC instead of just year.
             # NOTE: if QC fails here, I'm not yet
-            raster_qc_df = QC_emi_raster_sums(
-                source_group_dict[row.emi_id]["rasters"], emi_df
+            raster_qc_pass = QC_emi_raster_sums(
+                gridded_results, emi_df
             )
+            source_group_dict[row.emi_id]["rasters"] = gridded_results
 
         elif row.file_type == "netcdf":
             logging.info(f"{row.proxy_id} is a raster.")
 
-            #     # TODO we have to account here for the livestock emis that has MONTHLY
-            #     # emissions at county level against yearly+county proxy. This is a special
-            #     # case that will need to be handled differently.
-            #     if (
-            #         (row.emi_time_step == "annual")
-            #         & (row.proxy_time_step == "annual")
-            #         & (row.emi_geo_level == "state")
-            #         # & (row.proxy_geo_level == "state")
-            #     ):
-            #         emi_df = emi_df.merge(
-            #             state_gdf[["state_code", "statefp"]], on="state_code"
-            #         )
-            # %%
+            # read the proxy file
             proxy_ds = xr.open_dataset(proxy_input_path).rename({"geoid": geo_col})
 
             # if the emi is month and the proxy is annual, we expand the dimensions of
             # the proxy, repeating the year values for every month in the year
+            # we stack the year/month dimensions into a single year_month so that
+            # it aligns with the emissions data as a time x X x Y array.
             if row.emi_time_step == "monthly" and row.proxy_time_step == "annual":
                 proxy_ds = proxy_ds.expand_dims(
                     dim={"month": np.arange(1, 13)}, axis=0
                 ).stack({"year_month": ["year", "month"]})
+            proxy_ds
 
-            emi_xr = (
-                emi_df.set_index(match_cols)[["ghgi_ch4_kt"]]
-                .to_xarray()
-                .expand_dims(
-                    {
-                        "x": proxy_ds["x"],
-                        "y": proxy_ds["y"],
-                    }  # , geo_col: proxy_ds[geo_col]}
-                )
-                .assign_coords({geo_col: proxy_ds[geo_col].drop_vars(geo_col)})
-            )
+            proxy_fips = np.unique(proxy_ds.fips.values)
+            emi_fips = np.unique(emi_df.fips.values)
+            missing_fips = set(emi_fips) - set(proxy_fips)
+            if len(missing_fips) != 0:
+                logging.critical(f"{row.proxy_id} missing fips: {missing_fips}")
 
+            match row.emi_geo_level:
+                case "state":
+                    admin_gdf = state_gdf
+                case "county":
+                    admin_gdf = county_gdf
+            # NOTE: this is slow.
+            emi_rasters_3d = make_emi_grid(emi_df, admin_gdf, time_col)
 
-            proxy_da = proxy_ds[row.proxy_rel_emi_col].drop_vars(
-                ["year", "month", "year_month"]
-            )
-            proxy_da["year_month"] = emi_xr["year_month"]
-            proxy_da["ghgi_ch4_kt"] = emi_xr["ghgi_ch4_kt"]
-            # %%
-            res = proxy_da.dot(emi_xr["ghgi_ch4_kt"], dims=["fips"]).rename("emissions")
-            res
-            # %%
-            # for names, data in proxy_ds.groupby(match_cols):
-            #     break
-            #         emi_xr
-            #         # %%
-            #         tmp = proxy_ds.copy()
-            #         tmp["rel_emi"] = emi_xr
-            #         # %%
-            #         tmp_stacked = tmp.stack({"state_year": ["statefp", "year"]})
-
-            #         tmp_stacked["emissions"] = tmp_stacked.population * tmp_stacked.rel_emi
-            #         # %%
-            #         result = (
-            #             tmp_stacked["emissions"].unstack("state_year").sum(dim="statefp")
-            #         )
-            #         result.sum()
-            #         # %%
-            #         # res = proxy_ds["population"].dot(emi_xr, dim=["statefp"]).rename("emissions")
-            #         res = (
-            #             (proxy_ds["population"] * emi_xr)
-            #             .sum(dim="statefp")
-            #             .rename("emissions")
-            #         )
-            #         res
-
-            # state_da = proxy_ds[geo_col]
-            # proxy_da = (
-            #     proxy_ds[row.proxy_rel_emi_col]
-            #     # .drop_vars(geo_col)
-            #     # .expand_dims(dim=geo_col, axis=0)
-            #     # .assign_coords({geo_col: state_da})
-            #     # .stack({"x_y": ["x", "y"]})
+            # assign the emissions array to the proxy dataset
+            proxy_ds["emissions"] = (proxy_ds.dims, emi_rasters_3d)
+            # # look to make sure the emissions loaded in the correct orientation
+            # proxy_ds["emissions"].sel(year_month=(2020, 1)).where(lambda x: x > 0).plot(
+            #     cmap="hot"
             # )
-                # %%
-        #         display(proxy_ds.dims)
-        #         display(proxy_ds.shape)
+            # plt.show()
+            # calculate the emissions for the proxy array by multiplying the proxy by
+            # the gridded emissions data
+            proxy_ds["results"] = (
+                proxy_ds[row.proxy_rel_emi_col] * proxy_ds["emissions"]
+            )
 
-        #         # %%
-        #         display(emi_xr.dims)
-        #         display(emi_xr.shape)
-        #         # %%
-        #         emi_xr.squeeze("statefp")
-        #         # %%
+            yearly_results = proxy_ds["results"].groupby("year").sum()
+            raster_qc_pass = QC_emi_raster_sums(yearly_results, emi_df)
+            if not raster_qc_pass:
+                break
+            source_group_dict[row.emi_id]["rasters"] = yearly_results
 
-        #         # %%
-        #         # res = proxy_da.dot(emi_xr.broadcast_like(proxy_da)).rename("emissions")
-        #         res.groupby("year").sum(dim=["x", "y"]).to_dataframe()
-        #         # res
-        #         # %%
-        #         emi_df.groupby("year")["ghgi_ch4_kt"].sum()
-        #         # %%
-        #         # %%
-        #         source_group_dict[row.emi_id]["rasters"] = allocate_emis_to_array(
-        #             proxy_ds, emi_df, row
-        #         )
-        #         raster_qc_df = QC_emi_raster_sums(
-        #             source_group_dict[row.emi_id]["rasters"], emi_df
-        #         )
-        #     elif (
-        #         (row.emi_time_step == "monthly")
-        #         & (row.proxy_time_step == "annual")
-        #         & (row.emi_geo_level == "county")
-        #         # & (row.proxy_geo_level == "state")
-        #     ):
-        #         logging.warning(f"{row.emi_id}, {row.proxy_id} Not implemented yet.")
-        #         break
-        #         emi_df = emi_df.merge(
-        #             state_gdf[["state_code", "statefp"]], on="state_code"
-        #         )
-
-        #     else:
-        #         logging.warning(
-        #             f"{row.emi_id}, {row.proxy_id} not a recognized "
-        #             "time/geo combo for netcdf files."
-        #         )
+            # # plot the results
+            # proxy_ds["results"].sel(year_month=(2020, 1)).where(lambda x: x > 0).plot(
+            #     cmap="Spectral"
+            # )
+            # plt.show()
 
     # STEP 5.2: COMBINE SUBSOURCE RASTERS TOGETHER ------------------------------
     # if all the emi/proxy pairs were successful, we can combine the rasters and
@@ -676,9 +623,10 @@ for i, (_id, kwargs) in tqdm(
 
 
 # %%
+_id = "2C1_iron_and_steel"
 # _id = "1B2bii_ng_production"  # this has monthly proxy and annual emi
 # _id = "3F4_fbar"
-_id = "3A_enteric_fermentation"  # monthly emi to annual gridded proxy
+# _id = "3A_enteric_fermentation"  # monthly emi to annual gridded proxy
 kwargs = gridding_params[_id]
 
 (

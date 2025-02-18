@@ -26,6 +26,8 @@ from rasterio.warp import reproject
 import logging
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+from tqdm.auto import tqdm
+from joblib import Parallel, delayed
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -185,8 +187,12 @@ def allocate_emissions_to_proxy(
     # if time_col not in proxy_gdf.columns:
     #     raise ValueError(f"proxy data must have {time_col} column")
 
-    out_proxy_gdf = proxy_gdf.merge(emi_df, on=match_cols, how="left").assign(
-        allocated_ch4_kt=lambda df: df[proportional_col_name] * df["ghgi_ch4_kt"]
+    out_proxy_gdf = (
+        proxy_gdf[match_cols + ["geometry", proportional_col_name]]
+        .merge(emi_df, on=match_cols, how="right")
+        .assign(
+            allocated_ch4_kt=lambda df: df[proportional_col_name] * df["ghgi_ch4_kt"]
+        )
     )
 
     # result_list = []
@@ -268,8 +274,7 @@ def grid_allocated_emissions(
 ) -> dict[str, np.array]:
     """grids allocation of emissions for a proxy"""
 
-    profile = GEPA_spatial_profile()
-    ch4_kt_result_rasters = {}
+    gepa_profile = GEPA_spatial_profile()
 
     # if the proxy data do not nest nicely into rasters cells, we have to do some
     # disaggregation of the vectors to get the sums to equal during rasterization
@@ -278,6 +283,8 @@ def grid_allocated_emissions(
     if not (proxy_gdf.geometry.type == "Points").all():
         cell_gdf = get_cell_gdf().to_crs("ESRI:102003")
 
+    # create a dictionary to hold the rasterized emissions
+    ch4_kt_result_rasters = {}
     for time_var, data in proxy_gdf.groupby(timestep):
         # orig_emi_val = data["allocated_ch4_kt"].sum()
         # if we need to disaggregate non-point data. Maybe extra, but this accounts for
@@ -369,9 +376,9 @@ def grid_allocated_emissions(
                 (shape, value)
                 for shape, value in data[["geometry", "allocated_ch4_kt"]].values
             ],
-            out_shape=profile.arr_shape,
+            out_shape=gepa_profile.arr_shape,
             fill=0,
-            transform=profile.profile["transform"],
+            transform=gepa_profile.profile["transform"],
             dtype=np.float64,
             merge_alg=rasterio.enums.MergeAlg.add,
         )
@@ -380,7 +387,16 @@ def grid_allocated_emissions(
         # print(f"orig emi val: {orig_emi_val}, new emi val: {new_emi_val}")
         # print(f"raster emi val: {ch4_kt_raster.sum()}")
 
-    return ch4_kt_result_rasters
+    time_var = list(ch4_kt_result_rasters.keys())
+    arr_stack = np.stack(list(ch4_kt_result_rasters.values()), axis=-1)
+    arr_stack = np.flip(arr_stack, axis=0)
+    out_ds = xr.DataArray(
+        arr_stack,
+        dims=["y", "x", "time"],
+        coords=[gepa_profile.y, gepa_profile.x, time_var],
+    )
+
+    return out_ds
 
 
 # TODO: write this to accept months. There will need to be an if/else statement
@@ -413,18 +429,18 @@ def QC_proxy_allocation(
 
     grouper_cols = [geo_col, time_col]
 
-    if row.emi_time_step == "month":
-        match_cols = [geo_col, "year_month"]
-        emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
-    else:
-        match_cols = [geo_col, "year"]
-        emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
+    # if row.emi_time_step == "month":
+    #     match_cols = [geo_col, "year_month"]
+    #     emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
+    # else:
+    #     match_cols = [geo_col, "year"]
+    emi_sums = emi_df.groupby(grouper_cols)["ghgi_ch4_kt"].sum().reset_index()
 
     sum_check = (
-        proxy_df.groupby(match_cols)["allocated_ch4_kt"]
+        proxy_df.groupby(grouper_cols)["allocated_ch4_kt"]
         .sum()
         .reset_index()
-        .merge(emi_sums, on=match_cols, how="outer")
+        .merge(emi_sums, on=grouper_cols, how="outer")
         .assign(
             isclose=lambda df: df.apply(
                 lambda x: np.isclose(x["allocated_ch4_kt"], x["ghgi_ch4_kt"]), axis=1
@@ -436,7 +452,9 @@ def QC_proxy_allocation(
     if all_equal:
         logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
     else:
-        logging.critical("QC FAIL: not all proxy emissions match inventory emissions.")
+        logging.critical(
+            f"QC FAIL: {row.emi_id}, {row.proxy_id}. allocation failed."
+        )
         logging.info("states and years with emissions that don't match")
         logging.info(
             "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
@@ -479,31 +497,22 @@ def QC_proxy_allocation(
         )
         axs[1].set(title="inventory emissions")
 
-    return sum_check
+    return all_equal
 
 
-def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
+def QC_emi_raster_sums(proxy_ds: xr.DataArray, emi_df: pd.DataFrame) -> pd.DataFrame:
     """compares yearly array sums to inventory emissions"""
 
     # logging.info("checking gridded emissions result by year.")
-    check_sum_dict = {}
-    for year, arr in raster_dict.items():
-        gridded_sum = arr.sum()
-        check_sum_dict[year] = gridded_sum
+    proxy_sum_check = proxy_ds.sum(dim=["x", "y"]).to_dataframe()
 
-    gridded_year_sums_df = (
-        pd.DataFrame()
-        .from_dict(check_sum_dict, orient="index")
-        .rename(columns={0: "gridded_sum"})
+    emi_sum_check = emi_df.groupby("year")["ghgi_ch4_kt"].sum().to_frame()
+
+    sum_check = emi_sum_check.join(proxy_sum_check).assign(
+        isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"]),
+        diff=lambda df: df["ghgi_ch4_kt"] - df["results"],
     )
 
-    sum_check = (
-        emi_df.groupby("year")["ghgi_ch4_kt"]
-        .sum()
-        .to_frame()
-        .join(gridded_year_sums_df)
-        .assign(isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["gridded_sum"]))
-    )
     all_equal = sum_check["isclose"].all()
 
     if all_equal:
@@ -513,7 +522,7 @@ def QC_emi_raster_sums(raster_dict: dict, emi_df: pd.DataFrame) -> pd.DataFrame:
         logging.info(
             "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
         )
-    return sum_check
+    return all_equal
 
 
 def combine_gridded_emissions(
@@ -1654,3 +1663,78 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
     else:
         logging.info("Monthly emissions check passed!")
     return tmp_df
+
+
+def make_emi_grid(emi_df, admin_gdf, time_col):
+    """
+    Function to create a 3D array of emissions data for each year and month
+    Parameters:
+    - emi_df: DataFrame containing emissions data with yearly or monthly values.
+    - admin_gdf: GeoDataFrame containing administrative boundaries.
+    Returns:
+    - emi_rasters_3d: 3D array of emissions data for each year or year + month.
+    """
+    # to calculate emissions for a proxy array, we make the emissions into an
+    # array of the same shape as the proxy array, and then multiply the two
+    gepa_profile = GEPA_spatial_profile()
+    transform = gepa_profile.profile["transform"]
+    out_shape = gepa_profile.arr_shape
+    time_total = emi_df[time_col].unique().shape[0]
+    # this turns each year of the emissions data into a raster of the same shape
+    # as the proxy in x and y. We have already aligned the time steps so the
+    # number of emissions rasters should match the number of proxy rasters in
+    # that dimension.
+    # NOTE: this is kind of slow.
+
+    def emi_rasterize(e_df, adm_gdf, out_shape, transform):
+        emi_gdf = adm_gdf.merge(e_df, on="fips")
+        emi_raster = rasterize(
+            [
+                (geom, value)
+                for geom, value in zip(emi_gdf.geometry, emi_gdf.ghgi_ch4_kt)
+            ],
+            out_shape=out_shape,
+            transform=transform,
+            fill=0,
+            dtype="float32",
+        )
+        return emi_raster
+
+    parallel = Parallel(n_jobs=-1, return_as="generator")
+    emi_gen = parallel(
+        delayed(emi_rasterize)(emi_time_df, admin_gdf, out_shape, transform)
+        for _, emi_time_df in emi_df.groupby(time_col)
+    )
+
+    emi_rasters = []
+    for raster in tqdm(
+        emi_gen,
+        total=time_total,
+        desc="making emi grids",
+    ):
+        emi_rasters.append(raster)
+
+    # for timestep, emi_time_df in tqdm(
+    #     emi_df.groupby(time_col),
+    #     total=time_total,
+    #     desc="making emi grids",
+    # ):
+    #     emi_gdf = admin_gdf.merge(emi_time_df, on="fips")
+    #     emi_raster = rasterize(
+    #         [
+    #             (geom, value)
+    #             for geom, value in zip(emi_gdf.geometry, emi_gdf.ghgi_ch4_kt)
+    #         ],
+    #         out_shape=out_shape,
+    #         transform=transform,
+    #         fill=0,
+    #         dtype="float32",
+    #     )
+    #     # Append the rasterized data to the list
+    #     emi_rasters.append(emi_raster)
+    # Stack the emi_raster objects into a 3D array
+    # put the time axis at the end as xarray expects
+    emi_rasters_3d = np.stack(emi_rasters, axis=-1)
+    # flip the y axis as xarray expects
+    emi_rasters_3d = np.flip(emi_rasters_3d, axis=0)
+    return emi_rasters_3d
