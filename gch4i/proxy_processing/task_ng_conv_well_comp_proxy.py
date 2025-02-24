@@ -4,11 +4,9 @@ Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas proxies.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Prod: sector_data_dir_path / "enverus/production"
-                        Intermediate: enverus_production_path / "intermediate_outputs"
+                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs"
                         NEI: sector_data_dir_path / "nei_og"
-Output Files:           proxy_data_dir_path /
-                            "ng_conv_well_comp_proxy.parquet"
+Output Files:           proxy_data_dir_path / "ng_conv_well_comp_proxy.parquet"
 """
 
 # %% Import Libraries
@@ -47,7 +45,6 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_conv_well_comp_proxy")
 def task_get_ng_conv_well_comp_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     non_assoc_exp_conv_comp_emi_path: Path = emi_data_dir_path / "non_assoc_exp_conv_comp_emi.csv",
@@ -126,14 +123,15 @@ def task_get_ng_conv_well_comp_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',gas_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # Conventional Well Completions
-            conv_well_comp_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
+            conv_well_comp_imonth = (ng_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
                                     .query("HF != 'Y'")
                                     .drop(columns=["HF"])
                                     .rename(columns=lambda x: str(x).lower())
@@ -203,3 +201,5 @@ def task_get_ng_conv_well_comp_proxy_data(
     proxy_gdf_final.to_parquet(conv_well_comp_output_path)
 
     return None
+
+# %%

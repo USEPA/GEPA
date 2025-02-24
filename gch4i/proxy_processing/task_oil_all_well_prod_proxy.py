@@ -42,8 +42,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="oil_all_well_prod_proxy")
 def task_get_oil_all_well_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     oil_prod_emi_path: Path = emi_data_dir_path / "oil_prod_emi.csv",
     trans_onshore_emi: Path = emi_data_dir_path / "trans_onshore_emi.csv",
@@ -123,14 +122,15 @@ def task_get_oil_all_well_prod_proxy_data(
             oil_data_imonth_temp = (oil_data_temp
                                     .query(f"{oil_prod_str} > 0")
                                     .assign(year_month=str(iyear)+'-'+imonth_str)
+                                    .assign(month=imonth)
                                     )
             oil_data_imonth_temp = (oil_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',oil_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # All Well Oil Production
-            all_well_prod_imonth = (oil_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE',oil_prod_str]]
+            all_well_prod_imonth = (oil_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE',oil_prod_str]]
                                     .assign(proxy_data=lambda df: df[oil_prod_str])
                                     .drop(columns=[oil_prod_str])
                                     .rename(columns=lambda x: str(x).lower())
@@ -209,3 +209,5 @@ def task_get_oil_all_well_prod_proxy_data(
     proxy_gdf_final.to_parquet(all_well_prod_output_path)
 
     return None
+
+# %%

@@ -42,8 +42,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="oil_conv_well_count_proxy")
 def task_get_oil_conv_well_count_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     conv_oil_well_emi_path: Path = emi_data_dir_path / "conv_oil_well_emi.csv",
     conv_well_count_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_conv_well_count_proxy.parquet",
@@ -121,14 +120,15 @@ def task_get_oil_conv_well_count_proxy_data(
             oil_data_imonth_temp = (oil_data_temp
                                    .query(f"{oil_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             oil_data_imonth_temp = (oil_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',oil_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # Conventional Well Count
-            conv_well_count_imonth = (oil_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF']]
+            conv_well_count_imonth = (oil_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF']]
                                      .query("HF != 'Y'")
                                      .drop(columns=["HF"])
                                      .rename(columns=lambda x: str(x).lower())
@@ -196,3 +196,5 @@ def task_get_oil_conv_well_count_proxy_data(
     proxy_gdf_final.to_parquet(conv_well_count_output_path)
 
     return None
+
+# %%

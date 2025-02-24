@@ -5,11 +5,9 @@ Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas production proxy emissions for other
                             basins.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Prod: sector_data_dir_path / "enverus/production"
-                        Intermediate: enverus_production_path / "intermediate_outputs"
+                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs"
                         NEI: sector_data_dir_path / "nei_og"
-Output Files:           basin Other: proxy_data_dir_path /
-                            "ng_basin_other_prod_proxy.parquet"
+Output Files:           basin Other: proxy_data_dir_path / "ng_basin_other_prod_proxy.parquet"
 """
 
 # %% Import Libraries
@@ -48,7 +46,6 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_basin_other_prod_proxy")
 def task_get_ng_basin_other_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     basin_other_emi_path: Path = emi_data_dir_path / "basin_other_emi.csv",
@@ -134,15 +131,16 @@ def task_get_ng_basin_other_prod_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month', 'STATE_CODE', 'AAPG_CODE_ERG', 'LATITUDE',
+                'year', 'month', 'year_month', 'STATE_CODE', 'AAPG_CODE_ERG', 'LATITUDE',
                 'LONGITUDE', 'HF', 'WELL_COUNT', gas_prod_str,
                 'comp_year_month', 'spud_year', 'first_prod_year']]
                 )
             # "Other" Basin Gas Production
             basin_other_prod_imonth = (
-                ng_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'AAPG_CODE_ERG', gas_prod_str]]
+                ng_data_imonth_temp[['year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'AAPG_CODE_ERG', gas_prod_str]]
                 .query("AAPG_CODE_ERG != '220' & AAPG_CODE_ERG != '395' & AAPG_CODE_ERG != '430'")
                 .assign(proxy_data=lambda df: df[gas_prod_str])
                 .drop(columns=[gas_prod_str, 'AAPG_CODE_ERG'])

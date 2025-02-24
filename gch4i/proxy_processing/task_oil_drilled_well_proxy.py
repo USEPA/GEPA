@@ -42,8 +42,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="oil_drilled_well_proxy")
 def task_get_oil_drilled_well_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     oil_drilled_well_emi_path: Path = emi_data_dir_path / "oil_well_drilled_prod_emi.csv",
     drilled_well_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_drilled_well_proxy.parquet",
@@ -122,14 +121,15 @@ def task_get_oil_drilled_well_proxy_data(
             oil_data_imonth_temp = (oil_data_temp
                                    .query(f"{oil_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             oil_data_imonth_temp = (oil_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',oil_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # Drilled Oil Wells
-            drilled_well_imonth = (oil_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','spud_year','first_prod_year']]
+            drilled_well_imonth = (oil_data_imonth_temp[['year','month','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','spud_year','first_prod_year']]
                                   .rename(columns=lambda x: str(x).lower())
                                   .rename(columns={"well_count":"proxy_data"})
                                   # wells with a spud date or first production date in the current year
@@ -179,13 +179,6 @@ def task_get_oil_drilled_well_proxy_data(
     #   2a. If the data exists, use proxy data from the closest year
     #   2b. If the data does not exist, assign emissions uniformly across the state
 
-    # Function to find the closest year (for step 2a approach)
-    # arr is the array of all years with data and target is the year missing data
-    def find_closest(arr, target):
-        arr = np.array(arr)
-        idx = (np.abs(arr - target)).argmin()
-        return arr[idx]
-
     # Read in emissions data and drop states with 0 emissions
     emi_df = (pd.read_csv(oil_drilled_well_emi_path)
               .query("state_code.isin(@state_gdf['state_code'])")
@@ -207,3 +200,5 @@ def task_get_oil_drilled_well_proxy_data(
     proxy_gdf_final.to_parquet(drilled_well_output_path)
 
     return None
+
+# %%

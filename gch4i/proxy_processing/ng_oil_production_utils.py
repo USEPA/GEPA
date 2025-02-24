@@ -45,8 +45,16 @@ state_gdf = (
 
 # Function to calculate relative emissions for Enverus data
 def calc_enverus_rel_emi(df):
-    df['rel_emi'] = (
+    # sum of the annual_rel_emi = 1 for each state_code-year combination
+    # used to allocate annual emissions to monthly emissions
+    df['annual_rel_emi'] = (
         df.groupby(["state_code", "year"])['proxy_data']
+        .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    )
+    # sum of the rel_emi = 1 for each state_code-year_month combination
+    # used to allocate monthly emissions to monthly proxy
+    df['rel_emi'] = (
+        df.groupby(["state_code", "year_month"])['proxy_data']
         .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
     )
     df = df.drop(columns='proxy_data')
@@ -65,7 +73,7 @@ def enverus_df_to_gdf(df):
             )
         )
         .drop(columns=["latitude", "longitude"])
-        .loc[:, ["year", "year_month", "state_code", "rel_emi", "geometry"]]
+        .loc[:, ["year", "month", "year_month", "state_code", "annual_rel_emi", "rel_emi", "geometry"]]
     )
     return gdf
 
@@ -269,25 +277,30 @@ def get_raw_NEI_data(ghgi_year, data_year, file_name):
             data_temp = data_temp[['state_code', 'GRID_ACTIV', 'geometry']]
             data_temp = data_temp.rename(columns={'GRID_ACTIV': 'activity_data'})
 
-    # convert activity data to relative emissions (idata / sum(state data))
+    # calculate relative emissions for NEI data
+    # sum of the rel_emi = 1 for each state_code-year_month combination
+    # because the values in data_temp['rel_emi'] will be copied to each month, the 
+    # the following normalization will lead to monthly totals = 1
     data_temp['rel_emi'] = (
         data_temp.groupby(["state_code"])['activity_data']
         .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
     )
-    monthly_data_temp = data_temp.copy()
-    monthly_data_temp['rel_emi'] = monthly_data_temp['rel_emi'] * 1/12
-    monthly_data_temp = monthly_data_temp.drop(columns='activity_data')
+    # sum of the annual_rel_emi = 1 for each state_code-year combination
+    # because data_temp['rel_emi'] was copied to each month, rel_emi divided by 12 
+    # will lead to annual totals = 1
+    data_temp['annual_rel_emi'] = data_temp['rel_emi'] * 1/12
+    data_temp = data_temp.drop(columns='activity_data')
 
-    # convert proxy data to monthly (assume 1/12 of annual proxy is assigned to each month)
+    # create monthly proxy data
     nei_proxy_data = pd.DataFrame()
     for imonth in range(1, 13):
         imonth_str = f"{imonth:02}"  # convert to 2-digit months
-        data_temp_imonth = monthly_data_temp.copy()
-        data_temp_imonth = data_temp_imonth.assign(year_month=str(ghgi_year)+'-'+imonth_str)
+        data_temp_imonth = data_temp.copy()
+        data_temp_imonth = data_temp_imonth.assign(year_month=str(ghgi_year)+'-'+imonth_str).assign(month=imonth)
         nei_proxy_data = pd.concat([nei_proxy_data, data_temp_imonth])
     nei_proxy_data = nei_proxy_data.assign(year=ghgi_year)
     nei_proxy_data = (
-        nei_proxy_data[['year', 'year_month', 'state_code', 'rel_emi', 'geometry']]
+        nei_proxy_data[['year', 'month', 'year_month', 'state_code', 'annual_rel_emi', 'rel_emi', 'geometry']]
         .reset_index(drop=True)
         )
     return nei_proxy_data
@@ -306,7 +319,6 @@ def find_closest_year(arr, target):
 # 2. Check to see if proxy data exists for state in another year
 #   2a. If the data exists, use proxy data from the closest year
 #   2b. If the data does not exist, assign emissions uniformly across the state
-
 def create_alt_proxy(missing_states, original_proxy_df):
     # Add missing states alternative data to grouped_proxy
     if missing_states:
@@ -341,12 +353,14 @@ def create_alt_proxy(missing_states, original_proxy_df):
                     imonth_str = str(iproxy['year_month'][ifacility][5:8])
                     iyear_month_str = str(iyear)+'-'+imonth_str
                     iproxy.loc[ifacility, 'year_month'] = iyear_month_str
+                    iproxy.loc[ifacility, 'month'] = int(imonth_str)
                 alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
             else:
                 # Create alternative proxy from missing states
                 iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
                 iproxy.columns = ['state_code', 'year']
-                iproxy['rel_emi'] = 1/12  # Assign emissions evenly across the state
+                iproxy['annual_rel_emi'] = 1/12  # Assign emissions evenly across the state for a given year
+                iproxy['rel_emi'] = 1.0  # Assign emissions evenly across the state for a given month in the year
                 iproxy = iproxy.merge(
                     state_gdf[['state_code', 'geometry']],
                     on='state_code',
@@ -354,7 +368,7 @@ def create_alt_proxy(missing_states, original_proxy_df):
                 for imonth in range(1, 13):
                     imonth_str = f"{imonth:02}"  # convert to 2-digit months
                     year_month_str = str(iyear)+'-'+imonth_str
-                    imonth_proxy = iproxy.copy().assign(year_month=year_month_str)
+                    imonth_proxy = iproxy.copy().assign(year_month=year_month_str).assign(month=imonth)
                     alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, imonth_proxy], ignore_index=True))
         # Add missing proxy to original proxy
         proxy_gdf_final = gpd.GeoDataFrame(pd.concat([original_proxy_df, alt_proxy], ignore_index=True).reset_index(drop=True))
@@ -366,8 +380,14 @@ def create_alt_proxy(missing_states, original_proxy_df):
         # Delete unused temp data
         del original_proxy_df
 
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = proxy_gdf_final.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    # Check that annual relative emissions sum to 1.0 each state/year combination
+    sums_annual = proxy_gdf_final.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
 
+    # Check that monthly relative emissions sum to 1.0 each state/year_month combination
+    sums_monthly = proxy_gdf_final.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
+
+    proxy_gdf_final = proxy_gdf_final.reset_index(drop=True)
+    
     return proxy_gdf_final

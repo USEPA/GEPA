@@ -4,11 +4,9 @@ Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas proxies.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Prod: sector_data_dir_path / "enverus/production"
-                        Intermediate: enverus_production_path / "intermediate_outputs"
+                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs"
                         NEI: sector_data_dir_path / "nei_og"
-Output Files:           proxy_data_dir_path /
-                            "ng_drilled_well_proxy.parquet"
+Output Files:           proxy_data_dir_path / "ng_drilled_well_proxy.parquet"
 """
 
 # %% Import Libraries
@@ -38,6 +36,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_nei_file_name,
     ng_spud_count_file_names,
     get_raw_NEI_data,
+    create_alt_proxy,
 )
 
 # %% Pytask Function
@@ -47,7 +46,6 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_drilled_well_proxy")
 def task_get_ng_drilled_well_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     ng_drilled_well_emi_path: Path = emi_data_dir_path / "gas_well_drilled_emi.csv",
@@ -126,14 +124,15 @@ def task_get_ng_drilled_well_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',gas_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # Drilled Gas Wells
-            drilled_well_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','spud_year','first_prod_year']]
+            drilled_well_imonth = (ng_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','spud_year','first_prod_year']]
                                   .rename(columns=lambda x: str(x).lower())
                                   .rename(columns={"well_count":"proxy_data"})
                                   # wells with a spud date or first production date in the current year
@@ -183,13 +182,6 @@ def task_get_ng_drilled_well_proxy_data(
     #   2a. If the data exists, use proxy data from the closest year
     #   2b. If the data does not exist, assign emissions uniformly across the state
 
-    # Function to find the closest year (for step 2a approach)
-    # arr is the array of all years with data and target is the year missing data
-    def find_closest(arr, target):
-        arr = np.array(arr)
-        idx = (np.abs(arr - target)).argmin()
-        return arr[idx]
-
     # Read in emissions data and drop states with 0 emissions
     emi_df = (pd.read_csv(ng_drilled_well_emi_path)
               .query("state_code.isin(@state_gdf['state_code'])")
@@ -205,73 +197,11 @@ def task_get_ng_drilled_well_proxy_data(
     missing_states = emi_states.difference(proxy_states)
 
     # Add missing states alternative data to grouped_proxy
-    if missing_states:
-        alt_proxy = gpd.GeoDataFrame()
-        # List of states with proxy data in any year
-        proxy_unique_states = drilled_well_df['state_code'].unique()
-        for istate_year in np.arange(0, len(missing_states)):
-            # Missing state
-            istate = str(list(missing_states)[istate_year])[2:4]
-            # Missing year
-            iyear = int(str(list(missing_states)[istate_year])[7:11])
-            # If the missing state code-year pair has data for another year, assign
-            # the proxy data for the next available previous year
-            if istate in proxy_unique_states:
-                # Get proxy data for the state for all years
-                iproxy = (drilled_well_df
-                          .query("state_code == @istate")
-                          .reset_index(drop=True)
-                          )
-                # Get years that have proxy data
-                iproxy_unique_years = iproxy['year'].unique()
-                # Find the closest year to the missing proxy year
-                iyear_closest = find_closest(iproxy_unique_years, iyear)
-                # Assign proxy data of the closest year to the missing proxy year
-                iproxy = (iproxy
-                          .query("year == @iyear_closest")
-                          .assign(year=iyear)
-                          .reset_index(drop=True))
-                # Update year_month column to be the correct year
-                for ifacility in np.arange(0, len(iproxy)):
-                    imonth_str = str(iproxy['year_month'][ifacility][5:8])
-                    iyear_month_str = str(iyear)+'-'+imonth_str
-                    iproxy.loc[ifacility, 'year_month'] = iyear_month_str
-                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
-            else:
-                # Create alternative proxy from missing states
-                iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
-                iproxy.columns = ['state_code', 'year']
-                iproxy['rel_emi'] = 1/12  # Assign emissions evenly across the state
-                iproxy = iproxy.merge(
-                    state_gdf[['state_code', 'geometry']],
-                    on='state_code',
-                    how='left')
-                for imonth in range(1, 13):
-                    imonth_str = f"{imonth:02}"  # convert to 2-digit months
-                    year_month_str = str(iyear)+'-'+imonth_str
-                    imonth_proxy = iproxy.copy().assign(year_month=year_month_str)
-                    alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, imonth_proxy], ignore_index=True))
-        # Add missing proxy to original proxy
-        proxy_gdf_final = gpd.GeoDataFrame(pd.concat([drilled_well_df, alt_proxy], ignore_index=True).reset_index(drop=True))
-        # Delete unused temp data
-        del drilled_well_df
-        del alt_proxy
-    else:
-        proxy_gdf_final = drilled_well_df.copy()
-        # Delete unused temp data
-        del drilled_well_df
-
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = proxy_gdf_final.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
-
-    # Re-check for missing proxy data
-    updated_proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
-    missing_states = emi_states.difference(updated_proxy_states)
-    if missing_states:
-        AssertionError("Proxy is missing data for state_code-year pairs")
+    proxy_gdf_final = create_alt_proxy(missing_states, drilled_well_df)
 
     # Output Proxy Parquet Files
     proxy_gdf_final.to_parquet(drilled_well_output_path)
 
     return None
+
+# %%

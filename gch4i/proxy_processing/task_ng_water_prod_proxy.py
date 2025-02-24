@@ -42,8 +42,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_water_prod_proxy")
 def task_get_ng_water_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     ng_prod_water_emi_path: Path = emi_data_dir_path / "ng_prod_water_emi.csv",
     water_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_water_prod_proxy.parquet",
@@ -122,9 +121,10 @@ def task_get_ng_water_prod_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',gas_prod_str,water_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
@@ -145,7 +145,7 @@ def task_get_ng_water_prod_proxy_data(
                 # States using NEI for reference: ['IL','IN','KS','OK','PA']
             # Enverus water production for applicable states (NEI water producted will
             # be added in the NEI section of the code below)
-            water_prod_imonth = (ng_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE',water_prod_str]]
+            water_prod_imonth = (ng_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE',water_prod_str]]
                                 .query("STATE_CODE.isin(@water_prod_enverus_states)")
                                 .assign(proxy_data=lambda df: df[water_prod_str])
                                 .drop(columns=[water_prod_str])
@@ -213,3 +213,5 @@ def task_get_ng_water_prod_proxy_data(
     proxy_gdf_final.to_parquet(water_prod_output_path)
 
     return None
+
+# %%

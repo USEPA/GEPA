@@ -29,9 +29,9 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_oil_state_gom_offshore_proxy")
 def task_get_ng_oil_state_gom_offshore_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     oil_gom_state_emi_path: Path = emi_data_dir_path / "oil_gom_state_emi.csv",
     trans_offshore_emi_path: Path = emi_data_dir_path / "trans_offshore_emi.csv",
     oil_pac_federal_state_emi_path: Path = emi_data_dir_path / "oil_pac_federal_state_emi.csv",
@@ -215,13 +215,14 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE',
+                'year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE',
                 'WELL_COUNT', gas_prod_str,]]
                 )
             # State GOM Offshore Gas Well Count
-            ng_state_gom_offshore_imonth = (ng_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
+            ng_state_gom_offshore_imonth = (ng_data_imonth_temp[['year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
                                             .rename(columns=lambda x: str(x).lower())
                                             .rename(columns={"well_count": "proxy_data"})
                                             .reset_index(drop=True)
@@ -248,13 +249,14 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
             oil_data_imonth_temp = (oil_data_temp
                                     .query(f"{oil_prod_str} > 0")
                                     .assign(year_month=str(iyear)+'-'+imonth_str)
+                                    .assign(month=imonth)
                                     )
             oil_data_imonth_temp = (oil_data_imonth_temp[[
-                'year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE',
+                'year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE',
                 'WELL_COUNT', oil_prod_str,]]
                 )
             # State GOM Offshore Oil Well Count
-            oil_state_gom_offshore_imonth = (oil_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
+            oil_state_gom_offshore_imonth = (oil_data_imonth_temp[['year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
                                              .rename(columns=lambda x: str(x).lower())
                                              .rename(columns={"well_count": "proxy_data"})
                                              .query("state_code != 'CAO'")
@@ -262,7 +264,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
                                              )
             oil_state_gom_offshore_df = pd.concat([oil_state_gom_offshore_df, oil_state_gom_offshore_imonth])
             # Pacific Federal State Offshore Oil Well Count
-            oil_pac_fed_state_imonth = (oil_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
+            oil_pac_fed_state_imonth = (oil_data_imonth_temp[['year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', 'WELL_COUNT']]
                                         .rename(columns=lambda x: str(x).lower())
                                         .rename(columns={"well_count": "proxy_data"})
                                         .query("state_code == 'CAO'")
@@ -331,3 +333,5 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
     oil_pac_proxy_gdf_final.to_parquet(oil_pac_fed_state_output_path)
 
     return None
+
+# %%

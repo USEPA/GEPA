@@ -4,8 +4,7 @@ Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas well production proxy emissions
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip",
-                        Enverus Prod: sector_data_dir_path / "enverus/production",
-                        Intermediate: enverus_production_path / "intermediate_outputs",
+                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs",
                         NEI: sector_data_dir_path / "nei_og",
 Output Files:           proxy_data_dir_path / "ng_all_well_prod_proxy.parquet",
 """
@@ -48,7 +47,6 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_all_well_prod_proxy")
 def task_get_ng_all_well_prod_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     allwell_prod_emi_path: Path = emi_data_dir_path / "allwell_prod_emi.csv",
@@ -130,15 +128,16 @@ def task_get_ng_all_well_prod_proxy_data(
             ng_data_imonth_temp = (ng_data_temp
                                    .query(f"{gas_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             ng_data_imonth_temp = (ng_data_imonth_temp[[
-                'year', 'year_month', 'STATE_CODE', 'AAPG_CODE_ERG', 'LATITUDE',
+                'year', 'month', 'year_month', 'STATE_CODE', 'AAPG_CODE_ERG', 'LATITUDE',
                 'LONGITUDE', 'HF', 'WELL_COUNT', gas_prod_str,
                 'comp_year_month', 'spud_year', 'first_prod_year']]
                 )
             # All Gas Well Gas Production
             all_well_prod_imonth = (
-                ng_data_imonth_temp[['year', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', gas_prod_str]]
+                ng_data_imonth_temp[['year', 'month', 'year_month', 'STATE_CODE', 'LATITUDE', 'LONGITUDE', gas_prod_str]]
                 .assign(proxy_data=lambda df: df[gas_prod_str])
                 .drop(columns=[gas_prod_str])
                 .rename(columns=lambda x: str(x).lower())
@@ -205,3 +204,5 @@ def task_get_ng_all_well_prod_proxy_data(
     proxy_gdf_final.to_parquet(all_well_prod_output_path)
 
     return None
+
+# %%

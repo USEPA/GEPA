@@ -3,7 +3,7 @@ Name:                   task_enverus_di_prism_data_processing.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Processes and cleans the Enverus DI and Prism data stored on
-                            disk and read into tn and petroleum proxies.
+                            disk and read into natural gas and petroleum proxies.
 Input Files:            -
 Output Files:           -
 """

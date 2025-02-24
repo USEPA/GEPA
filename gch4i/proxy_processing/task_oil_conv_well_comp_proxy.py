@@ -40,8 +40,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="oil_conv_well_comp_proxy")
 def task_get_oil_conv_well_comp_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_production_path: Path = sector_data_dir_path / "enverus/production",
-    intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs",
+    intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     conv_well_comp_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_conv_well_comp_proxy.parquet",
     ):
@@ -119,14 +118,15 @@ def task_get_oil_conv_well_comp_proxy_data(
             oil_data_imonth_temp = (oil_data_temp
                                    .query(f"{oil_prod_str} > 0")
                                    .assign(year_month=str(iyear)+'-'+imonth_str)
+                                   .assign(month=imonth)
                                    )
             oil_data_imonth_temp = (oil_data_imonth_temp[[
-                'year', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
+                'year', 'month', 'year_month','STATE_CODE','AAPG_CODE_ERG','LATITUDE','LONGITUDE',
                 'HF','WELL_COUNT',oil_prod_str,
                 'comp_year_month','spud_year','first_prod_year']]
                 )
             # Conventional Well Completions
-            conv_well_comp_imonth = (oil_data_imonth_temp[['year','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
+            conv_well_comp_imonth = (oil_data_imonth_temp[['year', 'month','year_month','STATE_CODE','LATITUDE','LONGITUDE','WELL_COUNT','HF','comp_year_month']]
                                     .query("HF != 'Y'")
                                     .drop(columns=["HF"])
                                     .rename(columns=lambda x: str(x).lower())
@@ -169,12 +169,18 @@ def task_get_oil_conv_well_comp_proxy_data(
     del nei_iyear
     del nei_df
 
+    # Check that annual relative emissions sum to 1.0 each state/year combination
+    sums = conv_well_comp_df.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+
     # Check that relative emissions sum to 1.0 each state/year combination
-    sums = conv_well_comp_df.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    sums = conv_well_comp_df.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year_month and state; {sums}"  # assert that the sums are close to 1
 
     # Output Proxy Parquet Files
     conv_well_comp_df = conv_well_comp_df.astype({'year':str})
     conv_well_comp_df.to_parquet(conv_well_comp_output_path)
 
     return None
+
+# %%
