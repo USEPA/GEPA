@@ -2,6 +2,7 @@ import calendar
 import concurrent
 import threading
 from pathlib import Path
+import warnings
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -81,53 +82,71 @@ def check_state_year_match(emi_df, proxy_gdf, row, match_cols=["state_code", "ye
     # NOTE: this check happens again later, but at a siginificant time cost
     # if the data are large. It is here to catch the error early and break
     # the loop with critical message.
+    proxy_unique = (
+        proxy_gdf[match_cols]
+        .drop_duplicates()
+        .assign(has_proxy=True)
+        .set_index(match_cols)
+    )
+    match_check = (
+        emi_df[match_cols]
+        .set_index(match_cols)
+        .join(proxy_unique)
+        .fillna({"has_proxy": False})
+        .sort_values("has_proxy")
+        .reset_index()
+    )
+    # if row.proxy_has_year_col & row.proxy_has_rel_emi_col:
 
-    if row.proxy_has_year_col & row.proxy_has_rel_emi_col:
+    #     proxy_unique = proxy_gdf.groupby(match_cols)[row.proxy_rel_emi_col].sum()
+    #     match_check = (
+    #         emi_df.set_index(match_cols)
+    #         .join(proxy_unique, how="left")
+    #         .rename(columns={row.proxy_rel_emi_col: "proxy"})
+    #     )
+    # elif row.proxy_has_year_col & (not row.proxy_has_rel_emi_col):
+    #     proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
+    #     match_check = (
+    #         emi_df.set_index(match_cols)
+    #         .join(proxy_unique, how="left")
+    #         .rename(columns={"geometry": "proxy"})
+    #     )
+    # elif (not row.proxy_has_year_col) & (row.proxy_has_rel_emi_col):
+    #     proxy_unique = proxy_gdf.groupby(["state_code"])[row.proxy_rel_emi_col].sum()
+    #     match_check = (
+    #         emi_df.groupby(["state_code"])["ghgi_ch4_kt"]
+    #         .sum()
+    #         .to_frame()
+    #         .join(proxy_unique, how="left")
+    #         .rename(columns={row.proxy_rel_emi_col: "proxy"})
+    #     )
+    # elif (not row.proxy_has_year_col) & (not row.proxy_has_rel_emi_col):
 
-        proxy_unique = proxy_gdf.groupby(match_cols)[row.proxy_rel_emi_col].sum()
-        match_check = (
-            emi_df.set_index(match_cols)
-            .join(proxy_unique, how="left")
-            .rename(columns={row.proxy_rel_emi_col: "proxy"})
-        )
-    elif row.proxy_has_year_col & (not row.proxy_has_rel_emi_col):
-        proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
-        match_check = (
-            emi_df.set_index(match_cols)
-            .join(proxy_unique, how="left")
-            .rename(columns={"geometry": "proxy"})
-        )
-    elif (not row.proxy_has_year_col) & (row.proxy_has_rel_emi_col):
-        proxy_unique = proxy_gdf.groupby(["state_code"])[row.proxy_rel_emi_col].sum()
-        match_check = (
-            emi_df.groupby(["state_code"])["ghgi_ch4_kt"]
-            .sum()
-            .to_frame()
-            .join(proxy_unique, how="left")
-            .rename(columns={row.proxy_rel_emi_col: "proxy"})
-        )
-    elif (not row.proxy_has_year_col) & (not row.proxy_has_rel_emi_col):
+    #     proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
+    #     match_check = (
+    #         emi_df.set_index(match_cols)
+    #         .join(proxy_unique, how="left")
+    #         .rename(columns={"geometry": "proxy"})
+    #     )
+    # else:
+    #     raise ValueError("this should not happen")
 
-        proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
-        match_check = (
-            emi_df.set_index(match_cols)
-            .join(proxy_unique, how="left")
-            .rename(columns={"geometry": "proxy"})
+    if not match_check.has_proxy.all():
+        missing_states = (
+            match_check[match_check["has_proxy"] == False].groupby("state_code").size()
         )
-    else:
-        raise ValueError("this should not happen")
-
-    if match_check["proxy"].isna().any():
         logging.critical(
-            f"QC FAILED: {row.emi_id}, {row.proxy_id} "
+            f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
             "proxy state/year columns do not match emissions\n"
-            f"{match_check[match_check["proxy"].isna()].to_string().replace("\n", "\n\t")}"
+            "missing states and counts of missing times:\n"
+            # f"{missing_states}\n"
+            f"{missing_states.to_string().replace("\n", "\n\t")}"
             "\n"
         )
 
-        return False
+        return False, match_check
     else:
-        return True
+        return True, match_check
 
 
 def allocate_emissions_to_proxy(
@@ -388,13 +407,17 @@ def grid_allocated_emissions(
         # print(f"raster emi val: {ch4_kt_raster.sum()}")
 
     time_var = list(ch4_kt_result_rasters.keys())
-    arr_stack = np.stack(list(ch4_kt_result_rasters.values()), axis=-1)
-    arr_stack = np.flip(arr_stack, axis=0)
-    out_ds = xr.DataArray(
-        arr_stack,
-        dims=["y", "x", "time"],
-        coords=[gepa_profile.y, gepa_profile.x, time_var],
+    arr_stack = np.stack(list(ch4_kt_result_rasters.values()), axis=0)
+    arr_stack = np.flip(arr_stack, axis=1)
+    out_ds = xr.Dataset(
+        {"results": ([timestep, "y", "x"], arr_stack)},
+        coords={timestep: time_var, "y": gepa_profile.y, "x": gepa_profile.x},
     )
+    if timestep == "year_month":
+        out_ds = out_ds.assign_coords(
+            year=(timestep, [int(x.split("-")[0]) for x in time_var]),
+            month=(timestep, [int(x.split("-")[1]) for x in time_var]),
+        )
 
     return out_ds
 
@@ -403,14 +426,19 @@ def grid_allocated_emissions(
 # to get the number of days used in the flux calculations.
 # XXX: create an actual datetime column to use?
 def calculate_flux(
-    raster_dict: dict[str, np.array], timestep: str = "year"
+    in_ds: dict[str, np.array], timestep: str = "year"
 ) -> dict[str, np.array]:
     """calculates flux for dictionary of total emissions year/array pairs"""
     area_matrix = load_area_matrix()
+
+    gepa_profile = GEPA_spatial_profile()
+
+    # for each year in the input dictionary
     ch4_flux_result_rasters = {}
     if timestep == "year":
-        for time_var, data in raster_dict.items():
-            time_var = int(time_var)
+        for time in in_ds.time:
+            time_var = int(time)
+            data = np.flip(in_ds.sel(time=time), 0)
             month_days = [calendar.monthrange(time_var, x)[1] for x in range(1, 13)]
             year_days = np.sum(month_days)
             conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
@@ -418,29 +446,38 @@ def calculate_flux(
             ch4_flux_result_rasters[time_var] = ch4_flux_raster
     else:
         raise ValueError("we can't do months yet...")
-    return ch4_flux_result_rasters
+
+    time_var = list(ch4_flux_result_rasters.keys())
+    arr_stack = np.stack(list(ch4_flux_result_rasters.values()), axis=0)
+    arr_stack = np.flip(arr_stack, axis=1)
+    out_ds = xr.DataArray(
+        arr_stack,
+        dims=["time", "y", "x"],
+        coords=[time_var, gepa_profile.y, gepa_profile.x],
+    ).rename("results")
+
+    return out_ds
 
 
 def QC_proxy_allocation(
-    proxy_df, emi_df, row, geo_col, time_col, plot=True
+    proxy_df, emi_df, row, match_cols, plot=True, plot_path=None
 ) -> pd.DataFrame:
     """take proxy emi allocations and check against state inventory"""
     # logging.info("checking proxy emission allocation by state / year.")
 
-    grouper_cols = [geo_col, time_col]
-
-    # if row.emi_time_step == "month":
-    #     match_cols = [geo_col, "year_month"]
-    #     emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
-    # else:
-    #     match_cols = [geo_col, "year"]
-    emi_sums = emi_df.groupby(grouper_cols)["ghgi_ch4_kt"].sum().reset_index()
+    if len(match_cols) == 1:
+        geo_col = None
+        time_col = "year"
+    elif len(match_cols) == 2:
+        geo_col = match_cols[0]
+        time_col = match_cols[1]
+    emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
 
     sum_check = (
-        proxy_df.groupby(grouper_cols)["allocated_ch4_kt"]
+        proxy_df.groupby(match_cols)["allocated_ch4_kt"]
         .sum()
         .reset_index()
-        .merge(emi_sums, on=grouper_cols, how="outer")
+        .merge(emi_sums, on=match_cols, how="outer")
         .assign(
             isclose=lambda df: df.apply(
                 lambda x: np.isclose(x["allocated_ch4_kt"], x["ghgi_ch4_kt"]), axis=1
@@ -452,26 +489,30 @@ def QC_proxy_allocation(
     if all_equal:
         logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
     else:
-        logging.critical(
-            f"QC FAIL: {row.emi_id}, {row.proxy_id}. allocation failed."
-        )
+        logging.critical(f"QC FAIL: {row.emi_id}, {row.proxy_id}. allocation failed.")
         logging.info("states and years with emissions that don't match")
-        logging.info(
-            "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
-        )
-
-        unique_state_codes = emi_df[~emi_df[geo_col].isin(proxy_df[geo_col])][
-            geo_col
-        ].unique()
-
-        logging.warning(f"states with no proxy points in them: {unique_state_codes}")
-        logging.info(
-            (
-                "states with unaccounted emissions: "
-                f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
+        # logging.info(
+        #     "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
+        # )
+        if geo_col:
+            unique_state_codes = emi_df[
+                ~emi_df["state_code"].isin(proxy_df["state_code"])
+            ]["state_code"].unique()
+            logging.warning(
+                f"states with no proxy points in them: {unique_state_codes}"
             )
-        )
-    if plot:
+            logging.info(
+                (
+                    "states with unaccounted emissions: "
+                    f"{sum_check[~sum_check['isclose']]['state_code'].unique()}"
+                )
+            )
+        else:
+            logging.critical(
+                f"QC FAIL: {row.emi_id}, {row.proxy_id}. annual allocation failed."
+            )
+
+    if plot and all_equal and geo_col and time_col:
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
         fig.suptitle("compare inventory to allocated emissions by state")
@@ -496,55 +537,111 @@ def QC_proxy_allocation(
             ax=axs[1],
         )
         axs[1].set(title="inventory emissions")
+        plt.savefig(plot_path, dpi=300)
+        plt.close()
+    elif plot and all_equal and time_col and not geo_col:
+        fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
-    return all_equal
+        fig.suptitle("compare inventory to allocated emissions by state")
+        sns.lineplot(
+            data=sum_check,
+            x=time_col,
+            y="allocated_ch4_kt",
+            # hue=geo_col,
+            palette="tab20",
+            legend=False,
+            ax=axs[0],
+        )
+        axs[0].set(title="allocated emissions")
+
+        sns.lineplot(
+            data=sum_check,
+            x=time_col,
+            y="ghgi_ch4_kt",
+            # hue=geo_col,
+            palette="tab20",
+            legend=False,
+            ax=axs[1],
+        )
+        axs[1].set(title="inventory emissions")
+        plt.savefig(plot_path, dpi=300)
+        plt.close()
+
+    return all_equal, sum_check
 
 
-def QC_emi_raster_sums(proxy_ds: xr.DataArray, emi_df: pd.DataFrame) -> pd.DataFrame:
+def QC_emi_raster_sums(
+    proxy_da: xr.DataArray, emi_df: pd.DataFrame, timestep: str
+) -> pd.DataFrame:
     """compares yearly array sums to inventory emissions"""
 
     # logging.info("checking gridded emissions result by year.")
-    proxy_sum_check = proxy_ds.sum(dim=["x", "y"]).to_dataframe()
+    proxy_sum_check = proxy_da.sum(dim=["x", "y"]).to_dataframe()
 
-    emi_sum_check = emi_df.groupby("year")["ghgi_ch4_kt"].sum().to_frame()
+    if timestep == "year_month" and isinstance(proxy_sum_check.index, pd.MultiIndex):
+        proxy_sum_check.index = proxy_sum_check.index.map(
+            lambda x: f"{x[0]}-{x[1]:02d}"
+        )
 
+    emi_sum_check = emi_df.groupby(timestep)["ghgi_ch4_kt"].sum().to_frame()
+
+    relative_tolerance = 0.0001
     sum_check = emi_sum_check.join(proxy_sum_check).assign(
         isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"]),
-        diff=lambda df: df["ghgi_ch4_kt"] - df["results"],
+        diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["ghgi_ch4_kt"])
+        / ((df["ghgi_ch4_kt"] + df["ghgi_ch4_kt"]) / 2),
+        qc_pass=lambda df: df["diff"] < relative_tolerance,
     )
 
-    all_equal = sum_check["isclose"].all()
+    all_pass = sum_check.qc_pass.all()
 
-    if all_equal:
-        logging.info("QC PASS: all gridded emission by year are equal (isclose)")
+    if all_pass:
+        logging.info(f"QC PASS: all gridded emission by {timestep}.")
     else:
         logging.critical("QC FAIL: gridded emissions do not equal inventory emissions.")
         logging.info(
-            "\t" + sum_check[~sum_check["isclose"]].to_string().replace("\n", "\n\t")
+            "\t" + sum_check[~sum_check.qc_pass].to_string().replace("\n", "\n\t")
         )
-    return all_equal
+    return all_pass, sum_check
 
 
-def combine_gridded_emissions(
-    input_list: list[dict[str, np.array]]
-) -> dict[str, np.array]:
-    """takes a dictionary of year/array pair and sums the arrays by year
-
-    input:
-        -   list of dictionaries with key/value pairs of year and 2D arrays
-    output:
-        -   dictionary of year/2D array summation of emissions by year.
-
+# sum a stack of xarray dataarrays
+def combine_gridded_emissions(da_list: list[xr.DataArray]) -> xr.DataArray:
     """
-    stack_list = []
-    for x in input_list:
-        stack = np.stack(list(x.values()))
-        stack_list.append(stack)
-    out_sum_stack = np.sum(np.stack(stack_list), axis=0)
-    out_dict = {}
-    for i, year in enumerate(input_list[0].keys()):
-        out_dict[year] = out_sum_stack[i, :, :]
-    return out_dict
+    Sum a list of xarray DataArrays along a specified dimension.
+
+    Parameters:
+    dataarrays (list[xr.DataArray]): List of xarray DataArrays to sum.
+
+    Returns:
+    xr.DataArray: Summed xarray DataArray.
+    """
+    if len(da_list) == 1:
+        return da_list[0]
+    else:
+        return xr.concat(da_list, dim="time").sum(dim=["x", "y"])
+
+
+# def combine_gridded_emissions(
+#     input_list: list[dict[str, np.array]]
+# ) -> dict[str, np.array]:
+#     """takes a dictionary of year/array pair and sums the arrays by year
+
+#     input:
+#         -   list of dictionaries with key/value pairs of year and 2D arrays
+#     output:
+#         -   dictionary of year/2D array summation of emissions by year.
+
+#     """
+#     stack_list = []
+#     for x in input_list:
+#         stack = np.stack(list(x.values()))
+#         stack_list.append(stack)
+#     out_sum_stack = np.sum(np.stack(stack_list), axis=0)
+#     out_dict = {}
+#     for i, year in enumerate(input_list[0].keys()):
+#         out_dict[year] = out_sum_stack[i, :, :]
+#     return out_dict
 
 
 def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
@@ -552,18 +649,14 @@ def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
     return 10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
 
 
-def write_tif_output(in_dict: dict, dst_path: Path, resolution=0.1) -> None:
+def write_tif_output(in_ds: xr.Dataset, dst_path: Path, resolution=0.1) -> None:
     """take an input dictionary with year/array items, write raster to dst_path"""
-    out_array = np.stack(list(in_dict.values()))
 
-    profile = GEPA_spatial_profile(resolution)
+    gepa_profile = GEPA_spatial_profile(resolution)
 
-    dst_profile = profile.profile.copy()
-
-    dst_profile.update(count=out_array.shape[0])
-    with rasterio.open(dst_path.with_suffix(".tif"), "w", **dst_profile) as dst:
-        dst.write(out_array)
-        dst.descriptions = [str(x) for x in in_dict.keys()]
+    in_ds.rio.write_crs(gepa_profile.profile["crs"]).rio.write_transform(
+        gepa_profile.profile["transform"]
+    ).rio.to_raster(dst_path)
     return None
 
 
@@ -577,7 +670,7 @@ def load_area_matrix(resolution=0.1) -> np.array:
 
 
 def write_ncdf_output(
-    raster_dict: dict,
+    in_da: xr.DataArray,
     dst_path: Path,
     description: str,
     title: str,
@@ -586,8 +679,8 @@ def write_ncdf_output(
     # month_flag: bool = False,
 ) -> None:
     """take dict of year:array pairs and write to dst_path with attrs"""
-    year_list = list(raster_dict.keys())
-    array_stack = np.stack(list(raster_dict.values()))
+    # year_list = list(raster_dict.keys())
+    # array_stack = np.stack(list(raster_dict.values()))
 
     # TODO: update function for this
     # if month_flag:
@@ -598,26 +691,16 @@ def write_ncdf_output(
     #     pass
 
     profile = GEPA_spatial_profile(resolution)
+    min_year = np.min(in_da.time.values)
+    max_year = np.max(in_da.time.values)
 
     data_xr = (
-        xr.DataArray(
-            array_stack,
-            coords={
-                "time": year_list,
-                "lat": profile.y,
-                "lon": profile.x,
-            },
-            dims=[
-                "time",
-                "lat",
-                "lon",
-            ],
-        )
+        in_da.rename({"y": "lat", "x": "lon"})
         .rio.set_attrs(
             {
                 "title": title,
                 "description": description,
-                "year": f"{min(year_list)}-{max(year_list)}",
+                "year": f"{min_year}-{max_year}",
                 "units": units,
             }
         )
@@ -652,7 +735,7 @@ def name_formatter(col: pd.Series) -> pd.Series:
     )
 
 
-def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
+def plot_annual_raster_data(v3_data, SOURCE_NAME) -> None:
     """
     Function to plot the raster data for each year in the dictionary of rasters that are
     output at the end of each sector script.
@@ -661,10 +744,10 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     profile = GEPA_spatial_profile()
 
     # Plot the raster data for each year in the dictionary of rasters
-    for year in ch4_flux_result_rasters.keys():
-
+    for year in v3_data.time:
+        year = int(year.values)
         # subset the dict of rasters for each year
-        raster_data = ch4_flux_result_rasters[year]
+        raster_data = np.flip(v3_data.sel(time=year).values, 0)
 
         # The EPA color map from their V2 plots
         custom_colormap = colors.LinearSegmentedColormap.from_list(
@@ -763,7 +846,7 @@ def plot_annual_raster_data(ch4_flux_result_rasters, SOURCE_NAME) -> None:
         plt.close()
 
 
-def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
+def plot_raster_data_difference(in_da: xr.DataArray, SOURCE_NAME) -> None:
     """
     Function to plot the difference between the first and last years of the raster data
     for each sector.
@@ -773,9 +856,11 @@ def plot_raster_data_difference(ch4_flux_result_rasters, SOURCE_NAME) -> None:
     profile = GEPA_spatial_profile()
 
     # Get the first and last years of the data
-    list_of_data_years = list(ch4_flux_result_rasters.keys())
-    first_year_data = ch4_flux_result_rasters[list_of_data_years[0]]
-    last_year_data = ch4_flux_result_rasters[list_of_data_years[-1]]
+    list_of_data_years = list(in_da.time.values)
+    first_year_data = in_da.sel(time=np.min(in_da.time.values))
+    last_year_data = in_da.sel(time=np.max(in_da.time.values))
+    first_year_data = np.flip(first_year_data.values, 0)
+    last_year_data = np.flip(last_year_data.values, 0)
 
     # Calculate the difference between the first and last years
     difference_raster = last_year_data - first_year_data
@@ -938,24 +1023,31 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
         # Get v2 flux raster data
         v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
         v2_data_dict = {}
-        for in_path in v2_data_paths:
-            v2_year = int(in_path.stem.split("_")[-1])
-            v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
-                v2_name
-            ].values.squeeze(axis=0)
-            v2_data_dict[v2_year] = v2_data
+        # The v2 data are not projected, so we get warnings reading all these files
+        # suppress the warnings about no georeference.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for in_path in v2_data_paths:
+                v2_year = int(in_path.stem.split("_")[-1])
+                v2_data = rioxarray.open_rasterio(in_path, variable=v2_name)[
+                    v2_name
+                ].values.squeeze(axis=0)
+                v2_data_dict[v2_year] = v2_data
 
         # Compare v2 data against v3 data for available v2 years
         result_list = []
-        for year in v3_data.keys():
+        # for year in v3_data.keys():
+        for year in v3_data.time:
+            year = int(year.values)
             if year in v2_data_dict.keys():
+                v3_arr = np.flip(v3_data.sel(time=year).values, 0)
                 # Comparison of fluxes:
                 # difference flux raster
-                yearly_dif = v3_data[year] - v2_data_dict[year]
+                yearly_dif = v3_arr - v2_data_dict[year]
                 # v2 flux raster sum
                 v2_sum = np.nansum(v2_data)
                 # v3 flux raster sum
-                v3_sum = np.nansum(v3_data[year])
+                v3_sum = np.nansum(v3_arr)
                 # percent difference between v2 and v3
                 percent_dif = 100 * (v3_sum - v2_sum) / ((v3_sum + v2_sum) / 2)
                 logging.info(
@@ -984,7 +1076,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
                 v2_mass_sum = np.nansum(v2_mass_raster)
                 # v3 mass raster sum
-                v3_mass_raster = v3_data[year] / conversion_factor_annual
+                v3_mass_raster = v3_arr / conversion_factor_annual
                 v3_mass_sum = np.nansum(v3_mass_raster)
                 # percent difference between v2 and v3
                 percent_dif_mass = (
@@ -1000,7 +1092,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
 
                 # Set all raster values == 0 to nan so they are not plotted
                 v2_data_dict[year][np.where(v2_data_dict[year] == 0)] = np.nan
-                v3_data[year][np.where(v3_data[year] == 0)] = np.nan
+                v3_arr[np.where(v3_arr == 0)] = np.nan
                 yearly_dif[np.where(yearly_dif == 0)] = np.nan
 
                 # Plot the difference between v2 and v3 methane emissions for each year
@@ -1074,7 +1166,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 fig, (ax1, ax2) = plt.subplots(2)
                 fig.tight_layout()
                 ax1.hist(v2_data_dict[year].ravel(), bins=100)
-                ax2.hist(v3_data[year].ravel(), bins=100)
+                ax2.hist(v3_arr.ravel(), bins=100)
                 # Add a title
                 histogram_plot_title = (
                     f"{year} Frequency of methane emissions from "
@@ -1614,15 +1706,28 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
     """
     # calculate the relative MONTHLY proxy emissions
     logging.info("Calculating monthly scaling factors for emissions data")
+
     monthly_scaling = (
-        proxy_gdf.groupby(["year", "month"])[row.proxy_rel_emi_col]
+        proxy_gdf.assign(
+            year_month=lambda df: pd.to_datetime(
+                df[["year", "month"]].assign(DAY=1)
+            ).dt.strftime("%Y-%m"),
+        )
+        .groupby(["state_code", "year_month"])["annual_rel_emi"]
         .sum()
         .rename("month_scale")
         .reset_index()
+        .assign(
+            year=lambda df: df["year_month"].str.split("-").str[0],
+            month_normed=lambda df: df.groupby(["state_code", "year"])[
+                "month_scale"
+            ].transform(normalize),
+        )
+        .drop(columns=["month_scale", "year"])
+        .set_index(["state_code", "year_month"])
     )
-    monthly_scaling["month_normed"] = monthly_scaling.groupby("year")[
-        "month_scale"
-    ].transform(normalize)
+    monthly_scaling
+
     tmp_df = (
         emi_df.sort_values(["state_code", "year"])
         .assign(month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])])
@@ -1633,15 +1738,19 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
                 df[["year", "month"]].assign(DAY=1)
             ).dt.strftime("%Y-%m"),
         )
-        .merge(
-            monthly_scaling[["month_normed", "year", "month"]],
-            on=["year", "month"],
-            how="left",
+        .set_index(["state_code", "year_month"])
+        .join(
+            monthly_scaling,
+            how="right",
         )
         .assign(
             ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * df["month_normed"],
         )
+        .drop(columns=["month_normed"])
+        .reset_index()
     )
+    tmp_df
+
     month_check = (
         tmp_df.groupby(["state_code", "year"])["ghgi_ch4_kt"]
         .sum()
@@ -1654,6 +1763,8 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
             )
         )
     )
+    month_check["isclose"].all()
+
     if not month_check["isclose"].all():
         logging.critical("Monthly emissions do not sum to the expected values")
         raise ValueError(
@@ -1734,7 +1845,57 @@ def make_emi_grid(emi_df, admin_gdf, time_col):
     #     emi_rasters.append(emi_raster)
     # Stack the emi_raster objects into a 3D array
     # put the time axis at the end as xarray expects
-    emi_rasters_3d = np.stack(emi_rasters, axis=-1)
+    emi_rasters_3d = np.stack(emi_rasters, axis=0)
     # flip the y axis as xarray expects
-    emi_rasters_3d = np.flip(emi_rasters_3d, axis=0)
+    emi_rasters_3d = np.flip(emi_rasters_3d, axis=1)
     return emi_rasters_3d
+
+
+def fill_missing_year_months(proxy_ds):
+    # Ensure proxy_ds has all year_months in the range 2012-2022
+    # in cases where we have expanded the annual emissions to match a monthly proxy,
+    # we need to ensure that if the proxy is missing any months, we assume there are
+    # no emissions, but we still need a layer representing 0 in that month.
+    # this will fill in any missign years
+    all_year_months = pd.date_range(
+        start=f"{min(years)}-01", end=f"{max(years)}-12", freq="ME"
+    ).strftime("%Y-%m")
+
+    if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
+        proxy_year_month = proxy_ds.indexes["year_month"].map(
+            lambda x: f"{x[0]}-{x[1]:02d}"
+        )
+    else:
+        proxy_year_month = proxy_ds["year_month"].values
+
+    missing_year_months = set(all_year_months) - set(proxy_year_month)
+
+    if missing_year_months:
+        logging.info(f"Filling missing year_months: {missing_year_months}")
+        empty_array = np.zeros_like(proxy_ds["results"].isel(year_month=0).values)
+        for year_month in missing_year_months:
+            year, month = map(int, year_month.split("-"))
+            if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
+                fill_value = (year, month)
+            else:
+                fill_value = year_month
+            
+            missing_da = xr.Dataset(
+                {"results": (["y", "x"], empty_array)},
+                coords={
+                    "year_month": [fill_value],
+                    "year": year,
+                    "month": month,
+                    "y": proxy_ds["y"],
+                    "x": proxy_ds["x"],
+                },
+            )
+            proxy_ds = xr.concat(
+                [
+                    proxy_ds,
+                    missing_da,
+                ],
+                dim="year_month",
+            )
+        proxy_ds = proxy_ds.sortby("year_month")
+    return proxy_ds

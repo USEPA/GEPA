@@ -1,0 +1,808 @@
+"""
+Name:                   test_gch4i_standard_gridding.py
+Date Last Modified:     2024-06-07
+Authors Name:           N. Kruskamp, H. Lohman (RTI International), Erin McDuffie
+                        (EPA/OAP)
+Purpose:                This is a template framework for a gridder that applies
+                        to every gch4i source that uses a one-to-one emissions to proxy
+                        allocation. The user were specify the list of gch4i gridding
+                        sources and the gridder would be applied to each one of them,
+                        pairing the emission and proxies and other argumentes needed
+                        from the proxy mapping spreadsheet.
+Input Files:            -
+Output Files:           -
+Notes:                  - Currently this should handle all the "standard" emi-proxy
+                        pairs where the emi has a year, state_code and, ghgi_ch4_kt
+                        column, and the proxy has a year, state_code, rel_emi, and
+                        geometry colum. This should with a few modifications also handle
+                        the proxies that do not have years (the same data are repeated
+                        every year) and/or no relative emissions (where we assumed
+                        uniform distribution of state level emissions to all proxy
+                        rows).
+                        TODO: cotinue to add more flexibility to handle other
+                        gridding sources where the timesteps do not match between the
+                        emi and proxy (e.g. emi has year+month, proxy has year only,
+                        or vice versa).
+                        TODO: the way I've written this, I wanted to update the code so
+                        that the timestep columns were passed to the allocation function
+                        and were used as grouper columns, instead of having year
+                        hardcoded into the fucntion
+                        TODO: write the emi to raster proxy function
+                        TODO: update the raster QC function to do state+year QC instead
+                        of just year.
+                        TODO: probably in a follow-on script to this one, we need the
+                        final netcdf formatter script that puts all these output files
+                        into the yearly netcdf files.
+"""
+
+# %% STEP 0. Load packages, configuration files, and local parameters ------------------
+# for testing/development
+%load_ext autoreload
+%autoreload 2
+# %%
+
+import logging
+from datetime import datetime
+from pathlib import Path
+
+from pyarrow import parquet  # noqa
+import osgeo  # noqa
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+from tqdm.auto import tqdm
+import numpy as np
+import rasterio
+from tqdm.auto import tqdm
+from IPython.display import display
+from gch4i.config import (
+    V3_DATA_PATH,
+    emi_data_dir_path,
+    global_data_dir_path,
+    proxy_data_dir_path,
+    tmp_data_dir_path,
+    years,
+)
+from rasterio.features import rasterize
+from gch4i.create_emi_proxy_mapping import get_gridding_mapping_df
+import sqlite3
+import xarray as xr
+from gch4i.utils import (
+    QC_emi_raster_sums,
+    QC_flux_emis,
+    QC_proxy_allocation,
+    allocate_emis_to_array,
+    allocate_emissions_to_proxy,
+    calculate_flux,
+    combine_gridded_emissions,
+    grid_allocated_emissions,
+    plot_annual_raster_data,
+    plot_raster_data_difference,
+    write_ncdf_output,
+    write_tif_output,
+    check_state_year_match,
+    normalize,
+    scale_emi_to_month,
+    make_emi_grid,
+    GEPA_spatial_profile,
+    fill_missing_year_months,
+)
+
+# import matplotlib.pyplot as plt
+# import numpy as np
+# from pytask import Product, mark, task
+
+
+# from typing import Annotated
+def fix_completed_status(status_db_path):
+    # quick fix for inconsistent labeling of completed status in the database
+    conn = sqlite3.connect(status_db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE gridding_status
+        SET status = 'complete'
+        WHERE status = 'completed'
+        """
+    )
+    conn.commit()
+    conn.close()
+
+# from pytask import Product, task
+gepa_profile = GEPA_spatial_profile()
+out_profile = gepa_profile.profile
+
+gpd.options.io_engine = "pyogrio"
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", 20)
+pd.set_option("future.no_silent_downcasting", True)
+
+# %%
+
+# the mapping file that collections information needed for gridding on all emi/proxy
+# pairs. This is the data driven approach to gridding that will be used in the
+# production version of the gridding script.
+mapping_file_path: Path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+v2_data_path: Path = V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
+# the path to the state and county shapefiles.
+state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+county_geo_path: Path = global_data_dir_path / "tl_2020_us_county.zip"
+
+# create the log file for today that writes out the status of all the gridding
+# operations.
+logger = logging.getLogger(__name__)
+now = datetime.now()
+formatted_today = now.strftime("%Y-%m-%d")
+formatted_datetime = now.strftime("%Y-%m-%d %H:%M:%S")
+working_dir = V3_DATA_PATH.parents[0] / "gridding_log_and_qc"
+alloc_qc_dir = working_dir / "allocation_qc"
+emi_grid_qc_dir = working_dir / "emi_grid_qc"
+time_geo_qc_dir = working_dir / "time_geo_qc"
+gridded_output_dir = working_dir / "gridded_output"
+
+log_file_path = working_dir / f"gridding_log_{formatted_today}.log"
+status_db_path = working_dir / "gridding_status.db"
+
+logging.basicConfig(
+    filename=log_file_path,
+    encoding="utf-8",
+    level=logging.INFO,
+    format="%(levelname)s %(message)s",
+)
+
+
+# %% STEP 1. Load GHGI-Proxy Mapping Files
+
+# load the v2 file
+v2_df = pd.read_csv(v2_data_path).rename(columns={"v3_gch4i_name": "gch4i_name"})
+# %%
+
+# collection all the information needed on the emi/proxy pairs for gridding
+mapping_df = get_gridding_mapping_df(mapping_file_path)
+mapping_df = mapping_df.merge(v2_df, on="gch4i_name")
+# %%
+
+mapping_df.set_index(["gch4i_name", "emi_id", "proxy_id"]).drop(
+    columns="proxy_rel_emi_col"
+).drop_duplicates(keep="last").reset_index(drop=True)
+
+display(
+    (
+        mapping_df.groupby(
+            [
+                "file_type",
+                "emi_time_step",
+                "proxy_time_step",
+                "emi_geo_level",
+                "proxy_geo_level",
+            ]
+        )
+        .size()
+        .rename("pair_count")
+        .reset_index()
+    )
+)
+# %%
+
+# we need this as a reference file to filter out the states that are not in the gridding
+# region of lower 48 + DC.
+state_gdf = (
+    gpd.read_file(state_geo_path)
+    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+    .rename(columns=str.lower)
+    .rename(columns={"stusps": "state_code", "name": "state_name"})
+    .astype({"statefp": int})
+    # get only lower 48 + DC
+    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+    .rename(columns={"statefp": "fips"})
+    .to_crs(4326)
+)
+
+county_gdf = (
+    gpd.read_file(county_geo_path)
+    .loc[:, ["NAME", "STATEFP", "COUNTYFP", "geometry"]]
+    .rename(columns=str.lower)
+    .rename(columns={"name": "county_name"})
+    .astype({"statefp": int, "countyfp": int})
+    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+    .assign(
+        fips=lambda df: (
+            df["statefp"].astype(str) + df["countyfp"].astype(str).str.zfill(3)
+        ).astype(int)
+    )
+    .to_crs(4326)
+)
+# %%
+# Create a connection to the SQLite database
+
+conn = sqlite3.connect(status_db_path)
+cursor = conn.cursor()
+
+# Create a table to store the status of each row
+cursor.execute(
+    """
+CREATE TABLE IF NOT EXISTS gridding_status (
+    gch4i_name TEXT,
+    emi_id TEXT,
+    proxy_id TEXT,
+    status TEXT,
+    PRIMARY KEY (gch4i_name, emi_id, proxy_id)
+)
+"""
+)
+conn.commit()
+
+
+# Function to update the status of a row
+def update_status(gch4i_name, emi_id, proxy_id, status):
+    cursor.execute(
+        """
+    INSERT INTO gridding_status (gch4i_name, emi_id, proxy_id, status)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(gch4i_name, emi_id, proxy_id) DO UPDATE SET status=excluded.status
+    """,
+        (gch4i_name, emi_id, proxy_id, status),
+    )
+    conn.commit()
+
+
+def get_status(gch4i_name, emi_id, proxy_id):
+    cursor.execute(
+        """
+        SELECT status FROM gridding_status
+        WHERE gch4i_name = ? AND emi_id = ? AND proxy_id = ?
+        """,
+        (gch4i_name, emi_id, proxy_id),
+    )
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+# if SKIP is set to True, the code will skip over any rows that have already been
+# looked at based on the list of status values in the SKIP_THESE list.
+# if SKIP is set to False, it will still check if the monthly or annual files exist and
+# skip it. Otherwise it will try to run it again.
+SKIP = True
+SKIP_THESE = [
+    # "complete",
+    "failed state/year QC",
+    "error reading proxy",
+    "emi missing years",
+    "proxy file does not exist",
+    "proxy has emtpy geometries",
+    # "failed raster QC",
+    # "failed allocation QC",
+]
+
+unique_pairs_df = mapping_df.drop_duplicates(
+    subset=["gch4i_name", "emi_id", "proxy_id"]
+)
+for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_df)):
+
+    status = get_status(row.gch4i_name, row.emi_id, row.proxy_id)
+    # print(f"{row.gch4i_name}, {row.emi_id}, {row.proxy_id} status: {status}")
+    if SKIP:
+        if status in SKIP_THESE:
+            # print(f"skipping {row.gch4i_name}, {row.emi_id}, {row.proxy_id}")
+            continue
+    #     else:
+    #         print("here we go")
+    # # %%
+
+    base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+    logging.info("=" * 83)
+    logging.info(f"Gridding {base_name}.")
+
+    # if base_name != "1B2ai_petroleum_exploration-pet_hf_comp_emi-oil_hf_well_comp_proxy":
+    # # if base_name != "1B1a_coal_mining_underground-coal_post_under_emi-coal_post_underground_proxy":
+    # # if base_name != "1B2aii_petroleum_production-pet_hf_oilwell_emi-oil_hf_well_count_proxy":
+    #     continue
+    # else:
+    #     break
+
+    # get the status of the row from the database. There will only be a status if the
+    # file has not yet been done.
+
+    annual_output_path = (
+        gridded_output_dir / f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}.tif"
+    )
+    if row.emi_time_step == "monthly" or row.proxy_time_step == "monthly":
+        monthly_output_path = (
+            gridded_output_dir
+            / f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}_monthly.tif"
+        )
+        if annual_output_path.exists() and monthly_output_path.exists():
+            logging.info(f"{base_name} already gridded.\n")
+            update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+            continue
+
+    elif annual_output_path.exists():
+        logging.info(f"{base_name} already gridded.\n")
+        update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+        continue
+
+    if not row.proxy_has_file:
+        logging.critical(f"{row.proxy_id} proxy file does not exist.\n")
+        update_status(
+            row.gch4i_name, row.emi_id, row.proxy_id, "proxy file does not exist"
+        )
+        continue
+
+    emi_input_path = list(emi_data_dir_path.glob(f"{row.emi_id}.csv"))[0]
+    proxy_input_path = list(proxy_data_dir_path.glob(f"{row.proxy_id}.*"))[0]
+    rel_emi_col = row.proxy_rel_emi_col
+    # STEP 2: Read In EPA State/year GHGI Emissions
+    # read the emi file and filter out the states that are not in the lower 48 + DC
+    # and remove any records with 0 emissions.
+
+    # there are 3 types of emi files:
+    # 1. state+county/year+month/emissions
+    # 2. state/year/emissions
+    # 3. national/year/emissions
+
+    logging.info(f"{row.emi_id} is at {row.emi_geo_level}/{row.emi_time_step} level.")
+    logging.info(
+        f"{row.proxy_id} is at {row.proxy_geo_level}/{row.proxy_time_step} level."
+    )
+
+    match row.emi_time_step:
+        case "monthly":
+            emi_time_cols = ["year", "month"]
+        case "annual":
+            emi_time_cols = ["year"]
+        case _:
+            logging.critical(f"emi_time_step {row.emi_time_step} not recognized")
+
+    match row.emi_geo_level:
+        case "national":
+            emi_cols = emi_time_cols + ["ghgi_ch4_kt"]
+            emi_df = pd.read_csv(emi_input_path, usecols=emi_cols)
+        case "state":
+            emi_cols = emi_time_cols + ["state_code", "ghgi_ch4_kt"]
+            emi_df = pd.read_csv(emi_input_path, usecols=emi_cols).query(
+                "(state_code.isin(@state_gdf.state_code)) & (ghgi_ch4_kt > 0)"
+            )
+        case "county":
+            emi_cols = emi_time_cols + ["state_code", "fips", "ghgi_ch4_kt"]
+            emi_df = pd.read_csv(
+                emi_input_path,
+                usecols=emi_cols,
+            ).query("(state_code.isin(@state_gdf.state_code)) & (ghgi_ch4_kt > 0)")
+        case _:
+            logging.critical(f"emi_geo_level {row.emi_geo_level} not recognized")
+
+    if emi_df.year.unique().shape[0] != len(years):
+        logging.critical(f"{row.emi_id} does not have all years.\n")
+        update_status(row.gch4i_name, row.emi_id, row.proxy_id, "emi missing years")
+        continue
+
+    # if the emi file has a month column, we convert it a year-month column.
+    # YYYY-MM
+    if row.emi_time_step == "monthly":
+        emi_df = emi_df.assign(
+            month=lambda df: pd.to_datetime(df["month"], format="%B").dt.month,
+            year_month=lambda df: pd.to_datetime(
+                df[["year", "month"]].assign(DAY=1)
+            ).dt.strftime("%Y-%m"),
+        )
+
+    if row.emi_time_step == "monthly" or row.proxy_time_step == "monthly":
+        time_col = "year_month"
+    elif row.emi_time_step == "annual" and row.proxy_time_step == "annual":
+        time_col = "year"
+
+    if row.emi_geo_level == "national":
+        geo_col = None
+    elif row.emi_geo_level == "state":
+        geo_col = "state_code"
+    elif row.emi_geo_level == "county":
+        geo_col = "fips"
+
+    match_cols = [time_col, geo_col]
+    match_cols = [x for x in match_cols if x is not None]
+
+    # STEP 3: GET AND FORMAT PROXY DATA
+    # we apply a different set of functions depending on the proxy type.
+    # if vector type
+
+    # STEP 4: ALLOCATION OF STATE / YEAR EMISSIONS TO PROXIES
+    # embedded in this function is the check that the proxy has the same
+    # year as the emissions and same set of states. It will log when that is
+    # not the case since it is a critical error that needs to be corrected.
+    if row.file_type == "parquet":
+
+        # filter 1: national yearly emis
+
+        # read the file, catch any errors and log them.
+        try:
+            proxy_gdf = gpd.read_parquet(proxy_input_path).reset_index()
+        except Exception as e:
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "error reading proxy"
+            )
+            logging.critical(f"Error reading {row.proxy_id}: {e}\n")
+            continue
+
+        if proxy_gdf.is_empty.any():
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "proxy has emtpy geometries"
+            )
+            logging.critical(f"{row.proxy_id} has empty geometries.\n")
+            continue
+        if not proxy_gdf.is_valid.all():
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "proxy has invalid geometries"
+            )
+            logging.critical(f"{row.proxy_id} has invalid geometries.\n")
+            continue
+
+        # if the proxy doesn't have a year column, we explode the data out to
+        # repeat the same data for every year.
+        if not row.proxy_has_year_col:
+            logging.info(f"{row.proxy_id} adding a year column.")
+            # duplicate the data for all years in years_list
+            proxy_gdf = proxy_gdf.assign(
+                year=lambda df: [years for _ in range(df.shape[0])]
+            ).explode("year")
+        else:
+            try:
+                proxy_gdf = proxy_gdf.astype({"year": int})
+            except:
+                logging.critical(f"{row.proxy_id} year column has NAs.\n")
+                update_status(
+                    row.gch4i_name, row.emi_id, row.proxy_id, "proxy year has NAs"
+                )
+                continue
+
+        # if the proxy data are monthly, but don't have the year_month column,
+        # create it.
+        if (row.proxy_time_step == "monthly") & (not row.proxy_has_year_month_col):
+            logging.info(f"{row.proxy_id} adding a year_month column.")
+            # add a year_month column to the proxy data
+            try:
+                proxy_gdf = proxy_gdf.assign(
+                    year_month=lambda df: pd.to_datetime(
+                        df[["year", "month"]].assign(DAY=1)
+                    ).dt.strftime("%Y-%m"),
+                )
+            except ValueError:
+                proxy_gdf = proxy_gdf.assign(
+                    month=lambda df: pd.to_datetime(df["month"], format="%b").dt.month,
+                    year_month=lambda df: pd.to_datetime(
+                        df[["year", "month"]].assign(DAY=1)
+                    ).dt.strftime("%Y-%m"),
+                )
+
+        # if the proxy data are monthly, but don't have the month column,
+        # create it.
+        if (row.proxy_time_step == "monthly") & (not row.proxy_has_month_col):
+            logging.info(f"{row.proxy_id} adding a month column.")
+            # add a month column to the proxy data
+            proxy_gdf = proxy_gdf.assign(
+                month=lambda df: pd.to_datetime(df["year_month"]).dt.month
+            )
+
+        # if the proxy doesn't have relative emissions, we normalize by the
+        # timestep of gridding (year, or year_month)
+        if not row.proxy_has_rel_emi_col:
+            logging.info(f"{row.proxy_id} adding a relative emissions column.")
+            proxy_gdf["rel_emi"] = (
+                proxy_gdf.assign(emis_kt=1)
+                .groupby(match_cols)["emis_kt"]
+                .transform(normalize)
+            )
+            rel_emi_col = "rel_emi"
+
+        # if the proxy file has monthly data, but the emi file does not, we expand
+        # the emi file to match the year_month column of the proxy data.
+        # We also have to calculate the monthly scaling factor from the relative
+        # emissions of the proxy, versus equally allocating emissions temporally
+        # across the year by just dividing by 12.
+        if (row.proxy_time_step == "monthly") & (row.emi_time_step == "annual"):
+            # break
+            emi_df = scale_emi_to_month(proxy_gdf, emi_df, row)
+
+        # check that the proxy and emi files have matching state years
+        # NOTE: this is going to arise when the proxy data are lacking adequate
+        # spatial or temporal coverage. Failure here will require finding new data
+        # and/or filling in missing state/years.
+        time_geo_qc_pass, time_geo_qc_df = check_state_year_match(
+            emi_df, proxy_gdf, row, match_cols=match_cols
+        )
+
+        time_geo_qc_df.to_csv(time_geo_qc_dir / f"{base_name}_qc_state_year.csv")
+        # if the proxy data do not match the emi, fail, continue out of this pair
+        if not time_geo_qc_pass:
+            logging.critical(f"{base_name} failed state/year QC.\n")
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "failed state/year QC"
+            )
+
+            continue
+
+        # if we have passed the check that the proxy matches the emi by geographic
+        # and temporal levels, we are ready to allocate the inventory emissions
+        # to the proxy.
+        allocation_gdf = allocate_emissions_to_proxy(
+            proxy_gdf,
+            emi_df,
+            # proxy_has_year=row.proxy_has_year_col,
+            match_cols=match_cols,
+            # use_proportional=row.proxy_has_rel_emi_col,
+            proportional_col_name=rel_emi_col,
+        )
+
+        # STEP X: QC ALLOCATION
+        # check that the allocated emissions sum to the original emissions
+        allocation_qc_pass, allocation_qc_df = QC_proxy_allocation(
+            allocation_gdf,
+            emi_df,
+            row,
+            match_cols=match_cols,
+            plot_path=alloc_qc_dir / f"{base_name}_emi_compare.png",
+        )
+        allocation_qc_df.to_csv(alloc_qc_dir / f"{base_name}_allocation_qc.csv")
+        # if the allocation failed, break the loop.
+        # NOTE: if the process fails here, this is likely an issue with the
+        # calculation of the proxy relative values (i.e. they do not all sum to 1
+        # by the geo/time level)
+        if not allocation_qc_pass:
+            logging.critical(f"{base_name} failed allocation QC.\n")
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "failed allocation QC"
+            )
+            continue
+
+        try:
+            # STEP X: GRID EMISSIONS
+            # turn the vector proxy into a grid
+            proxy_ds = grid_allocated_emissions(allocation_gdf, timestep=time_col)
+        except Exception as e:
+            logging.critical(f"{row.emi_id}, {row.proxy_id} gridding failed {e}\n")
+            update_status(row.gch4i_name, row.emi_id, row.proxy_id, "gridding failed")
+            continue
+
+    elif row.file_type == "netcdf":
+        logging.info(f"{row.proxy_id} is a raster.")
+
+        # read the proxy file
+        proxy_ds = xr.open_dataset(proxy_input_path)  # .rename({"geoid": geo_col})
+
+        # Reorder the dimensions of proxy_ds to be time, y, x
+        # proxy_ds = proxy_ds.transpose(time_col, "y", "x").sortby([time_col, "y", "x"])
+
+        if "fips" not in emi_df.columns:
+            emi_df = emi_df.merge(state_gdf[["state_code", "fips"]], on="state_code")
+        # if the emi is month and the proxy is annual, we expand the dimensions of
+        # the proxy, repeating the year values for every month in the year
+        # we stack the year/month dimensions into a single year_month so that
+        # it aligns with the emissions data as a time x X x Y array.
+        if row.emi_time_step == "monthly" and row.proxy_time_step == "annual":
+            proxy_ds = (
+                proxy_ds.expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
+                .stack({"year_month": ["year", "month"]})
+                .sortby(["year_month", "y", "x"])
+            )
+        # proxy_fips = np.unique(proxy_ds.fips.values)
+        # emi_fips = np.unique(emi_df.fips.values)
+        # missing_fips = set(emi_fips) - set(proxy_fips)
+        # if len(missing_fips) != 0:
+        #     logging.critical(f"{row.proxy_id} missing fips: {missing_fips}")
+
+        match row.emi_geo_level:
+            case "state":
+                admin_gdf = state_gdf
+            case "county":
+                admin_gdf = county_gdf
+        # NOTE: this is slow.
+        emi_rasters_3d = make_emi_grid(emi_df, admin_gdf, time_col)
+
+        # assign the emissions array to the proxy dataset
+        proxy_ds["emissions"] = ([time_col, "y", "x"], emi_rasters_3d)
+        # # look to make sure the emissions loaded in the correct orientation
+        # proxy_ds["emissions"].sel(year_month=(2020, 1)).where(lambda x: x > 0).plot(
+        #     cmap="hot"
+        # )
+        # proxy_ds["emissions"].sel(year=2020).where(lambda x: x > 0).plot(cmap="hot")
+        # plt.show()
+        # calculate the emissions for the proxy array by multiplying the proxy by
+        # the gridded emissions data
+        proxy_ds["results"] = proxy_ds[rel_emi_col] * proxy_ds["emissions"]
+
+    # The expectation at this step is that regardless of a parquet or gridded input
+    if time_col == "year_month":
+        proxy_ds = fill_missing_year_months(proxy_ds)
+        yearly_results = proxy_ds["results"].groupby("year").sum()
+        raster_qc_pass, raster_qc_df = QC_emi_raster_sums(
+            proxy_ds["results"], emi_df, time_col
+        )
+        raster_qc_df.to_csv(emi_grid_qc_dir / f"{base_name}_emi_grid_qc_monthly.csv")
+        if not raster_qc_pass:
+            logging.critical(f"{base_name} failed monthly raster QC.\n")
+            update_status(
+                row.gch4i_name, row.emi_id, row.proxy_id, "failed monthly raster QC"
+            )
+            continue
+
+        out_profile.update(count=len(years) * 12)
+        out_arr = np.flip(
+            proxy_ds["results"].transpose("year_month", "y", "x").values, axis=1
+        )
+        with rasterio.open(monthly_output_path, "w", **out_profile) as dst:
+            dst.write(out_arr)
+        logging.info(f"{base_name} monthly gridding complete.\n")
+        update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+    else:
+        yearly_results = proxy_ds["results"]
+    raster_qc_pass, raster_qc_df = QC_emi_raster_sums(yearly_results, emi_df, "year")
+    raster_qc_df.to_csv(emi_grid_qc_dir / f"{base_name}_emi_grid_qc.csv")
+    if not raster_qc_pass:
+        logging.critical(f"{base_name} failed annual raster QC.\n")
+        update_status(
+            row.gch4i_name, row.emi_id, row.proxy_id, "failed annual raster QC"
+        )
+        continue
+
+    out_profile.update(count=len(years))
+    out_arr = np.flip(yearly_results.transpose("year", "y", "x").values, axis=1)
+    with rasterio.open(annual_output_path, "w", **out_profile) as dst:
+        dst.write(out_arr)
+    logging.info(f"{base_name} annual gridding complete.\n")
+    update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+
+conn.close()
+
+
+# %%
+def status_to_csv(status_db_path, working_dir):
+    # get a numan readable version of the status database
+    conn = sqlite3.connect(status_db_path)
+    status_df = pd.read_sql_query("SELECT * FROM gridding_status", conn)
+    conn.close()
+    status_df.to_csv(
+        working_dir / f"gridding_status_{formatted_today}.csv", index=False
+    )
+    return status_df
+
+
+status_df = status_to_csv(status_db_path, working_dir)
+status_df = status_df.merge(mapping_df, on=["gch4i_name", "emi_id", "proxy_id"])
+# %%
+print("percent of emi/proxy pairs by status")
+display(status_df["status"].value_counts(normalize=True).multiply(100).round(2))
+# %%
+group_ready_status = (
+    status_df.groupby("gch4i_name")["status"]
+    .apply(lambda x: x.eq("complete").all())
+    .to_frame()
+)
+print("percent of gridding groups ready")
+display(group_ready_status["status"].value_counts(normalize=True).multiply(100).round(2))
+
+ready_groups = group_ready_status[group_ready_status["status"] == True].join(
+    v2_df.set_index("gch4i_name")
+)
+# ready_groups = ready_groups.dropna(subset="v2_key")
+ready_groups
+# %%
+for g_name, status in ready_groups.iterrows():
+    group_name = g_name.lower()
+    v2_name = status.v2_key
+    tif_flux_output_path = tmp_data_dir_path / f"{group_name}_ch4_emi_flux.tif"
+    tif_kt_output_path = tmp_data_dir_path / f"{group_name}_ch4_kt_per_year.tif"
+    nc_flux_output_path = tmp_data_dir_path / f"{group_name}_ch4_emi_flux.nc"
+
+    IPCC_ID, SOURCE_NAME = group_name.split("_", maxsplit=1)
+
+    netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
+    netcdf_description = (
+        f"Gridded EPA Inventory - {group_name} - "
+        f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
+    )
+    # netcdf_title = f"CH4 emissions from {source_name} gridded to 1km x 1km"
+    all_raster_list = list(gridded_output_dir.glob(f"{group_name}*.tif"))
+    annual_raster_list = [
+        raster for raster in all_raster_list if "monthly" not in raster.name
+    ]
+    # this is the expected number of rasters for this group
+    group_mapping_count = mapping_df[mapping_df["gch4i_name"] == g_name].shape[0]
+
+    if annual_raster_list:
+        print(f"{group_name} has annual rasters. count: {len(annual_raster_list)}")
+        # Check the count against the mapping_df count for this gridding group
+        if len(annual_raster_list) != group_mapping_count:
+            # logging.critical(f"{group_name} has {len(annual_raster_list)} rasters, but mapping_df has {group_mapping_count} entries.")
+            raise ValueError("Mismatch in raster count and mapping_df count.")
+        annual_arr_list = []
+        for raster_path in annual_raster_list:
+            with rasterio.open(raster_path) as src:
+                annual_arr_list.append(src.read())
+
+        if len(annual_arr_list) > 1:
+            annual_summed_arr = np.sum(annual_arr_list, axis=0)
+        else:
+            annual_summed_arr = annual_arr_list[0]
+        annual_summed_arr.shape
+
+        annual_summed_da = xr.DataArray(
+            annual_summed_arr,
+            dims=["time", "y", "x"],
+            coords={
+                "time": years,
+                "y": np.arange(annual_summed_arr.shape[1]),
+                "x": np.arange(annual_summed_arr.shape[2]),
+            },
+            name=group_name,
+            attrs={
+                "units": "kt",
+                "long_name": f"CH4 emissions from {group_name} gridded to 1km x 1km",
+                "source": group_name,
+                "description": f"CH4 emissions from {group_name} gridded to 1km x 1km",
+            },
+        )
+
+        # ch4_kt_result_da = combine_gridded_emissions(annual_raster_list)
+        # write_tif_output(ch4_kt_result_da, tif_kt_output_path)
+
+        # STEP 5.2: QC FLUX AGAINST V2 ----------------------------------------------
+        ch4_flux_result_da = calculate_flux(annual_summed_da)
+        if pd.isna(v2_name):
+            # logging.warning(f"Skipping {group_name} because v2_name is NaN.")
+            print("no v2 version")
+        else:
+            flux_emi_qc_df = QC_flux_emis(ch4_flux_result_da, group_name, v2_name=v2_name)
+            flux_emi_qc_df
+        plot_annual_raster_data(ch4_flux_result_da, group_name)
+        plot_raster_data_difference(ch4_flux_result_da, group_name)
+        # STEP 6: SAVE THE FILES ----------------------------------------------------
+        write_tif_output(ch4_flux_result_da, tif_flux_output_path)
+        write_ncdf_output(
+            ch4_flux_result_da,
+            nc_flux_output_path,
+            netcdf_title,
+            netcdf_description,
+        )
+
+    monthly_raster_list = [
+        raster for raster in all_raster_list if "monthly" in raster.name
+    ]
+    if monthly_raster_list:
+        print("\t\tmonthly", len(monthly_raster_list))
+        if len(monthly_raster_list) != group_mapping_count:
+            # logging.critical(f"{group_name} has {len(monthly_raster_list)} rasters,
+            # but mapping_df has {group_mapping_count} entries.")
+            raise ValueError("Mismatch in raster count and mapping_df count.")
+        monthly_arr_list = []
+        for raster_path in monthly_raster_list:
+            with rasterio.open(raster_path) as src:
+                monthly_arr_list.append(src.read())
+
+        if len(monthly_arr_list) > 1:
+            monthly_summed_arr = np.sum(monthly_arr_list, axis=0)
+        else:
+            monthly_summed_arr = monthly_arr_list[0]
+        monthly_summed_arr.shape
+        year_months = (
+            pd.date_range(start=f"{years[0]}-01", end=f"{years[-1] + 1}-01", freq="ME", inclusive="both")
+            .strftime("%Y-%m")
+            .tolist()
+        )
+        monthly_summed_da = xr.DataArray(
+            monthly_summed_arr,
+            dims=["time", "y", "x"],
+            coords={
+                "time": year_months,
+                "y": np.arange(monthly_summed_arr.shape[1]),
+                "x": np.arange(monthly_summed_arr.shape[2]),
+            },
+            name=group_name,
+            attrs={
+                "units": "kt",
+                "long_name": f"CH4 emissions from {group_name} gridded to 1km x 1km",
+                "source": group_name,
+                "description": f"CH4 emissions from {group_name} gridded to 1km x 1km",
+            },
+        )
+
+    # logging.info(f"Finished {group_name}\n\n")
+# %%

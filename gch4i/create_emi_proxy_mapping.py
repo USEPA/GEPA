@@ -262,10 +262,10 @@ def get_gridding_mapping_df(
 
     # currently we are missing some proxies, so we drop any gridding group that does not
     # have all the proxies ready.
-    groups_ready_for_gridding = mapping_df.groupby("gch4i_name")["proxy_has_file"].all()
-    groups_ready_for_gridding = groups_ready_for_gridding[groups_ready_for_gridding]
+    # groups_ready_for_gridding = mapping_df.groupby("gch4i_name")["proxy_has_file"].all()
+    # groups_ready_for_gridding = groups_ready_for_gridding[groups_ready_for_gridding]
     # filter the mapping df to only include the groups that are ready for gridding.
-    mapping_df = mapping_df[mapping_df.gch4i_name.isin(groups_ready_for_gridding.index)]
+    # mapping_df = mapping_df[mapping_df.gch4i_name.isin(groups_ready_for_gridding.index)]
 
     return mapping_df
 

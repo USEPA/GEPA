@@ -252,6 +252,7 @@ def task_rwc_proxy(
         .to_dataset(name="rel_emi")
         # .expand_dims(year=years)
         .sortby(["year", "y", "x"])
+        .transpose("year", "y", "x")
     )
     out_ds["rel_emi"].shape
     # %%
@@ -279,6 +280,8 @@ def task_rwc_proxy(
     # plot. Not hugely informative, but shows the data is there.
     out_ds["rel_emi"].sel(year=2020).plot.imshow()
     # %%
-    out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
+    out_ds["rel_emi"].round(10).rio.write_crs(
         rwc_xr.rio.crs
     ).to_netcdf(output_path)
+
+# %%

@@ -51,7 +51,7 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
-from gch4i.utils import download_url
+from gch4i.utils import download_url, normalize
 
 
 # %% Set Constants & Paths
@@ -190,7 +190,11 @@ for _id, kwargs in param_dict.items():
         # the inventory provides when there are mines from the production data not in
         # the mine list. These mines are given 0 emissions.
         inv_mines_list = []
+        eia_mines_list = []
+        # add the EIA mine list by year, concat them together. norm the production by
+        # state and year, then output for post mining.
         for year in years:
+            print(f"processing {year} {mine_type} mines")
 
             eia_file_path = [x for x in eia_paths if str(year) in x.name][0]
             e_df = pd.read_excel(eia_file_path, skiprows=3, usecols=eia_cols)
@@ -205,11 +209,18 @@ for _id, kwargs in param_dict.items():
                         "Mine Status": "mine_status",
                     }
                 )
+                .drop_duplicates(subset=["MINE_ID"])
+                .dropna(subset=["MINE_ID"])
                 .set_index("MINE_ID")
+                .join(msha_df, how="left")
                 .query(
                     "(mine_type == @mine_type) & " "(mine_status.isin(@status_filter))"
                 )
+                .assign(year=year)
             )
+            print(f"total EIA mines {e_df.index.nunique()}")
+            e_df = e_df.dropna(subset=["LATITUDE", "LONGITUDE"])
+            print(f"EIA mines with lat/lon {e_df.shape[0]}")
 
             # read the mines list from the inventory
             sheet_name = f"UG-{year}"
@@ -231,12 +242,9 @@ for _id, kwargs in param_dict.items():
                 year_mine_df = year_mine_df.iloc[:end_row, :]
                 # print(inv_mine_df["MSHA Mine ID"].isna().sum())
             print(
-                f"{year} found {year_mine_df['MSHA Mine ID'].nunique()} "
-                "mines in inventory"
+                f"found {year_mine_df['MSHA Mine ID'].nunique()} " "mines in inventory"
             )
-            print(
-                f"{year} missing MINE ID: {year_mine_df['MSHA Mine ID'].isna().sum()}"
-            )
+            print(f"missing MINE ID: {year_mine_df['MSHA Mine ID'].isna().sum()}")
 
             year_mine_df = (
                 year_mine_df.rename(columns={"MSHA Mine ID": "MINE_ID"})
@@ -245,23 +253,23 @@ for _id, kwargs in param_dict.items():
                 .iloc[:, [0, 3, 6, 9]]
                 .astype({"MINE_ID": int})
                 .set_index("MINE_ID")
-                .join(e_df, how="left")
+                # .join(e_df, how="left")
                 .join(msha_df, how="left")
                 # .dropna(subset=["LATITUDE", "LONGITUDE"])
                 .assign(year=year)
                 .rename(mapper=lambda x: x.replace(str(f" {year}"), ""), axis=1)
             )
-            print(f"{year} found {year_mine_df.shape[0]} mines with prod and loc")
-            eia_matching_count = e_df.index.isin(year_mine_df.index).sum()
-            print(f"{year} EIA mines in inventory: {eia_matching_count}")
-            print(
-                (
-                    f"{year} EIA mines not in inventory: "
-                    f"{e_df.shape[0] - eia_matching_count}"
-                )
-            )
+            print(f"inventory mines with lat/lon: {year_mine_df.shape[0]}")
+            # eia_matching_count = e_df.index.isin(year_mine_df.index).sum()
+            # print(f"{year} EIA mines in inventory: {eia_matching_count}")
+            # print(
+            #     (
+            #         f"{year} EIA mines not in inventory: "
+            #         f"{e_df.shape[0] - eia_matching_count}"
+            #     )
+            # )
             print()
-
+            eia_mines_list.append(e_df)
             inv_mines_list.append(year_mine_df)
             # %%
             # underground counts by year:
@@ -278,63 +286,6 @@ for _id, kwargs in param_dict.items():
             # 2022: 209
 
         # %%
-        # concat the yearly mines list together, calculate the net emi in tgs, rename
-        # the columns so they are easier to work with, then fill any missing values with
-        # 0. get mines that have production or emissions values (we won't use mines that
-        # have 0 for both).
-        inv_mines_df = (
-            pd.concat(inv_mines_list)
-            .reset_index()
-            .set_index(["MINE_ID", "year"])
-            .assign(net_emi_tg=lambda df: df["Total Vent Emis (mmcf/yr)"] / mmcf_to_Gg)
-            .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
-            # .fillna({"production": 0, "net_emi_tg": 0})
-            # .query("(production > 0) | (net_emi_tg > 0)")
-        )
-        inv_mines_df
-        # %%
-        # create points from the lat/lons, spatial join with the states
-        inv_mines_gdf = gpd.GeoDataFrame(
-            inv_mines_df.drop(columns=["latitude", "longitude"]),
-            geometry=gpd.points_from_xy(inv_mines_df.longitude, inv_mines_df.latitude),
-            crs=4326,
-        ).sjoin(state_gdf.set_index("state_code")[["geometry"]], how="inner")
-        print(f"Total mines: {inv_mines_gdf.index.nunique()}")
-        print("mine count by year:")
-        display(inv_mines_gdf.groupby("year").size())
-        # %%
-        # how many mines have production data but no emissions?
-        inv_mines_gdf.query(
-            "(production > 0) & (`total_vent_emis_(mmcf/yr)` <= 0)"
-        ).groupby("year").size()
-        # %%
-        # how many mines have emissions data but no production?
-        inv_mines_gdf.query(
-            "(`total_vent_emis_(mmcf/yr)` > 0) & (production.isna())"
-        ).groupby("year").size()
-        # %%
-        inv_mines_gdf.groupby("year").apply(lambda x: x["production"].isna().sum())
-
-        # %%
-        # these totals should match the values listed in the EPA inventory workbook
-        # sheet 'CM Emissions Summary', row 10 "Adj. Vent (VentUnadj/VentAdj %)"
-        inv_mines_gdf.groupby("year")["total_vent_emis_(mmcf/yr)"].sum()
-        # They do!
-        # %%
-        # XXX: where do I find in the inventory workbook the total production for the
-        # year to validate these values?
-        inv_mines_gdf.groupby("year")["net_emi_tg"].sum()
-
-        # %%
-        # get a dataframe of just unique mines (no timeseries repeats)
-        unique_mines_gdf = (
-            inv_mines_gdf.reset_index()
-            .drop_duplicates(subset=["MINE_ID"], keep="first")
-            .set_index("MINE_ID")[
-                ["geometry", "state_code", "basin", "mine_state", "mine_type"]
-            ]
-        )
-        print(f"Unique mines: {unique_mines_gdf.index.nunique()}")
 
         # %%
         display(unique_mines_gdf["mine_state"].value_counts())
@@ -355,19 +306,28 @@ for _id, kwargs in param_dict.items():
         sns.despine()
         leg.set_bbox_to_anchor((1.1, 0.75, 0.2, 0.2))
         # %%
-        # TODO: if EPA approves, split the mines into post and regular here. then
-        # proceed with the weighted production calculation and normalization for each
-        # of them.
-        post_proxy_gdf = inv_mines_gdf.query("production > 0").copy()
 
-        # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)" are
-        # listed in the original code, they are not calculated differently from "other".
-        # It is not clear why they are listed separately.
-        # HOWEVER, we're getting vastly different values than v2, so something is wrong.
+        post_mines_df = pd.concat(eia_mines_list).query("production > 0")
+        post_mines_gdf = (
+            gpd.GeoDataFrame(
+                post_mines_df.drop(columns=["LATITUDE", "LONGITUDE"]),
+                geometry=gpd.points_from_xy(
+                    post_mines_df.LONGITUDE, post_mines_df.LATITUDE
+                ),
+                crs=4326,
+            )
+            .sjoin(state_gdf.set_index("state_code")[["geometry"]], how="left")
+            .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
+        )
+        print(f"Total post mines: {post_mines_gdf.index.nunique()}")
+        print("post mine count by year:")
+        display(post_mines_gdf.groupby("year").size())
 
         def calc_prod_emi(data):
+            # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)"
+            # are listed in the original code, they are not calculated differently from
+            # "other". It is not clear why they are listed separately.
             mine_state = data.name
-            print(mine_state)
             prod_coef_dict = {
                 "Kentucky (East)": 61.4,
                 "Kentucky (West)": 64.3,
@@ -376,27 +336,31 @@ for _id, kwargs in param_dict.items():
             }
 
             if mine_state in list(prod_coef_dict.keys()):
-                res = data["production"] * prod_coef_dict[mine_state]
+                res = data * prod_coef_dict[mine_state]
             else:
-                res = data["production"]
+                res = data
             return res
 
-        post_proxy_gdf["weighted_prod"] = (
-            post_proxy_gdf.groupby(["mine_state"])
-            .apply(calc_prod_emi, include_groups=False)
+        post_mines_gdf["weighted_prod"] = (
+            post_mines_gdf.groupby("mine_state")["production"]
+            .transform(calc_prod_emi)
             .rename("weighted_production")
-            .droplevel([0])
+        )
+        # this checks to make sure the only data altered are only ones listed in the
+        # fuction.
+        display(
+            post_mines_gdf.query("production != weighted_prod")[
+                "mine_state"
+            ].value_counts()
         )
 
-        post_proxy_gdf["rel_emi"] = post_proxy_gdf.groupby(["year", "state_code"])[
+        post_mines_gdf["rel_emi"] = post_mines_gdf.groupby(["year", "state_code"])[
             "weighted_prod"
-        ].transform(
-            lambda x: x / x.sum() if x.sum() > 0 else 0
-        )  # normalize to sum to 1
+        ].transform(normalize)
         print("post mine count by year")
-        display(post_proxy_gdf.reset_index().groupby("year")["MINE_ID"].nunique())
+        display(post_mines_gdf.reset_index().groupby("year")["MINE_ID"].nunique())
         post_all_close_1 = (
-            post_proxy_gdf.groupby(["year", "state_code"])["rel_emi"]
+            post_mines_gdf.groupby(["year", "state_code"])["rel_emi"]
             .sum()
             .apply(lambda x: np.isclose(x, 1))
         )
@@ -405,12 +369,58 @@ for _id, kwargs in param_dict.items():
             display(post_all_close_1[~post_all_close_1])
 
         # %%
-        coal_proxy_gdf = inv_mines_gdf.query("net_emi_tg > 0").copy()
+        # concat the yearly mines list together, calculate the net emi in tgs, rename
+        # the columns so they are easier to work with, then fill any missing values with
+        # 0. get mines that have production or emissions values (we won't use mines that
+        # have 0 for both).
+        inv_mines_df = (
+            pd.concat(inv_mines_list)
+            .reset_index()
+            .set_index(["MINE_ID", "year"])
+            .assign(net_emi_tg=lambda df: df["Total Vent Emis (mmcf/yr)"] / mmcf_to_Gg)
+            .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
+            # .fillna({"production": 0, "net_emi_tg": 0})
+            # .query("(production > 0) | (net_emi_tg > 0)")
+        )
+        inv_mines_df
+
+        # create points from the lat/lons, spatial join with the states
+        coal_proxy_gdf = (
+            gpd.GeoDataFrame(
+                inv_mines_df.drop(columns=["latitude", "longitude"]),
+                geometry=gpd.points_from_xy(
+                    inv_mines_df.longitude, inv_mines_df.latitude
+                ),
+                crs=4326,
+            )
+            .sjoin(state_gdf.set_index("state_code")[["geometry"]], how="inner")
+            .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
+            .query("net_emi_tg > 0")
+        )
+        print(f"Total mines: {coal_proxy_gdf.index.nunique()}")
+        print("mine count by year:")
+        display(coal_proxy_gdf.groupby("year").size())
+
+        # these totals should match the values listed in the EPA inventory workbook
+        # sheet 'CM Emissions Summary', row 10 "Adj. Vent (VentUnadj/VentAdj %)"
+        coal_proxy_gdf.groupby("year")["total_vent_emis_(mmcf/yr)"].sum()
+        # They do!
+
+        # %%
+        # get a dataframe of just unique mines (no timeseries repeats)
+        unique_mines_gdf = (
+            coal_proxy_gdf.reset_index()
+            .drop_duplicates(subset=["MINE_ID"], keep="first")
+            .set_index("MINE_ID")[
+                ["geometry", "state_code", "basin", "mine_state", "mine_type"]
+            ]
+        )
+        print(f"Unique mines: {unique_mines_gdf.index.nunique()}")
 
         coal_proxy_gdf["rel_emi"] = coal_proxy_gdf.groupby(["year", "state_code"])[
             "net_emi_tg"
         ].transform(
-            lambda x: x / x.sum() if x.sum() > 0 else 0
+            normalize
         )  # normalize to sum to 1
         print(f"{mine_type} mine count by year")
         display(coal_proxy_gdf.reset_index().groupby("year")["MINE_ID"].nunique())
@@ -426,20 +436,20 @@ for _id, kwargs in param_dict.items():
         # %%
         fig, ax = plt.subplots(dpi=300, figsize=(10, 10))
         state_gdf.boundary.plot(lw=0.5, color="xkcd:slate", ax=ax)
-        post_proxy_gdf.query("year == 2022").plot(
+        post_mines_gdf.query("year == 2022").plot(
             "rel_emi",
-            cmap="Spectral",
+            cmap="Greens",
             ax=ax,
             legend=True,
             legend_kwds={"shrink": 0.3},
         )
-        coal_proxy_gdf.query("year == 2022").plot("rel_emi", cmap="Spectral", ax=ax)
+        coal_proxy_gdf.query("year == 2022").plot("rel_emi", cmap="Purples", ax=ax)
         ax.set(title=f"{mine_type} Coal Mine Relative Emissions by State for 2022")
         sns.despine()
         plt.show()
-
+        # %%
         coal_proxy_gdf.to_parquet(output_path_coal)
-        post_proxy_gdf.to_parquet(output_path_coal_post)
+        post_mines_gdf.to_parquet(output_path_coal_post)
 
         # %%
 
@@ -522,7 +532,7 @@ for _id, kwargs in param_dict.items():
 
 # # %%
 # state_prod_v3 = (
-#     inv_mines_gdf.groupby(["mine_state", "year"])["production"]
+#     coal_proxy_gdf.groupby(["mine_state", "year"])["production"]
 #     .sum()
 #     .rename("v3_prod")
 #     .to_frame()

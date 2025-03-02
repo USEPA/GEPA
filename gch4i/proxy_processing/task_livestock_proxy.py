@@ -217,9 +217,10 @@ for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
         .apply(normalize)
         .sortby(["y", "x"])
         .to_dataset(name="rel_emi")
-        .expand_dims(year=years)
+        .expand_dims(year=years, axis=0)
     )
     out_ds["rel_emi"].shape
+    out_ds["rel_emi"].sel(year=2020).plot()
 
     all_eq_df = (
         out_ds["rel_emi"]
