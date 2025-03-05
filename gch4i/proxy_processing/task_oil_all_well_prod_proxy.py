@@ -2,17 +2,11 @@
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
+
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -111,6 +105,7 @@ def task_get_oil_all_well_prod_proxy_data(
                          .astype({"spud_year": str, "first_prod_year": str})
                          .query("gas_to_oil_ratio <= 100")
                          .query("GOR_QUAL == 'Liq only' | GOR_QUAL == 'Liq+Gas'")
+                         .dropna(subset=["LATITUDE", "LONGITUDE"])
                          )
 
         # Include wells in map only for months where there is oil production (emissions ~ when production is occuring)

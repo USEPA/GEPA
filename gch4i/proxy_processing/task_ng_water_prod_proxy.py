@@ -109,6 +109,7 @@ def task_get_ng_water_prod_proxy_data(
                         .replace(np.inf, 0)
                         .astype({"spud_year": str, "first_prod_year": str})
                         .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
+                        .dropna(subset=["LATITUDE", "LONGITUDE"])
                         )
 
         # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)

@@ -2,17 +2,11 @@
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
+
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -107,6 +101,7 @@ def task_get_oil_conv_well_comp_proxy_data(
                         .astype({"spud_year": str, "first_prod_year": str})
                         .query("gas_to_oil_ratio <= 100")
                         .query("GOR_QUAL == 'Liq only' | GOR_QUAL == 'Liq+Gas'")
+                        .dropna(subset=["LATITUDE", "LONGITUDE"])
                         )
 
         # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)
@@ -142,9 +137,18 @@ def task_get_oil_conv_well_comp_proxy_data(
     del oil_data_imonth_temp
     del conv_well_comp_imonth
 
+    # Convert to a geodataframe
+    conv_well_comp_df = enverus_df_to_gdf(conv_well_comp_df)
+
+    # Remove data with empty geometries
+    conv_well_comp_df['empty_geometry'] = conv_well_comp_df.is_empty
+    print("Number of total data entries: ", len(conv_well_comp_df))
+    print("Number of data entries with missing geometry: ", len(conv_well_comp_df.query("empty_geometry == True")))
+    conv_well_comp_df = conv_well_comp_df.query("empty_geometry == False").drop(columns="empty_geometry").reset_index(drop=True)
+
     # Calculate relative emissions and convert to a geodataframe
-    conv_well_comp_df  = calc_enverus_rel_emi(conv_well_comp_df )
-    conv_well_comp_df  = enverus_df_to_gdf(conv_well_comp_df )
+    conv_well_comp_df = calc_enverus_rel_emi(conv_well_comp_df)
+    conv_well_comp_df = conv_well_comp_df.astype({'year': int})
 
     # NEI Data:
     nei_df = pd.DataFrame()

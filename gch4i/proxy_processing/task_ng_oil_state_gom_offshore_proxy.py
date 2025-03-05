@@ -205,6 +205,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
                         .assign(year=str(iyear))
                         .replace(np.inf, 0)
                         .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
+                        .dropna(subset=["LATITUDE", "LONGITUDE"])
                         )
         # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)
         for imonth in range(1, 13):
@@ -239,6 +240,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
                          .replace(np.inf, 0)
                          .query("gas_to_oil_ratio <= 100")
                          .query("GOR_QUAL == 'Liq only' | GOR_QUAL == 'Liq+Gas'")
+                         .dropna(subset=["LATITUDE", "LONGITUDE"])
                          )
         # Include wells in map only for months where there is oil production (emissions ~ when production is occuring)
         for imonth in range(1,13):
@@ -275,13 +277,22 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
     # Calculate relative emissions and convert to a geodataframe
     ng_state_gom_offshore_df = calc_enverus_rel_emi(ng_state_gom_offshore_df)
     ng_state_gom_offshore_df = enverus_df_to_gdf(ng_state_gom_offshore_df)
-    ng_state_gom_offshore_df = ng_state_gom_offshore_df.astype({'year':int})
+    ng_state_gom_offshore_df = ng_state_gom_offshore_df.astype({'year': int})
     oil_state_gom_offshore_df = calc_enverus_rel_emi(oil_state_gom_offshore_df)
     oil_state_gom_offshore_df = enverus_df_to_gdf(oil_state_gom_offshore_df)
-    oil_state_gom_offshore_df = oil_state_gom_offshore_df.astype({'year':int})
-    oil_pac_fed_state_df = calc_enverus_rel_emi(oil_pac_fed_state_df)
+    oil_state_gom_offshore_df = oil_state_gom_offshore_df.astype({'year': int})
+    # Note that pacific federal state is treated as one region, so normalization is done without the state_code
+    oil_pac_fed_state_df['annual_rel_emi'] = (
+        oil_pac_fed_state_df.groupby(["year"])['proxy_data']
+        .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    )
+    oil_pac_fed_state_df['rel_emi'] = (
+        oil_pac_fed_state_df.groupby(["year_month"])['proxy_data']
+        .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    )
+    oil_pac_fed_state_df = oil_pac_fed_state_df.drop(columns='proxy_data')
     oil_pac_fed_state_df = enverus_df_to_gdf(oil_pac_fed_state_df)
-    oil_pac_fed_state_df = oil_pac_fed_state_df.astype({'year':int})
+    oil_pac_fed_state_df = oil_pac_fed_state_df.astype({'year': int})
 
     # Correct for missing proxy data
     # 1. Find missing state_code-year pairs
@@ -303,10 +314,6 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
                         .query("ghgi_ch4_kt > 0.0")
                         )
     oil_gom_emi_df = pd.concat([oil_gom_df, oil_trans_df]).reset_index(drop=True)
-    oil_pac_emi_df = (pd.read_csv(oil_pac_federal_state_emi_path)
-                          .query("state_code.isin(@state_gdf['state_code'])")
-                          .query("ghgi_ch4_kt > 0.0")
-                          )   
 
     # Retrieve unique state codes for emissions without proxy data
     # This step is necessary, as not all emissions data excludes emission-less states
@@ -314,23 +321,19 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
     ng_proxy_states = set(ng_state_gom_offshore_df[['state_code', 'year']].itertuples(index=False, name=None))
     oil_gom_emi_states = set(oil_gom_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
     oil_gom_proxy_states = set(oil_state_gom_offshore_df[['state_code', 'year']].itertuples(index=False, name=None))
-    oil_pac_emi_states = set(oil_pac_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
-    oil_pac_proxy_states = set(oil_pac_fed_state_df[['state_code', 'year']].itertuples(index=False, name=None))
 
     # Find missing states
     ng_missing_states = ng_emi_states.difference(ng_proxy_states)
     oil_gom_missing_states = oil_gom_emi_states.difference(oil_gom_proxy_states)
-    oil_pac_missing_states = oil_pac_emi_states.difference(oil_pac_proxy_states)
 
     # Add missing states alternative data to grouped_proxy
     ng_proxy_gdf_final = create_alt_proxy(ng_missing_states, ng_state_gom_offshore_df)
     oil_gom_proxy_gdf_final = create_alt_proxy(oil_gom_missing_states, oil_state_gom_offshore_df)
-    oil_pac_proxy_gdf_final = create_alt_proxy(oil_pac_missing_states, oil_pac_fed_state_df)
 
     # Output Proxy Parquet Files
     ng_proxy_gdf_final.to_parquet(ng_state_gom_offshore_output_path)
     oil_gom_proxy_gdf_final.to_parquet(oil_state_gom_offshore_output_path)
-    oil_pac_proxy_gdf_final.to_parquet(oil_pac_fed_state_output_path)
+    oil_pac_fed_state_df.to_parquet(oil_pac_fed_state_output_path)
 
     return None
 

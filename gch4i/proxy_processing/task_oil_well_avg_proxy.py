@@ -2,12 +2,10 @@
 from pathlib import Path
 from typing import Annotated
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
+
 from pytask import Product, task, mark
 
 from gch4i.config import (

@@ -73,7 +73,6 @@ def enverus_df_to_gdf(df):
             )
         )
         .drop(columns=["latitude", "longitude"])
-        .loc[:, ["year", "month", "year_month", "state_code", "annual_rel_emi", "rel_emi", "geometry"]]
     )
     return gdf
 
@@ -382,11 +381,11 @@ def create_alt_proxy(missing_states, original_proxy_df):
 
     # Check that annual relative emissions sum to 1.0 each state/year combination
     sums_annual = proxy_gdf_final.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
+    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
 
     # Check that monthly relative emissions sum to 1.0 each state/year_month combination
     sums_monthly = proxy_gdf_final.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
+    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Monthly relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
 
     proxy_gdf_final = proxy_gdf_final.reset_index(drop=True)
     

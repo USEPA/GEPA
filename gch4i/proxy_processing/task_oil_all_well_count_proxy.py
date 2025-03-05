@@ -2,17 +2,11 @@
 from pathlib import Path
 import os
 from typing import Annotated
-from zipfile import ZipFile
-import calendar
-import datetime
 
-from pyarrow import parquet
 import pandas as pd
-import osgeo
 import geopandas as gpd
 import numpy as np
-import seaborn as sns
-import shapefile as shp
+
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -26,7 +20,7 @@ from gch4i.config import (
     years,
 )
 
-from gch4i.utils import us_state_to_abbrev
+# from gch4i.utils import us_state_to_abbrev
 from gch4i.proxy_processing.ng_oil_production_utils import (
     calc_enverus_rel_emi,
     enverus_df_to_gdf,
@@ -111,6 +105,7 @@ def task_get_oil_all_well_count_proxy_data(
                         .astype({"spud_year": str, "first_prod_year": str})
                         .query("gas_to_oil_ratio <= 100")
                         .query("GOR_QUAL == 'Liq only' | GOR_QUAL == 'Liq+Gas'")
+                        .dropna(subset=["LATITUDE", "LONGITUDE"])
                         )
 
         # Include wells in map only for months where there is oil production (emissions ~ when production is occuring)
@@ -142,9 +137,17 @@ def task_get_oil_all_well_count_proxy_data(
     del oil_data_imonth_temp
     del all_well_count_imonth
 
-    # Calculate relative emissions and convert to a geodataframe
-    all_well_count_df = calc_enverus_rel_emi(all_well_count_df)
+    # Convert to a geodataframe
     all_well_count_df = enverus_df_to_gdf(all_well_count_df)
+
+    # Remove data with empty geometries
+    all_well_count_df['empty_geometry'] = all_well_count_df.is_empty
+    print("Number of total data entries: ", len(all_well_count_df))
+    print("Number of data entries with missing geometry: ", len(all_well_count_df.query("empty_geometry == True")))
+    all_well_count_df = all_well_count_df.query("empty_geometry == False").drop(columns="empty_geometry").reset_index(drop=True)
+
+    # Calculate relative emissions
+    all_well_count_df = calc_enverus_rel_emi(all_well_count_df)
 
     # NEI Data:
     nei_df = pd.DataFrame()

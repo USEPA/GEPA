@@ -117,7 +117,8 @@ def task_get_ng_all_well_prod_proxy_data(
             .replace(np.inf, 0)
             .astype({"spud_year": str, "first_prod_year": str})
             .query("gas_to_oil_ratio > 100 | GOR_QUAL == 'Gas only'")
-                        )
+            .dropna(subset=["LATITUDE", "LONGITUDE"])
+            )
 
         # Include wells in map only for months where there is gas production (emissions ~ when production is occuring)
         for imonth in range(1, 13):
@@ -150,9 +151,17 @@ def task_get_ng_all_well_prod_proxy_data(
     del ng_data_imonth_temp
     del all_well_prod_imonth
 
-    # Calculate relative emissions and convert to a geodataframe
-    all_well_prod_df = calc_enverus_rel_emi(all_well_prod_df)
+    # Convert to a geodataframe
     all_well_prod_df = enverus_df_to_gdf(all_well_prod_df)
+
+    # Remove data with empty geometries
+    all_well_prod_df['empty_geometry'] = all_well_prod_df.is_empty
+    print("Number of total data entries: ", len(all_well_prod_df))
+    print("Number of data entries with missing geometry: ", len(all_well_prod_df.query("empty_geometry == True")))
+    all_well_prod_df = all_well_prod_df.query("empty_geometry == False").drop(columns="empty_geometry").reset_index(drop=True)
+
+    # Calculate relative emissions
+    all_well_prod_df = calc_enverus_rel_emi(all_well_prod_df)
 
     # NEI Data:
     nei_df = pd.DataFrame()

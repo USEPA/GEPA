@@ -169,20 +169,20 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
     # Separate out ng and oil
     ng_federal_gom_offshore_2011_gdf = (federal_gom_offshore_2011_gdf
                                         .query("oil_gas_defn == 'Gas'")
-                                        # sum of annual_rel_emi = 1 for each state_code-year combination
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each state_code-year-month combination
-                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        # sum of annual_rel_emi = 1 for each year
+                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        # sum of rel_emi = 1 for each year-month
+                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                         .reset_index(drop=True)
                                         )
     oil_federal_gom_offshore_2011_gdf = (federal_gom_offshore_2011_gdf
                                          .query("oil_gas_defn == 'Oil'")
-                                        # sum of annual_rel_emi = 1 for each state_code-year combination
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each state_code-year-month combination
-                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        # sum of annual_rel_emi = 1 for each year
+                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        # sum of rel_emi = 1 for each year-month
+                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                          .reset_index(drop=True)
                                          )
 
@@ -250,20 +250,20 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
     # Separate out ng and oil
     ng_federal_gom_offshore_2014_gdf = (federal_gom_offshore_2014_gdf
                                         .query("oil_gas_defn == 'Gas'")
-                                        # sum of annual_rel_emi = 1 for each state_code-year combination
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each state_code-year-month combination
-                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        # sum of annual_rel_emi = 1 for each year
+                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        # sum of rel_emi = 1 for each year-month
+                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                         .reset_index(drop=True)
                                         )
     oil_federal_gom_offshore_2014_gdf = (federal_gom_offshore_2014_gdf
                                          .query("oil_gas_defn == 'Oil'")
-                                        # sum of annual_rel_emi = 1 for each state_code-year combination
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each state_code-year-month combination
-                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        # sum of annual_rel_emi = 1 for each year
+                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        # sum of rel_emi = 1 for each year-month
+                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                          .reset_index(drop=True)
                                          )
 
@@ -331,20 +331,20 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
     # Separate out ng and oil
     ng_federal_gom_offshore_2017_gdf = (federal_gom_offshore_2017_gdf
                                         .query("oil_gas_defn == 'Gas'")
-                                        # sum of annual_rel_emi = 1 for each state_code-year combination
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each state_code-year-month combination
-                                        .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                        # sum of annual_rel_emi = 1 for each year
+                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        # sum of rel_emi = 1 for each year-month
+                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                        .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                         .reset_index(drop=True)
                                         )
     oil_federal_gom_offshore_2017_gdf = (federal_gom_offshore_2017_gdf
                                          .query("oil_gas_defn == 'Oil'")
-                                         # sum of annual_rel_emi = 1 for each state_code-year combination
-                                         .assign(annual_rel_emi=lambda df: df.groupby(["state_code", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                         # sum of rel_emi = 1 for each state_code-year-month combination
-                                         .assign(rel_emi=lambda df: df.groupby(["state_code", "month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                         .drop(columns={'Emis_tg', 'oil_gas_defn'})
+                                         # sum of annual_rel_emi = 1 for each year
+                                         .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         # sum of rel_emi = 1 for each year-month
+                                         .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                          .reset_index(drop=True)
                                          )
 
@@ -391,52 +391,33 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
     
     ng_federal_gom_offshore_gdf = (ng_federal_gom_offshore_gdf
                                    .loc[:, ["boem_complex_id", "year", "month", 
-                                            "year_month", "state_code", "geometry", 
+                                            "year_month", "geometry", 
                                             "annual_rel_emi", "rel_emi"]]
                                    .astype({'year': int, 'month': int})
                                    .reset_index(drop=True)
                                    )
     oil_federal_gom_offshore_gdf = (oil_federal_gom_offshore_gdf
                                    .loc[:, ["boem_complex_id", "year", "month", 
-                                            "year_month", "state_code", "geometry", 
+                                            "year_month", "geometry", 
                                             "annual_rel_emi", "rel_emi"]]
                                     .astype({'year': int, 'month': int})                                   
                                     .reset_index(drop=True)
                                     )
+    
+    # Check that annual relative emissions sum to 1.0 each year
+    ng_sums_annual = ng_federal_gom_offshore_gdf.groupby(["year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(ng_sums_annual, 1.0, atol=1e-8).all(), f"Annual ng relative emissions do not sum to 1 for each year and state; {ng_sums_annual}"  # assert that the sums are close to 1
+    oil_sums_annual = oil_federal_gom_offshore_gdf.groupby(["year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(oil_sums_annual, 1.0, atol=1e-8).all(), f"Annual oil relative emissions do not sum to 1 for each year and state; {oil_sums_annual}"  # assert that the sums are close to 1
 
-    # Correct for missing proxy data
-    # 1. Find missing state_code-year pairs
-    # 2. Check to see if proxy data exists for state in another year
-    #   2a. If the data exists, use proxy data from the closest year
-    #   2b. If the data does not exist, assign emissions uniformly across the state
+    # Check that monthly relative emissions sum to 1.0 each year_month
+    ng_sums_monthly = ng_federal_gom_offshore_gdf.groupby(["year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(ng_sums_monthly, 1.0, atol=1e-8).all(), f"Monthly ng relative emissions do not sum to 1 for each year_month and state; {ng_sums_monthly}"  # assert that the sums are close to 1
+    oil_sums_monthly = oil_federal_gom_offshore_gdf.groupby(["year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(oil_sums_monthly, 1.0, atol=1e-8).all(), f"Monthly oil relative emissions do not sum to 1 for each year_month and state; {oil_sums_monthly}"  # assert that the sums are close to 1
 
-    # Read in emissions data and drop states with 0 emissions
-    ng_emi_df = (pd.read_csv(federal_gom_offshore_emi_path)
-                          .query("state_code.isin(@state_gdf['state_code'])")
-                          .query("ghgi_ch4_kt > 0.0")
-                          )
-    oil_emi_df = (pd.read_csv(oil_gom_federal_emi_path)
-                          .query("state_code.isin(@state_gdf['state_code'])")
-                          .query("ghgi_ch4_kt > 0.0")
-                          )
-
-    # Retrieve unique state codes for emissions without proxy data
-    # This step is necessary, as not all emissions data excludes emission-less states
-    ng_emi_states = set(ng_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
-    ng_proxy_states = set(ng_federal_gom_offshore_gdf[['state_code', 'year']].itertuples(index=False, name=None))
-    oil_emi_states = set(oil_emi_df[['state_code', 'year']].itertuples(index=False, name=None))
-    oil_proxy_states = set(oil_federal_gom_offshore_gdf[['state_code', 'year']].itertuples(index=False, name=None))
-
-    # Find missing states
-    ng_missing_states = ng_emi_states.difference(ng_proxy_states)
-    oil_missing_states = oil_emi_states.difference(oil_proxy_states)
-
-    # Add missing states alternative data to grouped_proxy
-    ng_proxy_gdf_final = create_alt_proxy(ng_missing_states, ng_federal_gom_offshore_gdf)
-    oil_proxy_gdf_final = create_alt_proxy(oil_missing_states, oil_federal_gom_offshore_gdf)
-
-    ng_proxy_gdf_final.to_parquet(ng_output_path)
-    oil_proxy_gdf_final.to_parquet(oil_output_path)
+    ng_federal_gom_offshore_gdf.to_parquet(ng_output_path)
+    oil_federal_gom_offshore_gdf.to_parquet(oil_output_path)
 
     return None
 
