@@ -31,9 +31,7 @@ from gch4i.config import (
 def task_get_oil_refineries_proxy_data(
     subpart_y_path="https://data.epa.gov/efservice/y_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    proxy_output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "oil_refineries_proxy.parquet"
-    ),
+    proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_refineries_proxy.parquet",
 ):
     """
     Process oil refineries proxy data for methane emissions
@@ -81,35 +79,60 @@ def task_get_oil_refineries_proxy_data(
                  .query("year.between(@min_year, @max_year)")
                  # Select only facilities in the lower 48 + DC
                  .query("state_code.isin(@state_gdf['state_code'])")
+                 .dropna(subset=["latitude", "longitude"])
+                 .astype({'year': str})
                  .reset_index(drop=True)
                  )
 
-    # Create Relative Emissions
+    # Create relative emissions
+    # sum of the rel_emi = 1 for each state_code-year_month combination
+    # because the values in data_temp['rel_emi'] will be copied to each month, the 
+    # the following normalization will lead to monthly totals = 1
     facility_df['rel_emi'] = (
         facility_df.groupby(["state_code", "year"])['ch4_t']
         .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
         )
+    # sum of the annual_rel_emi = 1 for each state_code-year combination
+    # because data_temp['rel_emi'] was copied to each month, rel_emi divided by 12 
+    # will lead to annual totals = 1
+    facility_df['annual_rel_emi'] = facility_df['rel_emi'] * 1/12
     # Drop ch4_t column
     facility_df = facility_df.drop(columns='ch4_t')
 
+    # Create monthly proxy data
+    monthly_proxy_data = pd.DataFrame()
+    for imonth in range(1, 13):
+        imonth_str = f"{imonth:02}"  # convert to 2-digit months
+        data_temp_imonth = facility_df.copy()
+        data_temp_imonth = data_temp_imonth.assign(year_month=lambda df: df['year']+'-'+imonth_str).assign(month=imonth)
+        monthly_proxy_data = pd.concat([monthly_proxy_data, data_temp_imonth])
+
     # Check that relative emissions sum to 1.0 each state/year combination
     # get sums to check normalization
-    sums = facility_df.groupby(["state_code", "year"])["rel_emi"].sum()
+    sums = monthly_proxy_data.groupby(["state_code", "year"])["annual_rel_emi"].sum()
     # assert that the sums are close to 1
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Check that relative emissions sum to 1.0 each state/year combination
+    # get sums to check normalization
+    sums = monthly_proxy_data.groupby(["state_code", "year_month"])["rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Monthly relative emissions do not sum to 1 for each year and state; {sums}"
 
     # Create GeoDataFrame with geometries from lat & lon
     facility_gdf = (
         gpd.GeoDataFrame(
-            facility_df,
+            monthly_proxy_data,
             geometry=gpd.points_from_xy(
-                facility_df["longitude"],
-                facility_df["latitude"],
+                monthly_proxy_data["longitude"],
+                monthly_proxy_data["latitude"],
                 crs=4326,
             ),
         )
         .drop(columns=["facility_id", "facility_name", "latitude", "longitude", "zip"])
-        .loc[:, ["year", "state_code", "rel_emi", "geometry"]]
+        .loc[:, ["year", "month", "year_month", "state_code", "annual_rel_emi", "rel_emi", "geometry"]]
+        .astype({'year': int})
+        .reset_index(drop=True)
     )
 
     # Save to parquet
