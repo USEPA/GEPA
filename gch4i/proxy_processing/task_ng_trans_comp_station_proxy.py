@@ -140,7 +140,7 @@ def task_get_ng_trans_comp_station_proxy_data(
                                 .rename(columns={"total_reported_ch4_emissions": "ch4_emi", "reporting_year": "year"})
                                 .astype({"facility_id": int, "year": int})
                                 .astype({"facility_id": str})
-                                # Filter for onshore natural gas processing
+                                # Filter for onshore natural gas transmission compression
                                 .query("industry_segment == 'Onshore natural gas transmission compression [98.230(a)(4)]'")
                                 # Grab years of interest
                                 .query("year.between(@min_year, @max_year)")
