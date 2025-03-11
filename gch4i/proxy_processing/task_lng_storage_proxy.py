@@ -24,7 +24,6 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    # global_data_dir_path,
     max_year,
     min_year,
     proxy_data_dir_path,
@@ -38,7 +37,6 @@ from gch4i.utils import us_state_to_abbrev_dict
 @task(id="lng_storage_proxy")
 def get_lng_storage_proxy_data(
     # Inputs
-    LNG_storage_input_folder: Path = sector_data_dir_path / 'lng/annual-liquefied-natural-gas-2010-present/',  # individual files like annual_gas_distribution_2010.xlsx
     LNG_storage_Enverus_inputfile: Path = sector_data_dir_path / 'lng/LNG_Terminals_AllUS_WGS84.xls',
     FracTracker_inputfile: Path = sector_data_dir_path / 'lng/FracTracker_PeakShaving_WGS84.xls',
 
@@ -51,10 +49,14 @@ def get_lng_storage_proxy_data(
     # load facility & location data
     ########################################
 
+    # Points to a dir, not a file. Can't be an argument
+    LNG_storage_input_folder: Path = sector_data_dir_path / 'lng/annual-liquefied-natural-gas-2010-present/'  # individual files like annual_gas_distribution_2010.xlsx
+
     # Load PHMSA LNG storage data. contains facility capacities by year.
     # main proxy data source
     phmsa_dfs = []
-    phmsa_files = list(LNG_storage_input_folder.glob("annual_liquefied_natural_gas_*.xlsx"))
+    phmsa_files = list(
+        LNG_storage_input_folder.glob("annual_liquefied_natural_gas_*.xlsx"))
     # read in all files and append phmsa_dfs
     for file_path in phmsa_files:
         df = pd.read_excel(file_path, sheet_name='LNG AR Part B', skiprows=2)
@@ -279,12 +281,14 @@ def get_lng_storage_proxy_data(
                 break
 
     # QA/QC Check. print total number of unique PHMSA facilities, and number of unique facilities latlon data.
-    unique_phmsa_facilities = (phmsa_df[['FACILITY_NAME', 'PARTA2NAMEOFCOMP', 'FACILITY_STATE', 'FACILITY_ZIP_CODE', 'Lat', 'Lon']]
-                               .sort_values(['FACILITY_STATE', 'FACILITY_STATE',
-                                             'Lat', 'Lon'], ascending=True)
-                               .drop_duplicates(['FACILITY_NAME', 'FACILITY_STATE'],
-                                                keep='first')
-                               .reset_index(drop=True))
+    unique_phmsa_facilities = (
+        phmsa_df[['FACILITY_NAME', 'PARTA2NAMEOFCOMP', 'FACILITY_STATE',
+                  'FACILITY_ZIP_CODE', 'Lat', 'Lon']]
+        .sort_values(['FACILITY_STATE', 'FACILITY_STATE',
+                     'Lat', 'Lon'], ascending=True)
+        .drop_duplicates(['FACILITY_NAME', 'FACILITY_STATE'],
+                         keep='first')
+        .reset_index(drop=True))
 
     unmatched_facilities = unique_phmsa_facilities[unique_phmsa_facilities['Lat'].isna()]
     # print(f"Total number of unique PHMSA facilities: {len(unique_phmsa_facilities)}")
@@ -324,11 +328,11 @@ def get_lng_storage_proxy_data(
                  .filter(lambda x: x['rel_emi'].sum() > 0))
     # normalize to sum to 1
     proxy_gdf['rel_emi'] = (proxy_gdf
-                            .groupby(['year', 'state_code'])['rel_emi']
+                            .groupby(['year'])['rel_emi']
                             .transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
     # get sums to check normalization
     sums = (proxy_gdf
-            .groupby(["state_code", "year"])["rel_emi"].sum())
+            .groupby(["year"])["rel_emi"].sum())
     # assert that the sums are close to 1
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
 
