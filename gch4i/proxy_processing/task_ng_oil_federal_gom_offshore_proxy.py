@@ -138,7 +138,7 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                        )
 
     # Select 2011 data from ERG complex crosswalk
-    ERG_complex_crosswalk_2011 = ERG_complex_crosswalk.copy().query('year == 2011').reset_index(drop=True)
+    ERG_complex_crosswalk_2011 = ERG_complex_crosswalk.copy().astype({'year': int}).query('year == 2011').reset_index(drop=True)
 
     # Join locations, emissions, and complex types together
     federal_gom_offshore_2011 = (GOADS_emissions
@@ -178,10 +178,10 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                                         )
     oil_federal_gom_offshore_2011_gdf = (federal_gom_offshore_2011_gdf
                                          .query("oil_gas_defn == 'Oil'")
-                                        # sum of annual_rel_emi = 1 for each year
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each year-month
-                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         # sum of annual_rel_emi = 1 for each year
+                                         .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         # sum of rel_emi = 1 for each year-month
+                                         .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
                                          .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                          .reset_index(drop=True)
                                          )
@@ -210,7 +210,7 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                        )
 
     # Select 2014 data from ERG complex crosswalk
-    ERG_complex_crosswalk_2014 = ERG_complex_crosswalk.copy().query('year == 2014').reset_index(drop=True)
+    ERG_complex_crosswalk_2014 = ERG_complex_crosswalk.copy().astype({'year': int}).query('year == 2014').reset_index(drop=True)
 
     # Join locations, emissions, and complex types together
     federal_gom_offshore_2014 = (GOADS_emissions
@@ -259,10 +259,10 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                                         )
     oil_federal_gom_offshore_2014_gdf = (federal_gom_offshore_2014_gdf
                                          .query("oil_gas_defn == 'Oil'")
-                                        # sum of annual_rel_emi = 1 for each year
-                                        .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
-                                        # sum of rel_emi = 1 for each year-month
-                                        .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         # sum of annual_rel_emi = 1 for each year
+                                         .assign(annual_rel_emi=lambda df: df.groupby(["year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
+                                         # sum of rel_emi = 1 for each year-month
+                                         .assign(rel_emi=lambda df: df.groupby(["month", "year"])['Emis_tg'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
                                          .drop(columns={'state_code', 'Emis_tg', 'oil_gas_defn'})
                                          .reset_index(drop=True)
                                          )
@@ -291,7 +291,7 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
                        )
 
     # Select 2017 data from ERG complex crosswalk
-    ERG_complex_crosswalk_2017 = ERG_complex_crosswalk.copy().query('year == 2017').reset_index(drop=True)
+    ERG_complex_crosswalk_2017 = ERG_complex_crosswalk.copy().astype({'year': int}).query('year == 2017').reset_index(drop=True)
 
     # Join locations, emissions, and complex types together
     federal_gom_offshore_2017 = (GOADS_emissions
@@ -373,7 +373,7 @@ def task_get_ng_oil_federal_gom_offshore_proxy_data(
             oil_temp_data = (oil_federal_gom_offshore_2014_gdf
                              .copy()
                              .assign(year = iyear)
-                             
+                             .assign(year_month=lambda df: df['year'].astype(str)+'_'+df['month'])                             
                              )
         if data_year == 2017:
             ng_temp_data = (ng_federal_gom_offshore_2017_gdf
