@@ -545,6 +545,10 @@ def create_wastewater_proxy_files(
         # Step 2: Add GHGRP facilities to the "master" ECHO dataframe
         # Some GHGRP data are empty after trying to join the GHGRP emi and facility data and have len == 0. Only look for spatial matches if there is GHGRP data.
         if len(ghgrp_df) != 0:
+            # Check for very extreme outliers in ghgrp and drop them. This specifically targets a facility in ethanol that had over 500 times the IQR and alone had an order of magnitude more emis than the entire country in 2014.
+            iqr = ghgrp_df['emis_kt'].quantile(0.75) - ghgrp_df['emis_kt'].quantile(0.25)
+            ghgrp_df = ghgrp_df[ghgrp_df['emis_kt'] < 500 * iqr].copy()
+
             for idx, echo_row in echo_without_frs.iterrows():
                 for _, ghgrp_row in ghgrp_df.iterrows():
                     dist = np.sqrt((ghgrp_row['latitude'] - echo_row['latitude'])**2 +
@@ -1132,9 +1136,7 @@ def create_wastewater_proxy_files(
     # handle the domestic non septic proxy data
     final_nonseptic = calculate_potw_emissions_proxy(ww_dom_nonseptic_emi, echo_potw, years)
 
-    # %%
-
-    # Step 2.8 Create final proxy dataframes ready for mapping
+    # %% Step 2.8 Create final proxy dataframes ready for mapping
 
     final_pp = create_final_proxy_df(final_pp)
     final_mp = create_final_proxy_df(final_mp)
@@ -1153,3 +1155,5 @@ def create_wastewater_proxy_files(
     final_brew.to_parquet(brew_output_file, index=False)
     final_ref.to_parquet(petrref_output_file, index=False)
     final_nonseptic.to_parquet(nonseptic_output_file, index=False)
+
+# %%
