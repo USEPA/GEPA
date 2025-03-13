@@ -27,6 +27,7 @@ from pyarrow import parquet
 import pandas as pd
 import geopandas as gpd
 import numpy as np
+from shapely.validation import make_valid
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -52,7 +53,7 @@ grassland_output_path = proxy_data_dir_path / "grassland_proxy.parquet"
 
 # %% Pytask function
 @mark.persist
-@task
+@task(id='grassland_proxy')
 def task_grassland_proxy(
     grassland_proxy_path: Path = grassland_proxy_path,
     fccs_fuelbed_path: Path = fccs_fuelbed_path,
@@ -60,7 +61,7 @@ def task_grassland_proxy(
     mtbs_burn_perimeter_path: Path = mtbs_burn_perimeter_path,
     state_path: Path = state_path,
     emi_path: pd.DataFrame = emi_path,
-    output_path: Annotated[Path, Product] = grassland_output_path
+    grassland_output_path: Annotated[Path, Product] = grassland_output_path
     ) -> None:
     """
     This function processes the grassland proxy data and calculates the proxy emissions.
@@ -176,17 +177,17 @@ def task_grassland_proxy(
         unique_states = emi_df['state_code'].unique()
 
         for year in year_range:
-            
-            # Filter total GHGI emissions for the current year
-            year_emi = emi_df[emi_df['year'] == year].copy()  
 
-            # Filter echo_df for the current year
+            # Filter proxy_df for the current year
             year_proxy = proxy_df[proxy_df['year'] == year].copy() 
 
             # Process emissions for each state
             for state in unique_states:
 
-                year_state_proxy = year_proxy[year_proxy['state_code'] == state].copy()  
+                year_state_proxy = year_proxy[year_proxy['state_code'] == state].copy()
+
+                # Filter out MTBS ch4 emissions that are 0 so they can be replaced with a dummy row
+                year_state_proxy = year_state_proxy[year_state_proxy['ch4_mg'] > 0]
 
                 # Create a dummy row for state-years with no proxy data, proportion = 1 for these state-years
                 if len(year_state_proxy) == 0:
@@ -195,7 +196,7 @@ def task_grassland_proxy(
                         'eventID': [f'dummy_{state}_{year}'],
                         'state_code': [state],
                         'year': [year],
-                        'ch4_proportion': [1.0]
+                        'rel_emi': [1.0]
                     })
                     final_proxy_df = pd.concat([final_proxy_df, dummy_row], ignore_index=True)
                     continue
@@ -209,7 +210,7 @@ def task_grassland_proxy(
                 })
                 
                 # Calculate the proportion of the total MTBS proxy emissions for the year-state
-                year_state_proxy.loc[:, 'ch4_proportion'] = (
+                year_state_proxy.loc[:, 'rel_emi'] = (
                     year_state_proxy['ch4_mg'] / 
                     year_state_proxy['ch4_mg'].sum()
                 )       
@@ -272,21 +273,24 @@ def task_grassland_proxy(
     # Only keep states in the lower 48
     grassland_proxy_df = grassland_proxy_df[grassland_proxy_df['state_code'].isin(state_gdf['state_code'])]
 
-    # Drop rows with ch4_proportion = 0
-    grassland_proxy_df = grassland_proxy_df[grassland_proxy_df['ch4_proportion'] > 0]
 
     # %% Step 3 Create the final proxy dataframe
     
-    # Create relative emissions for each state
-    grassland_proxy_df["rel_emi"] = grassland_proxy_df.groupby("state_code")["ch4_proportion"].transform(normalize)
-
     # Check that the relative emissions sum to 1 for each state
-    sums = grassland_proxy_df.groupby(["state_code"])["rel_emi"].sum() #get sums to check normalization
+    sums = grassland_proxy_df.groupby(["state_code", "year"])["rel_emi"].sum() #get sums to check normalization
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
 
     final_grassland_proxy_df = grassland_proxy_df[['state_code', 'year', 'rel_emi', 'geometry']]
 
     final_grassland_proxy_df = gpd.GeoDataFrame(final_grassland_proxy_df, geometry='geometry')
 
-    final_grassland_proxy_df.to_parquet(output_path, index=False)
+    # verify the geometries are valied
+    # Fix invalid geometries
+    final_grassland_proxy_df['geometry'] = final_grassland_proxy_df['geometry'].apply(lambda geom: make_valid(geom) if not geom.is_valid else geom)
+
+    # Verify fix
+    still_invalid = final_grassland_proxy_df[~final_grassland_proxy_df.geometry.is_valid]
+    assert len(still_invalid) == 0, f"Invalid geometries still present in the proxy data: {still_invalid}"
+
+    final_grassland_proxy_df.to_parquet(grassland_output_path, index=False)
 # %%

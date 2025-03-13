@@ -25,6 +25,7 @@ from pyarrow import parquet
 import pandas as pd
 import geopandas as gpd
 import numpy as np
+from shapely.validation import make_valid
 from pytask import Product, task, mark
 
 from gch4i.config import (
@@ -47,11 +48,6 @@ emi_path = emi_data_dir_path / "forest_land_emi.csv"
 forest_land_output_path = proxy_data_dir_path / "forest_land_proxy.parquet"
 
 
-
-# %% pytask
-@mark.persist
-@task
-
 # %% pytask function
 @mark.persist
 @task(id='forest_land_proxy')
@@ -62,7 +58,7 @@ def task_forest_land_proxy_data(
     mtbs_burn_perimeter_path: Path = mtbs_burn_perimeter_path,
     state_path: Path = state_path,
     emi_path: pd.DataFrame = emi_path,
-    output_path: Annotated[Path, Product] = forest_land_output_path
+    forest_land_output_path: Annotated[Path, Product] = forest_land_output_path
     ) -> None:
     """
     This function processes the forest land proxy data and calculates the proxy emissions.
@@ -178,17 +174,17 @@ def task_forest_land_proxy_data(
         unique_states = emi_df['state_code'].unique()
 
         for year in year_range:
-            
-            # Filter total GHGI emissions for the current year
-            year_emi = emi_df[emi_df['year'] == year].copy()  
 
-            # Filter echo_df for the current year
+            # Filter proxy_df for the current year
             year_proxy = proxy_df[proxy_df['year'] == year].copy() 
 
             # Process emissions for each state
             for state in unique_states:
 
-                year_state_proxy = year_proxy[year_proxy['state_code'] == state].copy()  
+                year_state_proxy = year_proxy[year_proxy['state_code'] == state].copy()
+
+                # Filter out MTBS ch4 emissions that are 0 so they can be replaced with a dummy row
+                year_state_proxy = year_state_proxy[year_state_proxy['ch4_mg'] > 0]
 
                 # Create a dummy row for state-years with no proxy data, proportion = 1 for these state-years
                 if len(year_state_proxy) == 0:
@@ -197,7 +193,7 @@ def task_forest_land_proxy_data(
                         'eventID': [f'dummy_{state}_{year}'],
                         'state_code': [state],
                         'year': [year],
-                        'ch4_proportion': [1.0]
+                        'rel_emi': [1.0]
                     })
                     final_proxy_df = pd.concat([final_proxy_df, dummy_row], ignore_index=True)
                     continue
@@ -211,7 +207,7 @@ def task_forest_land_proxy_data(
                 })
                 
                 # Calculate the proportion of the total MTBS proxy emissions for the year-state
-                year_state_proxy.loc[:, 'ch4_proportion'] = (
+                year_state_proxy.loc[:, 'rel_emi'] = (
                     year_state_proxy['ch4_mg'] / 
                     year_state_proxy['ch4_mg'].sum()
                 )       
@@ -251,7 +247,7 @@ def task_forest_land_proxy_data(
     mtbs_burn_perimeters.rename(columns={'Event_ID': 'eventID'}, inplace=True)
     forestland_proxy_df = forestland_proxy_df.merge(mtbs_burn_perimeters, on='eventID', how='left')
 
-    # %% Join the state geometry data for states that are missing geometry
+    # %% Join the state geometry data for states that are missing geometry. This is due to there being no MTBS eventID for that state-year combination to join MTBS geometry on.
     # State-years that have missing gemoetry data will receive the geometry data from the state shapefile and be given a proportion of 1.0.
     # All emis will be equally allocated across the entire state for those state-years
 
@@ -276,22 +272,24 @@ def task_forest_land_proxy_data(
     # Only keep states in the lower 48
     forestland_proxy_df = forestland_proxy_df[forestland_proxy_df['state_code'].isin(state_gdf['state_code'])]
 
-    # Drop rows with ch4_proportion = 0
-    forestland_proxy_df = forestland_proxy_df[forestland_proxy_df['ch4_proportion'] > 0]
-
     # %% Step 3 Create the final proxy dataframe
     
-    # Create relative emissions for each state
-    forestland_proxy_df["rel_emi"] = forestland_proxy_df.groupby("state_code")["ch4_proportion"].transform(normalize)
-
     # Check that the relative emissions sum to 1 for each state
-    sums = forestland_proxy_df.groupby(["state_code"])["rel_emi"].sum() #get sums to check normalization
+    sums = forestland_proxy_df.groupby(["state_code", 'year'])["rel_emi"].sum() #get sums to check normalization
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
 
     final_forestland_proxy_df = forestland_proxy_df[['state_code', 'year', 'rel_emi', 'geometry']]
 
     final_forestland_proxy_df = gpd.GeoDataFrame(final_forestland_proxy_df, geometry='geometry')
 
-    final_forestland_proxy_df.to_parquet(output_path, index=False)
+    # verify the geometries are valied
+    # Fix invalid geometries
+    final_forestland_proxy_df['geometry'] = final_forestland_proxy_df['geometry'].apply(lambda geom: make_valid(geom) if not geom.is_valid else geom)
+
+    # Verify fix
+    still_invalid = final_forestland_proxy_df[~final_forestland_proxy_df.geometry.is_valid]
+    assert len(still_invalid) == 0, f"Invalid geometries still present in the proxy data: {still_invalid}"
+
+    final_forestland_proxy_df.to_parquet(forest_land_output_path, index=False)
 
 # %%
