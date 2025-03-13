@@ -1094,12 +1094,14 @@ all_eq_df = (
 
 
 vals_are_one = all_eq_df["is_close"].all()
+print(all_eq_df)
 print(f"are all state/year norm sums equal to 1? {vals_are_one}")
 if not vals_are_one:
     raise ValueError("not all values are normed correctly!")
 
 # plot. Not hugely informative, but shows the data is there.
 out_ds["road_emissions"].sel(year=2020).plot.imshow()
+plt.show()
 
 
 #%%
@@ -1113,14 +1115,3 @@ out_ds["road_emissions"].round(10).rio.write_crs(ras_crs).to_netcdf(output_path.
 
 #%%
 out = xr.open_dataset(output_path)
-
-#%%
-out
-
-#%%
-
-#%%
-# normalize and validate the data
-# Nick suggested I use the normalization function used with the population proxy
-# https://github.com/USEPA/GEPA/blob/main/gch4i/utils.py#L1274
-# it might be the case that I just send the data through that entire function, `proxy_from_stack`, but the input for that is a .tif path which isn't going to work with my netcdf output.
