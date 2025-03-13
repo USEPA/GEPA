@@ -316,18 +316,7 @@ def get_fbar_proxy_data(
         proxy_gdf = gpd.GeoDataFrame(proxy_gdf, geometry="geometry", crs="EPSG:4326")
 
     ################################################################################
-    # STEP 5. Calculate rel_emi (month level)
-    proxy_gdf = (
-        proxy_gdf
-        .assign(
-            month_sum=lambda x: x.groupby(["month"])["EMCH4_Gg"].transform("sum"),
-            rel_emi=lambda x: x["EMCH4_Gg"] / x["month_sum"]
-        )
-        .drop(columns=["EMCH4_Gg", "month_sum"])
-    )
-
-    ################################################################################
-    # STEP 6. Explode Years & make year_month
+    # STEP 5. Explode Years & make year_month
     proxy_gdf = (
         proxy_gdf.assign(
             year=lambda df: [years for _ in range(df.shape[0])]
@@ -340,8 +329,40 @@ def get_fbar_proxy_data(
         )
         .loc[
             :,
-            ["state_code", "year_month", "year", "month", "annual_rel_emi", "rel_emi", "geometry"]]
+            [
+                "state_code", "year_month", "year", "month", "EMCH4_Gg",
+                "annual_rel_emi", "geometry"]]
     )
+
+    # Drop state_code/year_month combinations with no emissions
+    proxy_gdf = (
+        proxy_gdf.groupby(['state_code', 'year_month'])
+        .filter(lambda x: x['EMCH4_Gg'].sum() > 0)
+    )
+
+    ################################################################################
+    # STEP 6. Calculate rel_emi (month level)
+    proxy_gdf = (
+        proxy_gdf
+        .assign(
+            month_sum=lambda x: x.groupby(["state_code", "year_month"])["EMCH4_Gg"].transform("sum"),
+            rel_emi=lambda x: x["EMCH4_Gg"] / x["month_sum"]
+        )
+        .drop(columns=["EMCH4_Gg", "month_sum"])
+    )
+
+    # Get sums of annual_rel_emi normalization
+    sums = proxy_gdf.groupby(["state_code", "year"])["annual_rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Get sums of rel_emi normalization
+    sums = proxy_gdf.groupby(["state_code", "year_month"])["rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Reset index
+    proxy_gdf = proxy_gdf.reset_index(drop=True)
 
     # Return proxy data
     return proxy_gdf
@@ -435,3 +456,32 @@ def task_get_fbar_other_proxy_data(
     proxy_gdf = get_fbar_proxy_data(filter_condition="other", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
+
+
+########################################################################################
+########################################################################################
+# TESTING
+cotton_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_cotton_proxy.parquet")
+maize_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_maize_proxy.parquet")
+rice_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_rice_proxy.parquet")
+soybean_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_soybeans_proxy.parquet")
+sugarcane_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_sugarcane_proxy.parquet")
+wheat_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_wheat_proxy.parquet")
+other_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_other_proxy.parquet")
+
+# Test proxies
+test_proxy = other_proxy
+
+print(test_proxy.isna().sum())
+print(test_proxy.geom_type.value_counts())
+print("_____________________________________")
+print(test_proxy[~test_proxy["geometry"].is_valid])
+print(test_proxy[test_proxy["geometry"].is_empty])
+
+###########
+# %% Examine Cotton
+
+# Change cotton to spatial
+test_cotton_proxy = cotton_proxy.to_crs("ESRI:102003")
+test_cotton_proxy['area_m2'] = test_cotton_proxy.geometry.area
+
