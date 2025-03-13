@@ -45,6 +45,7 @@ from gch4i.config import (
     V3_DATA_PATH,
     proxy_data_dir_path,
     emi_data_dir_path,
+    sector_data_dir_path,
     min_year,
     years
 )
@@ -71,25 +72,24 @@ frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
 frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
 
 # Brewery df data
-brewery_df_path = proxy_data_dir_path / "wastewater"
-brewery_file = brewery_df_path / "openbrewerydb_geolocated.csv"
+brewery_file = sector_data_dir_path / "industrial_wastewater/openbrewerydb_geolocated.csv"
 
 # ECHO data
-echo_file_directory = proxy_data_dir_path / "wastewater/ECHO"
+echo_file_directory = sector_data_dir_path / "industrial_wastewater/ECHO"
 combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
 
 # GHGRP Data
-ghgrp_emi_ii_inputfile = proxy_data_dir_path / "wastewater/ghgrp_subpart_ii.csv"
-ghgrp_facility_ii_inputfile = proxy_data_dir_path / "wastewater/SubpartII_Facilities.csv"
+ghgrp_emi_ii_inputfile = sector_data_dir_path / "industrial_wastewater/ghgrp_subpart_ii.csv"
+ghgrp_facility_ii_inputfile = sector_data_dir_path / "industrial_wastewater/SubpartII_Facilities.csv"
 
 # Output file paths
-pp_output_file = proxy_data_dir_path / "wastewater/ww_pp_proxy.parquet"
-mp_output_file = proxy_data_dir_path / "wastewater/ww_mp_proxy.parquet"
-fv_output_file = proxy_data_dir_path / "wastewater/ww_fv_proxy.parquet"
-ethanol_output_file = proxy_data_dir_path / "wastewater/ww_ethanol_proxy.parquet"
-brew_output_file = proxy_data_dir_path / "wastewater/ww_brew_proxy.parquet"
-petrref_output_file = proxy_data_dir_path / "wastewater/ww_petrref_proxy.parquet"
-nonseptic_output_file = proxy_data_dir_path / "wastewater/ww_nonseptic_proxy.parquet"
+pp_output_file = proxy_data_dir_path / "ww_pp_proxy.parquet"
+mp_output_file = proxy_data_dir_path / "ww_mp_proxy.parquet"
+fv_output_file = proxy_data_dir_path / "ww_fv_proxy.parquet"
+ethanol_output_file = proxy_data_dir_path / "ww_ethanol_proxy.parquet"
+brew_output_file = proxy_data_dir_path / "ww_brew_proxy.parquet"
+petrref_output_file = proxy_data_dir_path / "ww_petrref_proxy.parquet"
+nonseptic_output_file = proxy_data_dir_path / "ww_nonseptic_proxy.parquet"
 
 # %% Pytask function
 @mark.persist
