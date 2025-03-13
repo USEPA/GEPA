@@ -20,14 +20,15 @@ import numpy as np
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    proxy_data_dir_path
+    proxy_data_dir_path,
+    sector_data_dir_path
 )
 
 from gch4i.utils import (
     normalize
 )
 
-anaerobic_digestion_proxy_path = proxy_data_dir_path / "anaerobic_digestion/AnaerobicDigestionFacilities.xlsx"
+anaerobic_digestion_proxy_path = sector_data_dir_path / "anaerobic_digestion/AnaerobicDigestionFacilities.xlsx"
 anaerobic_digestion_proxy_ouput_path = proxy_data_dir_path / "anaerobic_digestion_proxy.parquet"
 
 # %% pytask
