@@ -29,10 +29,10 @@ missing_emi_rows = []
 missing_proxy_rows = []
 missing_final_data_rows = []
 groups = guide_sheet.gch4i_name.unique()
-
+# %%
 
 def main():
-
+    # %%
     for (
         g
     ) in groups:  # loop through gch4i_names to check for input, emi, and proxy files
@@ -110,33 +110,35 @@ def main():
             {"type": "cell", "criteria": "=", "value": True, "format": format2},
         )
         prog_sheet.autofit()
-        # write missing emi_file dict to the second sheet
-        pd.DataFrame.from_dict(missing_emi_rows).to_excel(
-            writer, index=False, sheet_name="missing_emis"
-        )
-        emi_sheet = writer.sheets["missing_emis"]
-        emi_sheet.conditional_format(
-            f"$A$2:$B${len(missing_emi_rows) + 1}",
-            {"type": "no_blanks", "format": format0},
-        )
-        emi_sheet.autofit()
+        if missing_emi_rows:
+            # write missing emi_file dict to the second sheet
+            pd.DataFrame.from_dict(missing_emi_rows).to_excel(
+                writer, index=False, sheet_name="missing_emis"
+            )
+            emi_sheet = writer.sheets["missing_emis"]
+            emi_sheet.conditional_format(
+                f"$A$2:$B${len(missing_emi_rows) + 1}",
+                {"type": "no_blanks", "format": format0},
+            )
+            emi_sheet.autofit()
         # write missing proxy file dict to the third sheet
-        (
-            pd.DataFrame.from_dict(missing_proxy_rows)
-            .groupby("proxy_not_done")["gch4i_name"]
-            .unique()
-            .apply(lambda x: "; ".join(x))
-            .reset_index()
-            .to_excel(writer, index=False, sheet_name="missing_proxies")
-        )
-        proxy_sheet = writer.sheets["missing_proxies"]
-        proxy_sheet.conditional_format(
-            f"$A$2:$B${len(missing_proxy_rows) + 1}",
-            {"type": "no_blanks", "format": format0},
-        )
-        proxy_sheet.autofit()
+        if missing_proxy_rows:
+            (
+                pd.DataFrame.from_dict(missing_proxy_rows)
+                .groupby("proxy_not_done")["gch4i_name"]
+                .unique()
+                .apply(lambda x: "; ".join(x))
+                .reset_index()
+                .to_excel(writer, index=False, sheet_name="missing_proxies")
+            )
+            proxy_sheet = writer.sheets["missing_proxies"]
+            proxy_sheet.conditional_format(
+                f"$A$2:$B${len(missing_proxy_rows) + 1}",
+                {"type": "no_blanks", "format": format0},
+            )
+            proxy_sheet.autofit()
 
-
+# %%
 if __name__ == "__main__":
     main()
 

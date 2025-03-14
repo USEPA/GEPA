@@ -1,8 +1,10 @@
 import calendar
 import concurrent
+import logging
 import threading
-from pathlib import Path
+import time
 import warnings
+from pathlib import Path
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -17,18 +19,16 @@ import requests
 import rioxarray  # noqa f401
 import seaborn as sns
 import xarray as xr
-import time
 from geocube.api.core import make_geocube
+from geopy.exc import GeocoderServiceError, GeocoderTimedOut
+from geopy.geocoders import Nominatim
+from joblib import Parallel, delayed
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
 from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
-import logging
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 from tqdm.auto import tqdm
-from joblib import Parallel, delayed
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -76,74 +76,53 @@ def normalize_xr(x):
     return x / x.sum()
 
 
-def check_state_year_match(emi_df, proxy_gdf, row, match_cols=["state_code", "year"]):
+def check_state_year_match(emi_df, proxy_gdf, row, geo_col, time_col):
 
     # check if all the proxy state / time columns are in the emissions data
     # NOTE: this check happens again later, but at a siginificant time cost
     # if the data are large. It is here to catch the error early and break
     # the loop with critical message.
+
+    if geo_col is not None:
+        grouper_cols = [geo_col, time_col]
+    else:
+        grouper_cols = [time_col]
+
     proxy_unique = (
-        proxy_gdf[match_cols]
+        proxy_gdf[grouper_cols]
         .drop_duplicates()
         .assign(has_proxy=True)
-        .set_index(match_cols)
+        .set_index(grouper_cols)
     )
     match_check = (
-        emi_df[match_cols]
-        .set_index(match_cols)
+        emi_df[grouper_cols]
+        .set_index(grouper_cols)
         .join(proxy_unique)
         .fillna({"has_proxy": False})
         .sort_values("has_proxy")
         .reset_index()
     )
-    # if row.proxy_has_year_col & row.proxy_has_rel_emi_col:
-
-    #     proxy_unique = proxy_gdf.groupby(match_cols)[row.proxy_rel_emi_col].sum()
-    #     match_check = (
-    #         emi_df.set_index(match_cols)
-    #         .join(proxy_unique, how="left")
-    #         .rename(columns={row.proxy_rel_emi_col: "proxy"})
-    #     )
-    # elif row.proxy_has_year_col & (not row.proxy_has_rel_emi_col):
-    #     proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
-    #     match_check = (
-    #         emi_df.set_index(match_cols)
-    #         .join(proxy_unique, how="left")
-    #         .rename(columns={"geometry": "proxy"})
-    #     )
-    # elif (not row.proxy_has_year_col) & (row.proxy_has_rel_emi_col):
-    #     proxy_unique = proxy_gdf.groupby(["state_code"])[row.proxy_rel_emi_col].sum()
-    #     match_check = (
-    #         emi_df.groupby(["state_code"])["ghgi_ch4_kt"]
-    #         .sum()
-    #         .to_frame()
-    #         .join(proxy_unique, how="left")
-    #         .rename(columns={row.proxy_rel_emi_col: "proxy"})
-    #     )
-    # elif (not row.proxy_has_year_col) & (not row.proxy_has_rel_emi_col):
-
-    #     proxy_unique = proxy_gdf.groupby(match_cols)["geometry"].count().to_frame()
-    #     match_check = (
-    #         emi_df.set_index(match_cols)
-    #         .join(proxy_unique, how="left")
-    #         .rename(columns={"geometry": "proxy"})
-    #     )
-    # else:
-    #     raise ValueError("this should not happen")
 
     if not match_check.has_proxy.all():
-        missing_states = (
-            match_check[match_check["has_proxy"] == False].groupby("state_code").size()
-        )
-        logging.critical(
-            f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
-            "proxy state/year columns do not match emissions\n"
-            "missing states and counts of missing times:\n"
-            # f"{missing_states}\n"
-            f"{missing_states.to_string().replace("\n", "\n\t")}"
-            "\n"
-        )
-
+        if geo_col:
+            missing_states = (
+                match_check[match_check["has_proxy"] == False].groupby(geo_col).size()
+            )
+            logging.critical(
+                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
+                "proxy state/year columns do not match emissions\n"
+                "missing states and counts of missing times:\n"
+                # f"{missing_states}\n"
+                f"{missing_states.to_string().replace("\n", "\n\t")}"
+                "\n"
+            )
+        else:
+            logging.critical(
+                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
+                "proxy time column does not match emissions\n"
+                "missing times:\n"
+                f"{match_check[match_check['has_proxy'] == False][time_col].unique()}"
+            )
         return False, match_check
     else:
         return True, match_check
@@ -289,7 +268,7 @@ def get_cell_gdf() -> gpd.GeoDataFrame:
 
 
 def grid_allocated_emissions(
-    proxy_gdf: gpd.GeoDataFrame, timestep: str = "year"
+    p_df: gpd.GeoDataFrame, timestep: str = "year"
 ) -> dict[str, np.array]:
     """grids allocation of emissions for a proxy"""
 
@@ -299,101 +278,151 @@ def grid_allocated_emissions(
     # disaggregation of the vectors to get the sums to equal during rasterization
     # so we need the cell geodataframe to do that. Only load the cell_gdf if we need
     # to do disaggregation. project to equal are for are calculations
-    if not (proxy_gdf.geometry.type == "Points").all():
-        cell_gdf = get_cell_gdf().to_crs("ESRI:102003")
+    # if not (proxy_gdf.geometry.type == "Points").all():
+    cell_gdf = get_cell_gdf().to_crs("ESRI:102003")
 
     # create a dictionary to hold the rasterized emissions
     ch4_kt_result_rasters = {}
-    for time_var, data in proxy_gdf.groupby(timestep):
+    for time_var, time_data in p_df.groupby(timestep):
+        print(time_var)
+
         # orig_emi_val = data["allocated_ch4_kt"].sum()
         # if we need to disaggregate non-point data. Maybe extra, but this accounts for
         # potential edge cases where the data change from year to year.
-        if not (data.geometry.type == "Points").all():
+
+        if not (time_data.geometry.type == "Points").all():
             data_to_concat = []
-
-            # get the point data
-            point_data = data.loc[
-                (data.type == "Point"),
-                ["geometry", "allocated_ch4_kt"],
-            ]
-            data_to_concat.append(point_data)
-
-            # get the non-point data
-            # if the data are lines, compute the relative length within each cell
-            if data.type.str.contains("Line").any():
-                line_data = (
-                    (
-                        data.loc[
-                            data.type.str.contains("Line"),
-                            ["geometry", "allocated_ch4_kt"],
-                        ]
+            for geom_type, geom_data in time_data.groupby(time_data.geom_type):
+                print(geom_type)
+                # regular points can just be passed on "as is"
+                if geom_type == "Point":
+                    # get the point data
+                    print("doing point data")
+                    point_data = geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
+                    print(point_data.is_empty.any())
+                    data_to_concat.append(point_data)
+                # if we have multipoint data, we need to disaggregate the emissions
+                # across the individual points and align them with the cells
+                elif geom_type == "MultiPoint":
+                    print("doing multipoint data")
+                    # ref_val = geom_data["allocated_ch4_kt"].sum()
+                    multi_point_data = (
+                        geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
+                        .to_crs("ESRI:102003")
+                        .explode(index_parts=True)
+                        .reset_index()
+                        .assign(
+                            allocated_ch4_kt=lambda df: df.groupby("level_0")[
+                                "allocated_ch4_kt"
+                            ].transform(lambda x: x / len(x)),
+                        )
+                        .overlay(cell_gdf)
+                        .reset_index()
+                        .assign(
+                            geometry=lambda df: df.centroid,
+                        )
+                        .groupby("index")
+                        .agg({"allocated_ch4_kt": "sum", "geometry": "first"})
+                    )
+                    multi_point_data = gpd.GeoDataFrame(
+                        multi_point_data, geometry="geometry", crs="ESRI:102003"
+                    ).to_crs(4326)
+                    # print(ref_val)
+                    # print(multi_point_data["allocated_ch4_kt"].sum())
+                    print(f" any empty data: {multi_point_data.is_empty.any()}")
+                    data_to_concat.append(multi_point_data)
+                # if the data are any kind of lines, compute the relative length within
+                # each cell
+                elif "Line" in geom_type:
+                    print("doing line data")
+                    line_data = (
+                        geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
                         # project to equal area for area calculations
                         .to_crs("ESRI:102003")
                         # calculate the original proxy length
                         .assign(orig_len=lambda df: df.length)
+                        # overlay the proxy with the cells, this results in splitting the
+                        # original proxies across any intersecting cells
+                        .overlay(cell_gdf)
+                        # # calculate the now partial proxy length, then divide the partial
+                        # # proxy by the original proxy and multiply by the original
+                        # # allocated emissions to the get the partial/disaggregated new emis.
+                        .assign(
+                            len=lambda df: df.length,
+                            allocated_ch4_kt=lambda df: (df["len"] / df["orig_len"])
+                            * df["allocated_ch4_kt"],
+                            #     # make this new shape a point, that fits nicely inside the cell
+                            #     # and we don't have to worry about boundary/edge issues with
+                            #     # polygon / cell alignment
+                            geometry=lambda df: df.centroid,
+                        )
+                        # back to 4326 for rasterization
+                        .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
                     )
-                    # overlay the proxy with the cells, this results in splitting the
-                    # original proxies across any intersecting cells
-                    .overlay(cell_gdf)
-                    # calculate the now partial proxy length, then divide the partial
-                    # proxy by the original proxy and multiply by the original
-                    # allocated emissions to the get the partial/disaggregated new emis.
-                    .assign(
-                        len=lambda df: df.length,
-                        allocated_ch4_kt=lambda df: (df["len"] / df["orig_len"])
-                        * df["allocated_ch4_kt"],
-                        # make this new shape a point, that fits nicely inside the cell
-                        # and we don't have to worry about boundary/edge issues with
-                        # polygon / cell alignment
-                        geometry=lambda df: df.centroid,
-                    )
-                    # back to 4326 for rasterization
-                    .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
-                )
-                data_to_concat.append(line_data)
-
-            # if the data are polygons, compute the relative area in each cell
-            if data.type.str.contains("Polygon").any():
-                polygon_data = (
-                    (
-                        data.loc[
-                            data.type.str.contains("Polygon"),
-                            ["geometry", "allocated_ch4_kt"],
-                        ]
+                    print(f" any empty data: {line_data.is_empty.any()}")
+                    data_to_concat.append(line_data)
+                # if the data are any kind of  polygons, compute the relative area in
+                # each cell
+                elif "Polygon" in geom_type:
+                    print("doing polygon data")
+                    polygon_data = (
+                        geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
                         # project to equal area for area calculations
                         .to_crs("ESRI:102003")
                         # calculate the original proxy area
                         .assign(orig_area=lambda df: df.area)
+                        # overlay the proxy with the cells, this results in splitting the
+                        # original proxies across any intersecting cells
+                        .overlay(cell_gdf)
+                        # calculate the now partial proxy area, then divide the partial
+                        # proxy by the original proxy and multiply by the original
+                        # allocated emissions to the get the partial/disaggregated new emis.
+                        .assign(
+                            area=lambda df: df.area,
+                            allocated_ch4_kt=lambda df: (df["area"] / df["orig_area"])
+                            * df["allocated_ch4_kt"],
+                            # make this new shape a point, that fits nicely inside the cell
+                            # and we don't have to worry about boundary/edge issues with
+                            # polygon / cell alignment
+                            geometry=lambda df: df.centroid,
+                        )
+                        # back to 4326 for rasterization
+                        .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
                     )
-                    # overlay the proxy with the cells, this results in splitting the
-                    # original proxies across any intersecting cells
-                    .overlay(cell_gdf)
-                    # calculate the now partial proxy area, then divide the partial
-                    # proxy by the original proxy and multiply by the original
-                    # allocated emissions to the get the partial/disaggregated new emis.
-                    .assign(
-                        area=lambda df: df.area,
-                        allocated_ch4_kt=lambda df: (df["area"] / df["orig_area"])
-                        * df["allocated_ch4_kt"],
-                        # make this new shape a point, that fits nicely inside the cell
-                        # and we don't have to worry about boundary/edge issues with
-                        # polygon / cell alignment
-                        geometry=lambda df: df.centroid,
-                    )
-                    # back to 4326 for rasterization
-                    .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
-                )
-                data_to_concat.append(polygon_data)
+                    # print(polygon_data["allocated_ch4_kt"].sum())
+                    print(f" any empty data: {polygon_data.is_empty.any()}")
+                    data_to_concat.append(polygon_data)
+                else:
+                    raise ValueError("I don't support that geometry type. Need to fix")
             # concat the data back together
-            data = pd.concat(data_to_concat)
+            ready_data = pd.concat(data_to_concat)
+        else:
+            ready_data = time_data.loc[:, ["geometry", "allocated_ch4_kt"]]
 
-        # new_emi_val = data["allocated_ch4_kt"].sum()
+        # Check for empty or invalid geometries
+        invalid_geometries = ready_data[
+            ready_data.geometry.is_empty | ~ready_data.geometry.is_valid
+        ]
+
+        if not invalid_geometries.empty:
+            logging.warning(
+                f"Found {invalid_geometries.shape[0]} invalid or empty geometries with a total allocated_ch4_kt of "
+                f"{invalid_geometries['allocated_ch4_kt'].sum()}"
+            )
+            # Drop invalid or empty geometries
+            ready_data = ready_data[
+                ~(ready_data.geometry.is_empty | ~ready_data.geometry.is_valid)
+            ]
+
+        print("compare pre and post processing sums:")
+        print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
+        print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
 
         # now rasterize the emissions and sum within cells
         ch4_kt_raster = rasterize(
             shapes=[
                 (shape, value)
-                for shape, value in data[["geometry", "allocated_ch4_kt"]].values
+                for shape, value in ready_data[["geometry", "allocated_ch4_kt"]].values
             ],
             out_shape=gepa_profile.arr_shape,
             fill=0,
@@ -402,9 +431,6 @@ def grid_allocated_emissions(
             merge_alg=rasterio.enums.MergeAlg.add,
         )
         ch4_kt_result_rasters[time_var] = ch4_kt_raster
-        # QC print values during gridding.
-        # print(f"orig emi val: {orig_emi_val}, new emi val: {new_emi_val}")
-        # print(f"raster emi val: {ch4_kt_raster.sum()}")
 
     time_var = list(ch4_kt_result_rasters.keys())
     arr_stack = np.stack(list(ch4_kt_result_rasters.values()), axis=0)
@@ -460,33 +486,42 @@ def calculate_flux(
 
 
 def QC_proxy_allocation(
-    proxy_df, emi_df, row, match_cols, plot=True, plot_path=None
+    proxy_df, emi_df, row, geo_col, time_col, plot=True, plot_path=None
 ) -> pd.DataFrame:
     """take proxy emi allocations and check against state inventory"""
     # logging.info("checking proxy emission allocation by state / year.")
 
-    if len(match_cols) == 1:
-        geo_col = None
-        time_col = "year"
-    elif len(match_cols) == 2:
-        geo_col = match_cols[0]
-        time_col = match_cols[1]
-    emi_sums = emi_df.groupby(match_cols)["ghgi_ch4_kt"].sum().reset_index()
+    if geo_col is not None:
+        grouper_cols = [geo_col, time_col]
+    else:
+        grouper_cols = [time_col]
 
+    emi_sums = emi_df.groupby(grouper_cols)["ghgi_ch4_kt"].sum().reset_index()
+
+    relative_tolerance = 0.0001
     sum_check = (
-        proxy_df.groupby(match_cols)["allocated_ch4_kt"]
+        proxy_df.groupby(grouper_cols)["allocated_ch4_kt"]
         .sum()
         .reset_index()
-        .merge(emi_sums, on=match_cols, how="outer")
+        .merge(emi_sums, on=grouper_cols, how="outer")
         .assign(
-            isclose=lambda df: df.apply(
-                lambda x: np.isclose(x["allocated_ch4_kt"], x["ghgi_ch4_kt"]), axis=1
-            )
+            isclose=lambda df: np.isclose(df["allocated_ch4_kt"], df["ghgi_ch4_kt"]),
+            diff=lambda df: np.abs(df["allocated_ch4_kt"] - df["ghgi_ch4_kt"])
+            / ((df["allocated_ch4_kt"] + df["ghgi_ch4_kt"]) / 2),
+            qc_pass=lambda df: (df["diff"] < relative_tolerance),
         )
     )
 
-    all_equal = sum_check["isclose"].all()
-    if all_equal:
+    # in the cases where the difference is NaN (where the inventory emission value is 0
+    # and the allocated value is 0), we fall back on numpy isclose to define
+    # if the value is close enough to pass
+    sum_check["qc_pass"] = sum_check["isclose"].where(
+        sum_check["diff"].isna(), sum_check["qc_pass"]
+    )
+
+    all_pass = sum_check.qc_pass.all()
+
+    if all_pass:
         logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
     else:
         logging.critical(f"QC FAIL: {row.emi_id}, {row.proxy_id}. allocation failed.")
@@ -512,7 +547,7 @@ def QC_proxy_allocation(
                 f"QC FAIL: {row.emi_id}, {row.proxy_id}. annual allocation failed."
             )
 
-    if plot and all_equal and geo_col and time_col:
+    if plot and all_pass and geo_col and time_col:
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
         fig.suptitle("compare inventory to allocated emissions by state")
@@ -539,7 +574,7 @@ def QC_proxy_allocation(
         axs[1].set(title="inventory emissions")
         plt.savefig(plot_path, dpi=300)
         plt.close()
-    elif plot and all_equal and time_col and not geo_col:
+    elif plot and all_pass and time_col and not geo_col:
         fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
         fig.suptitle("compare inventory to allocated emissions by state")
@@ -547,8 +582,6 @@ def QC_proxy_allocation(
             data=sum_check,
             x=time_col,
             y="allocated_ch4_kt",
-            # hue=geo_col,
-            palette="tab20",
             legend=False,
             ax=axs[0],
         )
@@ -558,8 +591,6 @@ def QC_proxy_allocation(
             data=sum_check,
             x=time_col,
             y="ghgi_ch4_kt",
-            # hue=geo_col,
-            palette="tab20",
             legend=False,
             ax=axs[1],
         )
@@ -567,7 +598,7 @@ def QC_proxy_allocation(
         plt.savefig(plot_path, dpi=300)
         plt.close()
 
-    return all_equal, sum_check
+    return all_pass, sum_check
 
 
 def QC_emi_raster_sums(
@@ -585,12 +616,24 @@ def QC_emi_raster_sums(
 
     emi_sum_check = emi_df.groupby(timestep)["ghgi_ch4_kt"].sum().to_frame()
 
+    # The relative tolerance is the maximum allowable difference between the two values
+    # as a fraction of the average of the two values. It is used to determine if
+    # the two values are close enough to be considered equal.
+    # The default value is 1e-5, which means that the two values must be within 0.01%
+    # of each other to be considered equal.
     relative_tolerance = 0.0001
     sum_check = emi_sum_check.join(proxy_sum_check).assign(
         isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"]),
-        diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["ghgi_ch4_kt"])
-        / ((df["ghgi_ch4_kt"] + df["ghgi_ch4_kt"]) / 2),
-        qc_pass=lambda df: df["diff"] < relative_tolerance,
+        diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["results"])
+        / ((df["ghgi_ch4_kt"] + df["results"]) / 2),
+        qc_pass=lambda df: (df["diff"] < relative_tolerance),
+    )
+
+    # in the cases where the difference is NaN (where the inventory emission value is 0
+    # and the allocated value is 0), we fall back on numpy isclose to define
+    # if the value is close enough to pass
+    sum_check["qc_pass"] = sum_check["isclose"].where(
+        sum_check["diff"].isna(), sum_check["qc_pass"]
     )
 
     all_pass = sum_check.qc_pass.all()
@@ -654,6 +697,9 @@ def write_tif_output(in_ds: xr.Dataset, dst_path: Path, resolution=0.1) -> None:
 
     gepa_profile = GEPA_spatial_profile(resolution)
 
+    # one last final check that the coordinates are written out correctly
+    in_ds = in_ds.assign_coords({"x": gepa_profile.x, "y": gepa_profile.y})
+
     in_ds.rio.write_crs(gepa_profile.profile["crs"]).rio.write_transform(
         gepa_profile.profile["transform"]
     ).rio.to_raster(dst_path)
@@ -690,12 +736,13 @@ def write_ncdf_output(
     # if resolution:
     #     pass
 
-    profile = GEPA_spatial_profile(resolution)
+    gepa_profile = GEPA_spatial_profile(resolution)
     min_year = np.min(in_da.time.values)
     max_year = np.max(in_da.time.values)
 
     data_xr = (
         in_da.rename({"y": "lat", "x": "lon"})
+        .assign_coords({"lat": gepa_profile.y, "lon": gepa_profile.x})
         .rio.set_attrs(
             {
                 "title": title,
@@ -704,12 +751,9 @@ def write_ncdf_output(
                 "units": units,
             }
         )
-        .rio.write_crs(profile.profile["crs"])
-        .rio.write_transform(profile.profile["transform"])
+        .rio.write_crs(gepa_profile.profile["crs"])
+        .rio.write_transform(gepa_profile.profile["transform"])
         .rio.set_spatial_dims(x_dim="lon", y_dim="lat")
-        # I think this only write out the year names in a separate table. Doesn't
-        # seem useful.
-        # .rio.write_coordinate_system()
         .rio.write_nodata(0.0, encoded=True)
     )
     data_xr.to_netcdf(dst_path.with_suffix(".nc"))
@@ -1694,7 +1738,7 @@ def create_final_proxy_df(proxy_df):
     return proxy_gdf
 
 
-def scale_emi_to_month(proxy_gdf, emi_df, row):
+def scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col):
     """
     Function to scale the emissions data to a monthly basis
     Parameters:
@@ -1707,29 +1751,31 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
     # calculate the relative MONTHLY proxy emissions
     logging.info("Calculating monthly scaling factors for emissions data")
 
+    if geo_col is not None:
+        grouper_cols = [geo_col, time_col]
+        annual_norm = [geo_col, "year"]
+    else:
+        grouper_cols = [time_col]
+        annual_norm = ["year"]
+
     monthly_scaling = (
-        proxy_gdf.assign(
-            year_month=lambda df: pd.to_datetime(
-                df[["year", "month"]].assign(DAY=1)
-            ).dt.strftime("%Y-%m"),
-        )
-        .groupby(["state_code", "year_month"])["annual_rel_emi"]
+        proxy_gdf.groupby(grouper_cols)["annual_rel_emi"]
         .sum()
         .rename("month_scale")
         .reset_index()
         .assign(
             year=lambda df: df["year_month"].str.split("-").str[0],
-            month_normed=lambda df: df.groupby(["state_code", "year"])[
-                "month_scale"
-            ].transform(normalize),
+            month_normed=lambda df: df.groupby(annual_norm)["month_scale"].transform(
+                normalize
+            ),
         )
         .drop(columns=["month_scale", "year"])
-        .set_index(["state_code", "year_month"])
+        .set_index(grouper_cols)
     )
     monthly_scaling
 
     tmp_df = (
-        emi_df.sort_values(["state_code", "year"])
+        emi_df.sort_values(annual_norm)
         .assign(month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])])
         .explode("month")
         .reset_index(drop=True)
@@ -1738,25 +1784,26 @@ def scale_emi_to_month(proxy_gdf, emi_df, row):
                 df[["year", "month"]].assign(DAY=1)
             ).dt.strftime("%Y-%m"),
         )
-        .set_index(["state_code", "year_month"])
+        .set_index(grouper_cols)
         .join(
             monthly_scaling,
-            how="right",
+            how="left",
         )
         .assign(
             ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * df["month_normed"],
         )
         .drop(columns=["month_normed"])
         .reset_index()
+        .dropna(subset=["ghgi_ch4_kt"])
     )
     tmp_df
 
     month_check = (
-        tmp_df.groupby(["state_code", "year"])["ghgi_ch4_kt"]
+        tmp_df.groupby(annual_norm)["ghgi_ch4_kt"]
         .sum()
         .rename("month_check")
         .to_frame()
-        .join(emi_df.set_index(["state_code", "year"]))
+        .join(emi_df.set_index(annual_norm))
         .assign(
             isclose=lambda df: df.apply(
                 lambda x: np.isclose(x["month_check"], x["ghgi_ch4_kt"]), axis=1
@@ -1797,7 +1844,7 @@ def make_emi_grid(emi_df, admin_gdf, time_col):
     # that dimension.
     # NOTE: this is kind of slow.
 
-    def emi_rasterize(e_df, adm_gdf, out_shape, transform):
+    def emi_rasterize(e_df, adm_gdf, out_shape, transform, year):
         emi_gdf = adm_gdf.merge(e_df, on="fips")
         emi_raster = rasterize(
             [
@@ -1809,21 +1856,33 @@ def make_emi_grid(emi_df, admin_gdf, time_col):
             fill=0,
             dtype="float32",
         )
-        return emi_raster
+        return year, emi_raster
 
     parallel = Parallel(n_jobs=-1, return_as="generator")
     emi_gen = parallel(
-        delayed(emi_rasterize)(emi_time_df, admin_gdf, out_shape, transform)
-        for _, emi_time_df in emi_df.groupby(time_col)
+        delayed(emi_rasterize)(emi_time_df, admin_gdf, out_shape, transform, year)
+        for year, emi_time_df in emi_df.groupby(time_col)
     )
 
     emi_rasters = []
-    for raster in tqdm(
+    emi_years = []
+    for year, raster in tqdm(
         emi_gen,
         total=time_total,
         desc="making emi grids",
     ):
         emi_rasters.append(raster)
+        emi_years.append(year)
+
+    emi_rasters_3d = np.stack(emi_rasters, axis=0)
+    # flip the y axis as xarray expects
+    emi_rasters_3d = np.flip(emi_rasters_3d, axis=1)
+
+    emi_rasters = xr.DataArray(
+        emi_rasters_3d,
+        dims=[time_col, "y", "x"],
+        coords={time_col: emi_years, "y": gepa_profile.y, "x": gepa_profile.x},
+    )
 
     # for timestep, emi_time_df in tqdm(
     #     emi_df.groupby(time_col),
@@ -1845,57 +1904,83 @@ def make_emi_grid(emi_df, admin_gdf, time_col):
     #     emi_rasters.append(emi_raster)
     # Stack the emi_raster objects into a 3D array
     # put the time axis at the end as xarray expects
-    emi_rasters_3d = np.stack(emi_rasters, axis=0)
-    # flip the y axis as xarray expects
-    emi_rasters_3d = np.flip(emi_rasters_3d, axis=1)
-    return emi_rasters_3d
+
+    return emi_rasters
 
 
-def fill_missing_year_months(proxy_ds):
+def fill_missing_year_months(proxy_ds, time_col):
     # Ensure proxy_ds has all year_months in the range 2012-2022
     # in cases where we have expanded the annual emissions to match a monthly proxy,
     # we need to ensure that if the proxy is missing any months, we assume there are
     # no emissions, but we still need a layer representing 0 in that month.
     # this will fill in any missign years
-    all_year_months = pd.date_range(
-        start=f"{min(years)}-01", end=f"{max(years)}-12", freq="ME"
-    ).strftime("%Y-%m")
+    if time_col == "year":
+        proxy_year_month = proxy_ds["year"].values
+        all_year_months = years
+    elif time_col == "year_month":
+        all_year_months = pd.date_range(
+            start=f"{min(years)}-01", end=f"{max(years)}-12-31", freq="ME"
+        ).strftime("%Y-%m")
 
-    if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
-        proxy_year_month = proxy_ds.indexes["year_month"].map(
-            lambda x: f"{x[0]}-{x[1]:02d}"
-        )
-    else:
-        proxy_year_month = proxy_ds["year_month"].values
+        if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
+            proxy_year_month = proxy_ds.indexes["year_month"].map(
+                lambda x: f"{x[0]}-{x[1]:02d}"
+            )
+        else:
+            proxy_year_month = proxy_ds["year_month"].values
 
     missing_year_months = set(all_year_months) - set(proxy_year_month)
 
     if missing_year_months:
         logging.info(f"Filling missing year_months: {missing_year_months}")
         empty_array = np.zeros_like(proxy_ds["results"].isel(year_month=0).values)
-        for year_month in missing_year_months:
-            year, month = map(int, year_month.split("-"))
-            if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
-                fill_value = (year, month)
-            else:
-                fill_value = year_month
-            
-            missing_da = xr.Dataset(
-                {"results": (["y", "x"], empty_array)},
-                coords={
-                    "year_month": [fill_value],
-                    "year": year,
-                    "month": month,
-                    "y": proxy_ds["y"],
-                    "x": proxy_ds["x"],
-                },
-            )
-            proxy_ds = xr.concat(
-                [
-                    proxy_ds,
-                    missing_da,
-                ],
-                dim="year_month",
-            )
-        proxy_ds = proxy_ds.sortby("year_month")
+        if time_col == "year":
+            for year in missing_year_months:
+                if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
+                    fill_value = (year, 1)
+                else:
+                    fill_value = year
+                missing_da = xr.Dataset(
+                    {"results": (["y", "x"], empty_array)},
+                    coords={
+                        "year_month": [fill_value],
+                        "year": year,
+                        "y": proxy_ds["y"],
+                        "x": proxy_ds["x"],
+                    },
+                )
+                proxy_ds = xr.concat(
+                    [
+                        proxy_ds,
+                        missing_da,
+                    ],
+                    dim="year_month",
+                )
+            proxy_ds = proxy_ds.sortby("year")
+        elif time_col == "year_month":
+            for year_month in missing_year_months:
+                year, month = map(int, year_month.split("-"))
+                if isinstance(proxy_ds.indexes["year_month"], pd.MultiIndex):
+                    fill_value = (year, month)
+                else:
+                    fill_value = year_month
+
+                missing_da = xr.Dataset(
+                    {"results": (["y", "x"], empty_array)},
+                    coords={
+                        "year_month": [fill_value],
+                        "year": year,
+                        "month": month,
+                        "y": proxy_ds["y"],
+                        "x": proxy_ds["x"],
+                    },
+                )
+                proxy_ds = xr.concat(
+                    [
+                        proxy_ds,
+                        missing_da,
+                    ],
+                    dim="year_month",
+                )
+            proxy_ds = proxy_ds.sortby("year_month")
     return proxy_ds
