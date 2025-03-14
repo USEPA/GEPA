@@ -1089,7 +1089,7 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
                 # difference flux raster
                 yearly_dif = v3_arr - v2_data_dict[year]
                 # v2 flux raster sum
-                v2_sum = np.nansum(v2_data)
+                v2_sum = np.nansum(v2_data_dict[year])
                 # v3 flux raster sum
                 v3_sum = np.nansum(v3_arr)
                 # percent difference between v2 and v3
