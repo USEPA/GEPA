@@ -1105,7 +1105,7 @@ plt.show()
 
 
 #%%
-output_path = proxy_data_dir_path / "road_proxy.nc"
+output_path = proxy_data_dir_path / "roads_proxy.nc"
 out_ds["road_emissions"].transpose("year", "y", "x").round(10).rio.write_crs(
     ras_crs
 ).to_netcdf(output_path)
