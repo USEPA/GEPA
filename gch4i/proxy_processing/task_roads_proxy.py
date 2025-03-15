@@ -968,8 +968,9 @@ print(cells_proxy.notna().sum())
 
 # Extract latitude and longitude from the geometry column
 print(f'Getting centroids: {datetime.now()}')
-cells_proxy['y'] = cells_proxy['geometry'].apply(lambda geom: geom.exterior.coords.xy[1][0]) - 0.05
-cells_proxy['x'] = cells_proxy['geometry'].apply(lambda geom: geom.exterior.coords.xy[0][0]) + 0.05
+cells_proxy['y'] = cells_proxy['geometry'].apply(lambda geom: geom.exterior.coords.xy[1][0]) - 0.1
+cells_proxy['x'] = cells_proxy['geometry'].apply(lambda geom: geom.exterior.coords.xy[0][0]) + 0.1
+
 
 # sort by latitude first, then longitude
 # this will create a grid that is ordered by longitude, with the first row being the lowest latitude
