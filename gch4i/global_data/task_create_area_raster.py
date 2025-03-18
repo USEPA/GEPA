@@ -25,8 +25,11 @@ def _create_params(resolution_list):
 
 
 _ID_TO_KWARGS = _create_params([0.1, 0.01])
-# _ID_TO_KWARGS = _create_params([0.1])
-_ID_TO_KWARGS
+
+
+
+resolution, output_path = _ID_TO_KWARGS["001"].values()
+# resolution, output_path = _ID_TO_KWARGS["01"].values()
 # %%
 for _id, kwargs in _ID_TO_KWARGS.items():
 
