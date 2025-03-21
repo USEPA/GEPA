@@ -59,12 +59,6 @@ GWP_CH4 = 25
 # def reverse_flux_calculation():
 #     pass
 
-
-# TODO: write state / year inventory to GRID allocation, probably using geocube
-# EEM: question - for sources where we go from the state down to the grid-level, will
-# we still have this calculation step, or will we go straight to the rasterize step?
-
-
 # define a function to normalize the population data by state and year
 def normalize(x):
     return x / x.sum() if x.sum() > 0 else 0
@@ -663,28 +657,6 @@ def combine_gridded_emissions(da_list: list[xr.DataArray]) -> xr.DataArray:
         return da_list[0]
     else:
         return xr.concat(da_list, dim="time").sum(dim=["x", "y"])
-
-
-# def combine_gridded_emissions(
-#     input_list: list[dict[str, np.array]]
-# ) -> dict[str, np.array]:
-#     """takes a dictionary of year/array pair and sums the arrays by year
-
-#     input:
-#         -   list of dictionaries with key/value pairs of year and 2D arrays
-#     output:
-#         -   dictionary of year/2D array summation of emissions by year.
-
-#     """
-#     stack_list = []
-#     for x in input_list:
-#         stack = np.stack(list(x.values()))
-#         stack_list.append(stack)
-#     out_sum_stack = np.sum(np.stack(stack_list), axis=0)
-#     out_dict = {}
-#     for i, year in enumerate(input_list[0].keys()):
-#         out_dict[year] = out_sum_stack[i, :, :]
-#     return out_dict
 
 
 def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
