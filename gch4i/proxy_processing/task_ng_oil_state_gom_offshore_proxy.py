@@ -1,3 +1,20 @@
+"""
+Name:                   task_ng_oil_state_gom_offshore_proxy.py
+Date Last Modified:     2025-03-21
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas and oil state GOM and federal pacific proxies.
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx"
+                        Enverus Prism: sector_data_dir_path / "enverus/production/prism_monthly_wells_offshore_{iyear}.xlsx"
+                        Oil State GOM GHGI Emissions: emi_data_dir_path / "oil_gom_state_emi.csv"
+                        Oil Federal Pacific States GHGI Emissions: emi_data_dir_path / "oil_pac_federal_state_emi.csv"
+                        NG Transmission Offshore Emissions: emi_data_dir_path / "trans_offshore_emi.csv"
+                        NG State GOM GHGI Emissions: emi_data_dir_path / "state_gom_offshore_emi.csv"
+Output Files:           proxy_data_dir_path / "oil_state_gom_offshore_well_count_proxy.parquet"
+                        proxy_data_dir_path / "oil_pac_fed_state_proxy.parquet"
+                        proxy_data_dir_path / "ng_state_gom_offshore_well_count_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 import os
@@ -64,7 +81,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
     )
 
     # Well and Production Data (from Enverus)
-    # Read In and Format DI data
+    # Read In and Format Prism data
     # 1. Read Data
     # 2. Drop unused columns, rename columns
     # 3. Calculate annual cummulate production totals

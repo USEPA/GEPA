@@ -3,9 +3,12 @@ Name:                   task_enverus_di_prism_data_processing.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Processes and cleans the Enverus DI and Prism data stored on
-                            disk and read into natural gas and petroleum proxies.
-Input Files:            -
-Output Files:           -
+                            disk and read into natural gas and petroleum proxies. This
+                            script should be run before any other proxies are created.
+Input Files:            Enverus DI: sector_data_dir_path / "enverus/production/didsk_monthly_{iyear}.csv"
+                        Enverus Prism: sector_data_dir_path / "enverus/production/prism_monthly_{iyear}.csv"
+                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx"
+Output Files:           Formatted and Corrected Enverus DI and Prism Data: sector_data_dir_path / "enverus/production/intermediate_outputs/formatted_raw_enverus_tempoutput_{iyear}.csv"
 """
 
 # %% Import Libraries

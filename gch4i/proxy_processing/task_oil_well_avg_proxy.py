@@ -1,3 +1,12 @@
+"""
+Name:                   task_oil_well_avg_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of oil well average proxy emissions.
+Input Files:            Oil All Well Production Proxy: proxy_data_dir_path / "oil_all_well_prod_proxy.parquet"
+Output Files:           proxy_data_dir_path / proxy_data_dir_path / "oil_well_avg_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated

@@ -1,3 +1,12 @@
+"""
+Name:                   task_ng_well_blowout_proxy.py
+Date Last Modified:     2025-01-30
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas well blowout proxy emissions
+Input Files:            None
+Output Files:           proxy_data_dir_path / "ng_well_blowout_proxy.parquet"
+"""
+
 # %%
 import calendar
 import datetime
@@ -41,7 +50,10 @@ def task_get_ng_well_blowout_proxy_data(
            state_code: OH; year: 2018; emi: 60 kt; lat: 39.864; lon: -80.861
         3. TX 2019
            state_code: TX; year: 2019; emi: 4.8 kt; lat: 28.9; lon: -97.6
-    
+           
+    Well blowout emissions are uniformly assigned across the months in the year. In
+    the next update, check with the inventory team to see if they have a specific
+    month the blowouts occurred (v2 only had years).
     """
 
     well_blowout_df = pd.DataFrame(

@@ -2,7 +2,7 @@
 Name:                   task_ng_gb_stations_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
-Purpose:                Mapping of natural gas proxies.
+Purpose:                Mapping of natural gas gathering and boosting stations.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
                         Enverus Midstream: sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb"
 Output Files:           proxy_data_dir_path / "ng_gb_stations_proxy.parquet"

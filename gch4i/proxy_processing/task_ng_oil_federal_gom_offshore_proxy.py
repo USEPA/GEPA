@@ -1,3 +1,19 @@
+"""
+Name:                   task_ng_oil_federal_gom_offshore_proxy.py
+Date Last Modified:     2025-03-21
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas and oil federal GOM proxies.
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        2011 BOEM GOADS: sector_data_dir_path / "boem" / "2011_Gulfwide_Platform_Inventory.accdb"
+                        2014 BOEM GOADS: sector_data_dir_path / "boem" / "2014_Gulfwide_Platform_Inventory.accdb"
+                        2017 BOEM GOADS: sector_data_dir_path / "boem" / "2017_Gulfwide_Platform_Inventory.accdb"
+                        BOEM GOADS Oil vs. Gas: sector_data_dir_path / "boem" / "BOEM GEI Emissions Data_EmissionSource_2020-03-11.xlsx"
+                        NG Emissions: emi_data_dir_path / "federal_gom_offshore_emi.csv"
+                        Oil Emissions: emi_data_dir_path / "oil_gom_federal_emi.csv",
+Output Files:           proxy_data_dir_path / "ng_federal_gom_offshore_proxy.parquet"
+                        proxy_data_dir_path / "oil_federal_gom_offshore_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 import os

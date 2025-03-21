@@ -2,10 +2,12 @@
 Name:                   task_ng_drilled_well_proxy.py
 Date Last Modified:     2025-01-30
 Authors Name:           Hannah Lohman (RTI International)
-Purpose:                Mapping of natural gas proxies.
+Purpose:                Mapping of natural gas drilled well proxy emissions.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs"
+                        Processed and Cleaned Enverus Prism & DI: sector_data_dir_path 
+                            / "enverus/production/intermediate_outputs/formatted_raw_enverus_tempoutput_{iyear}.csv"
                         NEI: sector_data_dir_path / "nei_og"
+                        Emissions: emi_data_dir_path / "gas_well_drilled_emi.csv"
 Output Files:           proxy_data_dir_path / "ng_drilled_well_proxy.parquet"
 """
 
@@ -84,16 +86,25 @@ def task_get_ng_drilled_well_proxy_data(
         .to_crs(4326)
     )
 
-    # Make Annual gridded arrays (maps) of well data (a well will be counted every month if there is any production that year)
-    # Includes NA Gas Wells and Production onshore in the CONUS region
-    # source emissions are related to the presence of a well and its production status (no emission if no production)
-    # Details: ERG does not include a well in the national count if there is no (cummulative) oil or gas production from that well.
-    # Wells are not considered active for a given year if there is no production data that year
-    # This may cause wells that are coadmpleted but not yet producing to be dropped from the national count. 
-    # ERG has developed their own logic to determine if a well is an HF well or not and that result is included in the 
-    # HF variable in this dataset. This method does not rely on the Enverus well 'Producing Status'
-    # Well Type (e.g., non-associated gas well) is determined based on annual production GOR at that well (CUM OIL/ CUM GAS), 
-    # but the presence of a well will only be included in maps in months where monthly gas prod > 0
+    """
+    Make Annual gridded arrays (maps) of well data (a well will be counted every month
+        if there is any production that year).
+    Includes NA Wells and Production onshore in the CONUS region source emissions are
+        related to the presence of a well and its production status (no emission if no
+        production).
+    Details: ERG does not include a well in the national count if there is no
+        (cummulative) gas production from that well.
+    Wells are not considered active for a given year if there is no production data that
+        year.
+    This may cause wells that are coadmpleted but not yet producing to be dropped from
+        the national count.
+    ERG has developed their own logic to determine if a well is an HF well or not and
+        that result is included in the HF variable in this dataset. This method does not
+        rely on the Enverus well 'Producing Status'.
+    Well Type (e.g., non-associated oil well) is determined based on annual production
+        GOR at that well (CUM OIL/ CUM GAS), but the presence of a well will only be
+        included in maps in months where monthly gas prod > 0"
+    """
 
     # Proxy Data Dataframes:
     drilled_well_df = pd.DataFrame()  # Gas wells drilled
