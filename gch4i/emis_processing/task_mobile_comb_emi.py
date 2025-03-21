@@ -6,7 +6,7 @@ Purpose:                Mapping of mobile combustion emissions
 gch4i_name:             1A_mobile_combustion
 Input Files:            - {ghgi_data_dir_path}/1A_mobile_combustion/
                             Mobile non-CO2 InvDB State Breakout_2022.xlsx
-                            SIT Mobile Dataframe 5.24.2023.xlsx
+                            Mobile Dataframe 11.24.2023_proxied_DC fixed.xlsx
 Output Files:           - {emi_data_dir_path}/
                             emi_passenger_cars.csv
                             emi_light.csv
@@ -18,7 +18,7 @@ Output Files:           - {emi_data_dir_path}/
                             emi_farm.csv
                             emi_equip.csv
                             emi_other.csv
-Notes:                  - Relative proportions come from "SIT Mobile" data.
+Notes:                  - Relative proportions come from "Mobile Dataframe" data.
                         - Emissions numbers from come from "Mobile non-CO2 InvDB" data.
 """
 
@@ -38,8 +38,27 @@ from gch4i.config import (
     min_year
 )
 
-from gch4i.utils import tg_to_kt
-from gch4i.sector_code.emi_mapping.a_excel_dict import read_excel_params2
+#from gch4i.utils import tg_to_kt
+tg_to_kt = 1000
+
+
+# Create function to grab the parameters from the excel file
+def read_excel_params(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+    """
+    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    """
+    # Read in Excel File
+    df = (pd.read_excel(file_path, sheet_name=sheet)
+            .assign(
+                ghgi_group=lambda x: x['Subcategory2'].str.strip().str.casefold()
+            ))
+    # Edit emission
+    # Filter for Emissions Dictionary
+    df = df.loc[df['gch4i_name'] == subsector]
+    df = df.loc[df['ghgi_group'] == emission, 'add_params']
+    # Convert to dictionary
+    result = ast.literal_eval(df.iloc[0])
+    return result
 
 # %% STEP 1. Create Emi Mapping Functions
 
@@ -64,9 +83,6 @@ def get_comb_mobile_inv_data(in_path, src, params):
     single source. The function reads in the data and returns the emissions in kt.
 
     ----------
-    NOTE: read_excel_params2 must be imported from a_excel_dict.py for this function
-    to execute.
-    ----------
     Parameters
     ----------
     in_path : str
@@ -85,8 +101,8 @@ def get_comb_mobile_inv_data(in_path, src, params):
     if src in (['motorcycles', 'passenger cars',
                 'heavy-duty vehicles', 'diesel highway']):
         # Directly overwrite the params dictionary
-        params = read_excel_params2(proxy_file_path, source_name, src,
-                                    sheet='emi_proxy_mapping')
+        params = read_excel_params(proxy_file_path, source_name, src,
+                                   sheet='emi_proxy_mapping')
     else:
         params = params
 
@@ -131,7 +147,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
         # Ensure state/year grouping is unique
         .groupby(["state_code", "year"]).sum().reset_index()
         # Ensure only years between min_year and max_year are included
-        .query("year.between(@min_year, @max_year-1)")  # Missing 2022 in SIT Mobile
+        .query("year.between(@min_year, @max_year)")
         .sort_values(["state_code", "year"])
     )
     ####################################################################################
@@ -141,11 +157,14 @@ def get_comb_mobile_inv_data(in_path, src, params):
 
         emi_df = emi_df.rename(columns={"ch4_kt": "ghgi_ch4_kt"})
 
+        # Quick Dirty Fix: Remove HI and AK state_codes
+        emi_df = emi_df.query("state_code != 'HI' and state_code != 'AK'")
+
         return emi_df
 
     ####################################################################################
 
-    # Read in the second file - SIT Mobile data
+    # Read in the second file - Mobile Dataframe
     emi_df2 = (
         pd.read_excel(
             in_path[1],
@@ -159,7 +178,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
         # Rename columns
         emi_df2.rename(columns=lambda x: str(x).lower())
         .drop(columns=["state"])
-        .rename(columns={'unnamed: 0': 'state_code'})
+        .rename(columns={'state code': 'state_code'})
         # Remove CO2 from sector and get emissions for specific subcategory
         .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
         .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
@@ -195,6 +214,9 @@ def get_comb_mobile_inv_data(in_path, src, params):
 
     # Drop unnecessary columns
     emi_df3 = emi_df3.drop(columns=["proportion", emi_df3.columns[2]])
+
+    # Quick Dirty Fix: Remove HI and AK state_codes
+    emi_df3 = emi_df3.query("state_code != 'HI' and state_code != 'AK'")
 
     return emi_df3
 
@@ -269,3 +291,38 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)
+
+
+# %% TESTING
+# emi_aircraft = pd.read_csv(tmp_data_dir_path / "emi_aircraft.csv")
+# emi_allroads = pd.read_csv(tmp_data_dir_path / "emi_allroads.csv")
+# emi_equip = pd.read_csv(tmp_data_dir_path / "emi_equip.csv")
+# emi_farm = pd.read_csv(tmp_data_dir_path / "emi_farm.csv")
+# emi_heavy = pd.read_csv(tmp_data_dir_path / "emi_heavy.csv")
+# emi_light = pd.read_csv(tmp_data_dir_path / "emi_light.csv")
+# emi_other = pd.read_csv(tmp_data_dir_path / "emi_other.csv")
+# emi_passenger = pd.read_csv(tmp_data_dir_path / "emi_passenger.csv")
+# emi_railroads = pd.read_csv(tmp_data_dir_path / "emi_railroads.csv")
+# emi_waterways = pd.read_csv(tmp_data_dir_path / "emi_waterways.csv")
+
+# test_aircraft = pd.read_csv(emi_data_dir_path / "emi_aircraft.csv")
+# test_allroads = pd.read_csv(emi_data_dir_path / "emi_allroads.csv")
+# test_equip = pd.read_csv(emi_data_dir_path / "emi_equip.csv")
+# test_farm = pd.read_csv(emi_data_dir_path / "emi_farm.csv")
+# test_heavy = pd.read_csv(emi_data_dir_path / "emi_heavy.csv")
+# test_light = pd.read_csv(emi_data_dir_path / "emi_light.csv")
+# test_other = pd.read_csv(emi_data_dir_path / "emi_other.csv")
+# test_passenger = pd.read_csv(emi_data_dir_path / "emi_passenger.csv")
+# test_railroads = pd.read_csv(emi_data_dir_path / "emi_railroads.csv")
+# test_waterways = pd.read_csv(emi_data_dir_path / "emi_waterways.csv")
+
+
+# # %% TESTING
+# params = emi_parameters_dict["emi_passenger"]
+# in_path = emi_parameters_dict["emi_passenger"]["input_paths"]
+# src = emi_parameters_dict["emi_passenger"]["source_list"]
+# params = emi_parameters_dict["emi_passenger"]["parameters"]
+
+# # %%
+
+# %%

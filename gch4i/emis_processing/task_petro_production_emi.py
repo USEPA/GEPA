@@ -264,20 +264,20 @@ def get_petro_production_inv_data(in_path, src, params):
     if src in ["offshore gom federal waters",
                "offshore pacific federal and state waters",
                "offshore alaska state waters"]:
-        # If True, 'make_up' list for queryign emission_source
+        # If True, 'make_up' list for querying emission_source
         if src == "offshore alaska state waters":
             make_up = ["Offshore Alaska State Waters, Vent/Leak",
                        "Offshore Alaska State Waters, Flare"]
-        # If True, 'make_up' list for queryign emission_source
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore pacific federal and state waters":
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
-        # If True, 'make_up' list for queryign emission_source
+        # If True, 'make_up' list for querying emission_source
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
                        "Offshore GoM Federal Waters: Flaring"]
-            state_name = "ALL"  # I assume GOM (Gulf of Mexico)
+            # state_name = "ALL"  # I assume GOM (Gulf of Mexico)
         emi_df = (
             # Rename columns
             emi_df.rename(columns=lambda x: str(x).lower())
@@ -297,15 +297,15 @@ def get_petro_production_inv_data(in_path, src, params):
             emi_df.melt(id_vars="emission_source", var_name="year", value_name="ch4_mt")
             # Convert mt to kt
             .assign(ghgi_ch4_kt=lambda x: x["ch4_mt"] / 1000)
-            .drop(columns=["ch4_mt"])
+            .drop(columns=["ch4_mt"])  # dropped state_code
             .astype({"year": int, "ghgi_ch4_kt": float})
             .fillna({"ghgi_ch4_kt": 0})
             # Ensure only years between min_year and max_year are included
             .query("year.between(@min_year, @max_year)")
             # Make state_code "ALL"
-            .assign(state_code="ALL")
+            # .assign(state_code="ALL")
             # Ensure state/year grouping is unique
-            .groupby(["state_code", "year"])["ghgi_ch4_kt"]
+            .groupby(["year"])["ghgi_ch4_kt"]  # removed state_code
             .sum()
             .reset_index()
         )
@@ -401,7 +401,7 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": tmp_data_dir_path / f"{emi_name}.csv"
+        "output_path": emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict
@@ -430,11 +430,25 @@ for _id, _kwargs in emi_parameters_dict.items():
             emi_df_list.append(individual_emi_df)
 
         # Concatenate the emissions data and group by state and year
-        emission_group_df = (
-            pd.concat(emi_df_list)
-            .groupby(["state_code", "year"])["ghgi_ch4_kt"]
-            .sum()
-            .reset_index()
+        df = (
+            pd.concat(emi_df_list).reset_index(drop=True)
         )
+        group_cols = [col for col in df.columns if col != "ghgi_ch4_kt"]
+        emission_group_df = df.groupby(group_cols)["ghgi_ch4_kt"].sum().reset_index()
+
+        # if 'state_code' in individual_emi_df.columns:
+        #     emission_group_df = (
+        #         pd.concat(emi_df_list)
+        #         .groupby(["year"])["ghgi_ch4_kt"]
+        #         .sum()
+        #         .reset_index()
+        #     )
+        # else:
+        #     emission_group_df = (
+        #         pd.concat(emi_df_list)
+        #         .groupby(["state_code", "year"])["ghgi_ch4_kt"]
+        #         .sum()
+        #         .reset_index()
+        #     )
         # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)

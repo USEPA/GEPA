@@ -1,6 +1,6 @@
 """
 Name:                   task_fbar_proxy.py
-Date Last Modified:     2024-12-09
+Date Last Modified:     2025-02-19
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of field burning emissions to proxy data.
 Input Files:            - McCarty et al. (2009) field burning emissions data
@@ -22,8 +22,6 @@ from pathlib import Path
 from typing import Annotated
 from pytask import Product, mark, task
 
-# import pytask
-
 import pandas as pd
 import numpy as np
 
@@ -32,25 +30,23 @@ import geopandas as gpd
 from shapely.geometry import Point
 
 from gch4i.config import (
-    V3_DATA_PATH,
+    sector_data_dir_path,
     proxy_data_dir_path,
     global_data_dir_path,
-    # ghgi_data_dir_path,
     emi_data_dir_path,
-    # max_year,
-    # min_year
+    years
 )
 
 ########################################################################################
 # %% STEP 0.2. Load Path Files
 
-state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+# state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 
-GEPA_Field_Burning_Path = (
-    V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning"
-)
+# GEPA_Field_Burning_Path = (
+#     V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning"
+# )
 
-InputData_path = GEPA_Field_Burning_Path / "InputData/"
+# InputData_path = GEPA_Field_Burning_Path / "InputData/"
 
 McCarty_years = np.arange(2003, 2008)
 
@@ -99,16 +95,25 @@ def get_fbar_proxy_data(
     Step 2: Check state emissions for emi data without proxy data
     Step 3: Transform Lat/Lon and Acres to Geometry Polygons
     Step 4: Append missing Maine (ME) Proxy data, if necessary
+    Step 5: Calculate rel_emi (month level)
+    Step 6: Explode Years
     """
 
     # STEP 1. Build base_proxy
     base_proxy = pd.DataFrame()
 
+    # Map month to month number
+    month_map = {
+        "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+        "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
+    }
+
+    # 14 blank burn dates in 2003 data, removed
     for year in McCarty_years:
         df = (
             # Read in McCarty, et al. (2011) data
             pd.read_csv(
-                f"{InputData_path}/{year}_ResidueBurning_AllCrops.csv",
+                f"{sector_data_dir_path}/fbar/{year}_ResidueBurning_AllCrops.csv",
                 usecols=[
                     "Crop_Type",
                     "Acres",
@@ -118,9 +123,16 @@ def get_fbar_proxy_data(
                     "Longitude",
                 ],
             )
+            # Drop rows with missing burn date values
+            .dropna(subset=["Burn_Date"])
+            .query("Burn_Date != ' '")
+        )
+        df = (
             # Clean and assign month and crop
-            .assign(
-                month=lambda x: x["Burn_Date"].str.extract(r"([A-Za-z]{3})")[0],
+            df.assign(
+                month=lambda x: x["Burn_Date"].str.extract(r"([A-Za-z]{3})")[0]
+                .map(month_map)
+                .astype(int),
                 crop=lambda x: np.select(
                     condlist=[
                         x["Crop_Type"] == "corn",
@@ -130,7 +142,7 @@ def get_fbar_proxy_data(
                     ],
                     choicelist=["maize", "other"],
                     default=x["Crop_Type"],
-                ),
+                )
             )
             # Remove unnecessary columns
             .drop(columns=["Burn_Date", "Crop_Type"])
@@ -227,16 +239,16 @@ def get_fbar_proxy_data(
         # Sum emissions
         .groupby(["month", "crop", "state_code", "Acres", "geometry"], as_index=False)
         .agg({"EMCH4_Gg": "sum"})
-        # Calculate state relative emissions (emissions / state emissions)
+        # Calculate state annual relative emissions (emissions / state emissions)
         .assign(
             state_crop_sum=lambda x: x.groupby(["state_code", "crop"])[
                 "EMCH4_Gg"
             ].transform("sum"),
-            rel_emi=lambda x: x["EMCH4_Gg"] / x["state_crop_sum"],
+            annual_rel_emi=lambda x: x["EMCH4_Gg"] / x["state_crop_sum"],
         )
         # Filter for current crop
         .query("crop == @filter_condition")
-        .drop(columns=["state_crop_sum", "EMCH4_Gg", "crop"])
+        .drop(columns=["state_crop_sum", "crop"])
         # Set geometry and CRS
         .set_geometry("geometry")
         .set_crs("EPSG:4326")
@@ -251,9 +263,9 @@ def get_fbar_proxy_data(
                 state_sum=lambda x: x.groupby(["state_code"])["EMCH4_Gg"].transform(
                     "sum"
                 ),
-                rel_emi=lambda x: x["EMCH4_Gg"] / x["state_sum"],
+                annual_rel_emi=lambda x: x["EMCH4_Gg"] / x["state_sum"],
             )
-            .drop(columns=["EMCH4_Gg", "state_sum", "crop"])
+            .drop(columns=["state_sum", "crop"])
             # Filter for missing states only
             .query("state_code in @missing_states")
             # Set geometry and CRS
@@ -268,7 +280,7 @@ def get_fbar_proxy_data(
     proxy_gdf = (
         proxy_gdf.assign(geometry=lambda x: x.apply(create_circle_geometry, axis=1))
         .drop(columns=["Acres"])
-        .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
+        .loc[:, ["state_code", "month", "EMCH4_Gg", "annual_rel_emi", "geometry"]]
     )
 
     ################################################################################
@@ -276,7 +288,7 @@ def get_fbar_proxy_data(
 
     # state: ME
     # month: Jan-Dec
-    # rel_emi: Proportional to generic
+    # annual_rel_emi: Proportional to generic
     # geometry: Polygon of ME
 
     # Maine (ME) is missing proxy data for 'other' crop
@@ -290,18 +302,67 @@ def get_fbar_proxy_data(
             .agg({"EMCH4_Gg": "sum"})
             .assign(
                 ch4_sum=lambda x: x["EMCH4_Gg"].sum(),
-                rel_emi=lambda x: x["EMCH4_Gg"] / x["ch4_sum"],
+                annual_rel_emi=lambda x: x["EMCH4_Gg"] / x["ch4_sum"],
                 geometry=ME_geom,
                 state_code="ME",
             )
-            .drop(columns=["EMCH4_Gg", "ch4_sum"])
-            .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
+            .drop(columns=["ch4_sum"])
+            .loc[:, ["state_code", "month", "EMCH4_Gg", "annual_rel_emi", "geometry"]]
         )
 
         # Add ME data to proxy_gdf
         proxy_gdf = pd.concat([proxy_gdf, ME_gdf], ignore_index=True)
         # Set geometry and CRS
         proxy_gdf = gpd.GeoDataFrame(proxy_gdf, geometry="geometry", crs="EPSG:4326")
+
+    ################################################################################
+    # STEP 5. Explode Years & make year_month
+    proxy_gdf = (
+        proxy_gdf.assign(
+            year=lambda df: [years for _ in range(df.shape[0])]
+        )
+        .explode("year")
+        .assign(
+            year_month=lambda df: df["year"].astype(str)
+            + "-"
+            + df["month"].astype(str)
+        )
+        .loc[
+            :,
+            [
+                "state_code", "year_month", "year", "month", "EMCH4_Gg",
+                "annual_rel_emi", "geometry"]]
+    )
+
+    # Drop state_code/year_month combinations with no emissions
+    proxy_gdf = (
+        proxy_gdf.groupby(['state_code', 'year_month'])
+        .filter(lambda x: x['EMCH4_Gg'].sum() > 0)
+    )
+
+    ################################################################################
+    # STEP 6. Calculate rel_emi (month level)
+    proxy_gdf = (
+        proxy_gdf
+        .assign(
+            month_sum=lambda x: x.groupby(["state_code", "year_month"])["EMCH4_Gg"].transform("sum"),
+            rel_emi=lambda x: x["EMCH4_Gg"] / x["month_sum"]
+        )
+        .drop(columns=["EMCH4_Gg", "month_sum"])
+    )
+
+    # Get sums of annual_rel_emi normalization
+    sums = proxy_gdf.groupby(["state_code", "year"])["annual_rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Get sums of rel_emi normalization
+    sums = proxy_gdf.groupby(["state_code", "year_month"])["rel_emi"].sum()
+    # assert that the sums are close to 1
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Reset index
+    proxy_gdf = proxy_gdf.reset_index(drop=True)
 
     # Return proxy data
     return proxy_gdf
@@ -395,3 +456,32 @@ def task_get_fbar_other_proxy_data(
     proxy_gdf = get_fbar_proxy_data(filter_condition="other", state_path=state_path)
     proxy_gdf.to_parquet(output_path)
     return None
+
+
+########################################################################################
+########################################################################################
+# TESTING
+cotton_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_cotton_proxy.parquet")
+maize_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_maize_proxy.parquet")
+rice_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_rice_proxy.parquet")
+soybean_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_soybeans_proxy.parquet")
+sugarcane_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_sugarcane_proxy.parquet")
+wheat_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_wheat_proxy.parquet")
+other_proxy = gpd.read_parquet(proxy_data_dir_path / "fbar_other_proxy.parquet")
+
+# Test proxies
+test_proxy = other_proxy
+
+print(test_proxy.isna().sum())
+print(test_proxy.geom_type.value_counts())
+print("_____________________________________")
+print(test_proxy[~test_proxy["geometry"].is_valid])
+print(test_proxy[test_proxy["geometry"].is_empty])
+
+###########
+# %% Examine Cotton
+
+# Change cotton to spatial
+test_cotton_proxy = cotton_proxy.to_crs("ESRI:102003")
+test_cotton_proxy['area_m2'] = test_cotton_proxy.geometry.area
+
