@@ -1054,11 +1054,30 @@ def us_state_to_abbrev(state_name: str) -> str:
     )
 
 
-def QC_flux_emis(v3_data, SOURCE_NAME, v2_name) -> None:
+def QC_flux_emis(v3_data, SOURCE_NAME, v2_name=None) -> None:
     """
     Function to compare and plot the difference between v2 and v3 for each year of the
     raster data for each sector.
     """
+
+    # Check for expected years
+    from config import (min_year, max_year)
+    actual_years = set(v3_data.time.values.astype(int))
+    expected_years = set(range(min_year, max_year + 1))
+    missing_years = expected_years - actual_years
+    if missing_years:
+        Warning(f"Missing years in v3 data for {SOURCE_NAME}: {sorted(missing_years)}")
+    
+    # Check for negative values
+    for year in v3_data.time:
+        year_val = int(year.values)
+        v3_arr = np.flip(v3_data.sel(time=year).values, 0)
+        neg_count = np.sum(v3_arr < 0)
+        if neg_count > 0:
+            neg_percent = (neg_count / v3_arr.size) * 100
+            Warning(f"Source {SOURCE_NAME}, Year {year_val} has {neg_count} negative values ({neg_percent:.2f}% of cells)")
+
+    # compare against v2 values, if v2_data exists
     if v2_name is None:
         Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
     else:
