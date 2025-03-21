@@ -34,41 +34,35 @@ from gch4i.config import (
 )
 from gch4i.utils import (
     geocode_address,
-    create_final_proxy_df
+    create_final_proxy_df,
+    normalize
 )
 
 
 # %% Input data paths
-emi_path = emi_data_dir_path / "peatlands_emi.csv"
 peatland_producers_path = sector_data_dir_path / "peatlands" / "peat_producers_2013.csv"
 geocoded_peatland_producers_path = sector_data_dir_path / "peatlands" / "peat_producers_2013_geocoded.csv"
 proxy_output_path = proxy_data_dir_path / "peatlands_proxy.parquet"
-
 
 # %% Pytask function
 @mark.persist
 @task(id="peatlands_proxy")
 def task_peatlands_proxy(
-    emi_path: Path = emi_path,
     peatland_producers_path: Path = peatland_producers_path,
     geocoded_peatland_producers_path: Path = geocoded_peatland_producers_path,
-    output_path: Annotated[Path, Product] = proxy_output_path
+    proxy_output_path: Annotated[Path, Product] = proxy_output_path
 ) -> None:
     """
     Create proxy data for peatlands emissions.
 
     Args:
-        emi_path (Path): Path to peatlands emissions data
-        peatland_producers_path (Path): Path to peatland producers data
+        peatland_producers_path (Path): Path to peatland producers data (if needed)
         geocoded_peatland_producers_path (Path): Path to geocoded peatland producers
         data
 
     Returns:
         None. Proxy data is saved to output_path.
     """
-
-    # Read in data
-    peatland_emissions = pd.read_csv(emi_path)
 
     # Check if geocoded peatland producers data exists
     if geocoded_peatland_producers_path.exists():
@@ -86,53 +80,25 @@ def task_peatlands_proxy(
         # save geocoded peatland producers
         peatland_producers.to_csv(geocoded_peatland_producers_path, index=False)
 
-    # %% Functions
-    def calculate_emissions_proxy(emi_df, proxy_df, year_range):
-        """
-        Function to calculate emissions proxy by joining emissions and facility data by
-        state, then equally dividing emissions across facilities within each state.
+    # Only keep relevant columns
+    peatlands_proxy = peatland_producers[['state_code', 'latitude', 'longitude']].copy()
 
-        Args:
-        - emi_df: DataFrame containing GHGI emissions data
-        - proxy_df: DataFrame containing facility location data
-        - year_range: List or range of years to process
+    # Initialize relative emissions to 1.0
+    peatlands_proxy['rel_emi'] = 1.0 
 
-        Returns:
-        - DataFrame with emissions allocated to each facility
-        """
-        # Create a cross join between proxy locations and years. Expand the proxy data
-        # to include an entry for each year
-        proxy_years = proxy_df.assign(key=1).merge(
-            pd.DataFrame({'year': year_range, 'key': 1}),
-            on='key'
-        ).drop('key', axis=1)
+    # Normalize relative emissions for each state
+    peatlands_proxy["rel_emi"] = peatlands_proxy.groupby("state_code")["rel_emi"].transform(normalize)
 
-        # Merge emissions data with proxy locations
-        final_proxy_df = proxy_years.merge(
-            emi_df[['state_code', 'year', 'ghgi_ch4_kt']],
-            on=['state_code', 'year'],
-            how='inner'
-        )
+    # Check that the relative emissions sum to 1 for each state
+    sums = peatlands_proxy.groupby(["state_code"])["rel_emi"].sum()
+    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}" # assert that the sums are close to 1
+    # Create a GeoDataFrame and generate geometry from longitude and latitude
+    peatlands_proxy = gpd.GeoDataFrame(
+        peatlands_proxy,
+        geometry=gpd.points_from_xy(peatlands_proxy['longitude'], peatlands_proxy['latitude'], crs='EPSG:4326')
+    )
 
-        # Calculate facility count per state-year
-        state_facility_counts = (
-            final_proxy_df.groupby(['state_code', 'year']).size()
-            .reset_index(name='facility_count')
-            )
-
-        # Merge facility counts and calculate relative emissions
-        final_proxy_df = final_proxy_df.merge(
-            state_facility_counts,
-            on=['state_code', 'year']
-        )
-        final_proxy_df['emis_kt'] = final_proxy_df['ghgi_ch4_kt'] / final_proxy_df['facility_count']
-
-        return final_proxy_df
-
-    # %% Calculate proxy data
-    final_proxy_df = calculate_emissions_proxy(peatland_emissions, peatland_producers, years)
-
-    peatlands_proxy = create_final_proxy_df(final_proxy_df)
+    peatlands_proxy = peatlands_proxy[['state_code', 'year', 'rel_emi', 'geometry']]
 
     # Save proxy data
-    peatlands_proxy.to_parquet(proxy_output_path)
+    peatlands_proxy.to_parquet(proxy_output_path, index=False)
