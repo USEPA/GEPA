@@ -96,9 +96,11 @@ def task_get_ng_storage_comp_station_proxy_data(
         .query("CNTRY_NAME == 'United States'")
         .query("STATE_NAME.isin(@state_gdf['state_name'])")
         .drop(columns=["STATUS", "CNTRY_NAME"])
-        .assign(state_code='NaN')
+        .merge(state_gdf[['state_name', 'state_code']], on='state_name')
         .to_crs(4326)
         .dropna(subset=["geometry"])
+        .assign(Latitude=lambda df: df['geometry'].y)
+        .assign(Longitude=lambda df: df['geometry'].x)
         .reset_index(drop=True)
         )
 
@@ -113,27 +115,13 @@ def task_get_ng_storage_comp_station_proxy_data(
         .query("STATE_NAME.isin(@state_gdf['state_name'])")
         .query("TYPE == 'Storage'")
         .drop(columns=["TYPE", "STATUS", "CNTRY_NAME"])
-        .assign(state_code='NaN')
+        .merge(state_gdf[['state_name', 'state_code']], on='state_name')
         .dropna(subset=["geometry"])
         .to_crs(4326)
+        .assign(Latitude=lambda df: df['geometry'].y)
+        .assign(Longitude=lambda df: df['geometry'].x)
         .reset_index(drop=True)
         )
-
-    # Add state_code to Enverus Midstream data
-    for istation in np.arange(0, len(Env_StorFields)):
-        Env_StorFields.loc[istation, "State"] = (
-            us_state_to_abbrev(Env_StorFields.loc[istation, "STATE_NAME"])
-        )
-    for istation in np.arange(0, len(enverus_stations)):
-        enverus_stations.loc[istation, "State"] = (
-            us_state_to_abbrev(enverus_stations.loc[istation, "STATE_NAME"])
-        )
-
-    # Extract latitude and longitude for Enverus Midstream data
-    Env_StorFields['Latitude'] = Env_StorFields.loc[:, 'geometry'].y
-    Env_StorFields['Longitude'] = Env_StorFields.loc[:, 'geometry'].x
-    enverus_stations['Latitude'] = enverus_stations.loc[:, 'geometry'].y
-    enverus_stations['Longitude'] = enverus_stations.loc[:, 'geometry'].x
 
     # Loop through each Enverus storage field to find where there is also a storage
     # compressor station.

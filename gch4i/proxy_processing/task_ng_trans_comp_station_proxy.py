@@ -84,20 +84,12 @@ def task_get_ng_trans_comp_station_proxy_data(
                          "STATE_NAME": "state_name",
                          "CNTY_NAME": "county",
                          })
-        .assign(state_code='NaN')
+        .merge(state_gdf[['state_name', 'state_code']], on='state_name')
         .to_crs(4326)
+        .assign(latitude=lambda df: df['geometry'].y)
+        .assign(longitude=lambda df: df['geometry'].x)
         .reset_index(drop=True)
         )
-
-    # Add state_code to data
-    for istation in np.arange(0, len(enverus_stations)):
-        enverus_stations.loc[istation, "state_code"] = (
-            us_state_to_abbrev(enverus_stations.loc[istation, "state_name"])
-        )
-
-    # Extract latitude and longitude
-    enverus_stations['latitude'] = enverus_stations.loc[:, 'geometry'].y
-    enverus_stations['longitude'] = enverus_stations.loc[:, 'geometry'].x
 
     # Correct the fuel useage data (locations where FUEL_MCFD = 0)
     #   - For locations with non-zero HP, estimate FUEL_MCFD by multiplying HF by the 

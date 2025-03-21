@@ -1,3 +1,14 @@
+"""
+Name:                   task_generators_proxy.py
+Date Last Modified:     2025-03-21
+Authors Name:           Hannah Lohman (RTI International)
+Purpose:                Mapping of natural gas generator proxy emissions
+Input Files:            NG Storage Compressor Stations: proxy_data_dir_path / "ng_storage_comp_station_proxy.parquet"
+                        NG Transmission Compressor Stations: proxy_data_dir_path / "ng_trans_comp_station_proxy.parquet"
+                        GHGI: ghgi_data_dir_path / "1B2biv_ng_transmission_storage/NaturalGasSystems_90-22_FR.xlsx"
+Output Files:           proxy_data_dir_path / "generators_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
