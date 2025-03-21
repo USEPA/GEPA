@@ -335,7 +335,7 @@ def task_get_ng_trans_comp_station_proxy_data(
 
     # Calculate the average emissions/fuel ratio for matched plants
     matched_GHGRP_plants['emis_fuel_ratio'] = 0.0
-    for iplant in np.arange(0, len(matched_GHGRP_plants)):
+    matched_GHGRP_plants['emis_fuel_ratio'] = (matched_GHGRP_plants['ch4_emi'] / matched_GHGRP_plants['Env_fuel'] if matched_GHGRP_plants['Env_fuel'] > 0 else 0)
         matched_GHGRP_plants.loc[iplant, 'emis_fuel_ratio'] = (matched_GHGRP_plants.loc[iplant, 'ch4_emi'] / matched_GHGRP_plants.loc[iplant, 'Env_fuel'] if matched_GHGRP_plants.loc[iplant, 'Env_fuel'] > 0 else 0)
 
     # Calculate the average emissions/fuel ratio by year
