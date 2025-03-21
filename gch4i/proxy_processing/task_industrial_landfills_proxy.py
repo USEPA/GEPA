@@ -101,6 +101,9 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
+    reporting_pulp_paper_gdf['rel_emi'] = reporting_pulp_paper_gdf.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_pulp_paper_gdf = reporting_pulp_paper_gdf.drop(columns='ch4_kt')
+
     reporting_pulp_paper_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
     return None
 
@@ -286,6 +289,9 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .loc[:, ["state_code", "geometry"]]
     )
 
+    nonreporting_pulp_paper_gdf['rel_emi'] = nonreporting_pulp_paper_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_pulp_paper_gdf = nonreporting_pulp_paper_gdf.drop(columns='ch4_kt')
+
     nonreporting_pulp_paper_gdf.to_parquet(nonreporting_pulp_paper_proxy_output_path)
     return None
 
@@ -357,6 +363,9 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
+    reporting_food_beverage_gdf['rel_emi'] = reporting_food_beverage_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_food_beverage_gdf = reporting_food_beverage_gdf.drop(columns='ch4_kt')
+    
     reporting_food_beverage_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
     return None
 
@@ -626,6 +635,8 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                        "ghgrp_match", "FRS_match", "geo_match"])
         .loc[:, ["state_code", "geometry", "rel_emi"]]
     )
+    nonreporting_food_beverage_gdf['rel_emi'] = nonreporting_food_beverage_gdf.groupby(["state_code", "year"])['avg_waste_t'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_food_beverage_gdf = nonreporting_food_beverage_gdf.drop(columns='avg_waste_t')
 
     nonreporting_food_beverage_gdf.to_parquet(nonreporting_food_beverage_proxy_output_path)
     return None
