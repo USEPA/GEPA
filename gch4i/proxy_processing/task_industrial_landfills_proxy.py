@@ -178,17 +178,12 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .query("pulp_and_paper_mill == 'Yes'")
         .drop(columns=["pulp_and_paper_mill"])
         .query("state_name.isin(@state_gdf['state_name'])")
+        .merge(state_gdf[['state_name', 'state_code']], on='state_name')
         .reset_index(drop=True)
     )
 
-    # assign state codes to mills online facilities
+    # final list of mills to include in proxy
     mills_locs = mills_online_df.copy()
-    num_mills = len(mills_locs)
-
-    for imill in np.arange(0,num_mills):
-        state_name = mills_locs['state_name'][imill]
-        state_code = state_gdf[state_gdf['state_name'] == state_name]['state_code']
-        mills_locs.loc[imill, 'state_code'] = state_code.to_string(index=False)
 
     # match subpart tt reporting facilities to the mills online facility list 
     # and pull out non-reporting facilities
@@ -202,40 +197,38 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 
     # try to match facilities to GHGRP based on county and city
     for iyear in np.arange(0, num_years):
-        for ifacility in np.arange(0,num_mills):
-            imatch = np.where((reporting_pulp_paper_df['year'] == year_range[iyear]) & \
-                            (reporting_pulp_paper_df['state_code'] == mills_locs.loc[ifacility,'state_code']) & \
-                            (reporting_pulp_paper_df['city'] == mills_locs.loc[ifacility,'city']))[0]
+        for ifacility in np.arange(0, len(mills_locs)):
+            imatch = np.where((reporting_pulp_paper_df['year'] == year_range[iyear]) &
+                              (reporting_pulp_paper_df['state_code'] == mills_locs.loc[ifacility, 'state_code']) &
+                              (reporting_pulp_paper_df['city'] == mills_locs.loc[ifacility, 'city']))[0]
             if len(imatch) > 0:
-                mills_locs.loc[ifacility,'ghgrp_match'] = 1
-                mills_locs.loc[ifacility,'lat'] = reporting_pulp_paper_df.loc[imatch[0],'latitude']
-                mills_locs.loc[ifacility,'lon'] = reporting_pulp_paper_df.loc[imatch[0],'longitude']
-                reporting_pulp_paper_df.loc[imatch[0],'found'] = 1
+                mills_locs.loc[ifacility, 'ghgrp_match'] = 1
+                mills_locs.loc[ifacility, 'lat'] = reporting_pulp_paper_df.loc[imatch[0], 'latitude']
+                mills_locs.loc[ifacility, 'lon'] = reporting_pulp_paper_df.loc[imatch[0], 'longitude']
+                reporting_pulp_paper_df.loc[imatch[0], 'found'] = 1
             else:
                 continue
 
-        print('Found (%) Year',year_range[iyear],':',100*np.sum(mills_locs['ghgrp_match']/len(reporting_pulp_paper_df)))
-    
+        print('Found (%) Year', year_range[iyear], ':', 100*np.sum(mills_locs['ghgrp_match']/len(reporting_pulp_paper_df)))
 
     # FRS facilities with NAICS codes that start with 321 and 322
     frs_main = (
         pd.read_csv(
             frs_facility_path,
-            usecols=("REGISTRY_ID", "PRIMARY_NAME", "LOCATION_ADDRESS", "CITY_NAME", "STATE_CODE", "ACCURACY_VALUE", "LATITUDE83", "LONGITUDE83"
-            ))
-            .rename(columns=lambda x: str(x).lower())
-            .rename(columns={"primary_name": "name", "latitude83": "latitude", "longitude83": "longitude"})
-            .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
+            usecols=("REGISTRY_ID", "PRIMARY_NAME", "LOCATION_ADDRESS", "CITY_NAME",
+                     "STATE_CODE", "ACCURACY_VALUE", "LATITUDE83", "LONGITUDE83"))
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"primary_name": "name", "latitude83": "latitude", "longitude83": "longitude"})
+        .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
     )
     frs_main['city_name'] = frs_main['city_name'].replace('NO LOCALITY NAME TO MIGRATE FROM 2002 NEI V3', 'NaN')
 
     frs_naics = (
         pd.read_csv(
             frs_naics_path,
-            usecols=("REGISTRY_ID", "NAICS_CODE"
-            ))
-            .rename(columns=lambda x: str(x).lower())
-            .astype({"naics_code": str})
+            usecols=("REGISTRY_ID", "NAICS_CODE"))
+        .rename(columns=lambda x: str(x).lower())
+        .astype({"naics_code": str})
     )
     frs_naics = frs_naics[(frs_naics['naics_code'].str.startswith('321')) | (frs_naics['naics_code'].str.startswith('322'))].reset_index(drop=True)
 
@@ -245,24 +238,24 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
     # only need to find locations for where 'ghgrp_match' = 0
     mills_locs['FRS_match'] = 0
     for ifacility in np.arange(0, len(mills_locs)):
-        if mills_locs.loc[ifacility,'ghgrp_match'] == 0:
-            imatch = np.where((mills_locs.loc[ifacility,'state_code'] == FRS_facility_locs['state_code']) &\
-                            ((mills_locs.loc[ifacility,'city'].upper() == FRS_facility_locs['city_name'])))[0]
-            if len(imatch)==1:
-                mills_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[imatch[0],'latitude']
-                mills_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[imatch[0],'longitude']
-                mills_locs.loc[ifacility,'FRS_match'] = 1
-            elif len(imatch)>1:
-                FRS_temp = FRS_facility_locs.loc[imatch,:]
+        if mills_locs.loc[ifacility, 'ghgrp_match'] == 0:
+            imatch = np.where((mills_locs.loc[ifacility, 'state_code'] == FRS_facility_locs['state_code']) &
+                              ((mills_locs.loc[ifacility, 'city'].upper() == FRS_facility_locs['city_name'])))[0]
+            if len(imatch) == 1:
+                mills_locs.loc[ifacility, 'lat'] = FRS_facility_locs.loc[imatch[0], 'latitude']
+                mills_locs.loc[ifacility, 'lon'] = FRS_facility_locs.loc[imatch[0], 'longitude']
+                mills_locs.loc[ifacility, 'FRS_match'] = 1
+            elif len(imatch) > 1:
+                FRS_temp = FRS_facility_locs.loc[imatch, :]
                 # use the location of the first occurance of the facility with the highest accuracy value
                 new_match = np.argmax(np.max(FRS_temp['accuracy_value']))
-                mills_locs.loc[ifacility,'lat'] = FRS_facility_locs.loc[new_match,'latitude']
-                mills_locs.loc[ifacility,'lon'] = FRS_facility_locs.loc[new_match,'longitude']
-                mills_locs.loc[ifacility,'FRS_match'] = 1
+                mills_locs.loc[ifacility, 'lat'] = FRS_facility_locs.loc[imatch[new_match], 'latitude']
+                mills_locs.loc[ifacility, 'lon'] = FRS_facility_locs.loc[imatch[new_match], 'longitude']
+                mills_locs.loc[ifacility, 'FRS_match'] = 1
             else:
                 continue
 
-    print('Not Found:',len(mills_locs)-(np.sum(mills_locs.loc[:,'FRS_match'])+np.sum(mills_locs.loc[:,'ghgrp_match'])), 'of',len(mills_locs))
+    print('Not Found:', len(mills_locs)-(np.sum(mills_locs.loc[:, 'FRS_match'])+np.sum(mills_locs.loc[:, 'ghgrp_match'])), 'of', len(mills_locs))
 
     # keep mills that only have FRS locations (mills that are not already covered by
     # subpart tt and mills that are not missing locations)
