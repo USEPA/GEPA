@@ -6,7 +6,7 @@ Purpose:               Clean and standardized field burning emissions data
 Input Files:           - gch4i_data_guide_v3.xlsx
                        - {V3_DATA_PATH}/ghgi/3F4_fbar/FBAR_90-22_State.xlsx.
 Output Files:          - {emi_data_dir_path}/barley_emi.csv
-                                            /chickpease_emi.csv
+                                            /chickpeas_emi.csv
                                             /cotton_emi.csv
                                             /drybeans_emi.csv
                                             /grasshay_emi.csv
@@ -15,7 +15,7 @@ Output Files:          - {emi_data_dir_path}/barley_emi.csv
                                             /maize_emi.csv
                                             /oats_emi.csv
                                             /other_grains_emi.csv
-                                            /peanutes_emi.csv
+                                            /peanuts_emi.csv
                                             /peas_emi.csv
                                             /potatoes_emi.csv
                                             /rice_emi.csv
@@ -42,7 +42,7 @@ from gch4i.config import (
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
-    min_year,
+    min_year
 )
 from gch4i.utils import tg_to_kt
 
@@ -136,11 +136,11 @@ for _id, _kwargs in emi_parameters_dict.items():
             )
             .rename(columns={"georef": "state_code"})
             .set_index("state_code")
-            # covert "NO" string to numeric (will become np.nan)
+            # Replace NA values with 0
+            .replace(0, pd.NA)
             .apply(pd.to_numeric, errors="coerce")
-            # drop states that have all nan values
             .dropna(how="all")
-            # reset the index state back to a column
+            .fillna(0)
             .reset_index()
             # make the table long by state/year
             .melt(id_vars="state_code", var_name="year", value_name="ch4_tg")

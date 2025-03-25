@@ -24,7 +24,7 @@ from gch4i.config import (
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
-    min_year,
+    min_year
 )
 from gch4i.utils import tg_to_kt
 
@@ -180,6 +180,10 @@ def read_allwell_data(in_path, sheet_name, src):
         .sum()
         .reset_index()
     )
+    # Remove state_code for federal_gom_offshore_emi
+    if src == "Federal Offshore":
+        emi_df = emi_df.drop(columns="state_code")
+
     emi_df.head()
     return emi_df
 
@@ -255,7 +259,6 @@ for _id, _kwargs in emi_parameters_dict.items():
             "basin_395_emi",
             "basin_430_emi",
             "basin_other_emi",
-            "federal_gom_offshore_emi",
             "gas_well_drilled_emi",
             "gb_stations_emi",
             "non_assoc_conv_emi",
@@ -295,6 +298,13 @@ for _id, _kwargs in emi_parameters_dict.items():
         ]:
             read_function = None
             groupers = ["state_code", "year"]
+
+        elif emi_name in [
+            "federal_gom_offshore_emi"
+        ]:
+            read_function = read_allwell_data
+            groupers = ["year"]
+
         else:
             return ValueError(f"{emi_name} not ready.")
 
