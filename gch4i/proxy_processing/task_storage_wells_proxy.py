@@ -23,7 +23,10 @@ from gch4i.config import (
     proxy_data_dir_path,
     sector_data_dir_path,
     V3_DATA_PATH,
+    global_data_dir_path
 )
+
+state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 
 
 # %% Pytask Function
@@ -31,8 +34,8 @@ from gch4i.config import (
 @task(id="storage_wells_proxy")
 def get_storage_wells_proxy_data(
     # Inputs
-    EIA_StorFields_inputfile: Path = sector_data_dir_path / 'lng/191 Field Level Storage Data (Annual).csv',
-    EIA_StorFields_locs_inputfile: Path = sector_data_dir_path / 'lng/EIA_Natural_Gas_Underground_Storage.csv',
+    EIA_StorFields_inputfile: Path = sector_data_dir_path / 'eia/191 Field Level Storage Data (Annual).csv',
+    EIA_StorFields_locs_inputfile: Path = sector_data_dir_path / 'eia/EIA_Natural_Gas_Underground_Storage.csv',
 
     # Outputs
     output_path: Annotated[Path, Product] = (
@@ -106,27 +109,36 @@ def get_storage_wells_proxy_data(
     # Use county geometry for facilities with no lat-lon
     ###############################################################
 
+    # Load State FIPS codes
+    state_fips = (
+        gpd.read_file(state_path)
+        .loc[:, ["STATEFP", "STUSPS"]]
+        .rename(columns={"STUSPS": "state_code"})
+        .astype({"STATEFP": int})
+        # get only lower 48 + DC
+        .query("(STATEFP < 60) & (STATEFP != 2) & (STATEFP != 15)")
+    )
+
     # load county geometries as fallback locations for facilities without known lat-lon
-    county_fips = pd.read_csv(V3_DATA_PATH / 'geospatial/county_fips.csv')[['STATEFP', 'COUNTYFP', 'STATE', 'COUNTYNAME']]
+    #county_fips = pd.read_csv(V3_DATA_PATH / 'geospatial/county_fips.csv')[['STATEFP', 'COUNTYFP', 'STATE', 'COUNTYNAME']]
     county_shapes = gpd.read_file(V3_DATA_PATH / 'geospatial/cb_2018_us_county_500k/cb_2018_us_county_500k.shp')
     county_shapes['STATEFP'] = county_shapes['STATEFP'].astype('int64')
     county_shapes['COUNTYFP'] = county_shapes['COUNTYFP'].astype('int64')
     # merge county geometries with fips codes
     county_shapes = (county_shapes
-                     .merge(county_fips,
+                     .merge(state_fips,
                             how='left',
-                            on=['STATEFP', 'COUNTYFP'])[['COUNTYNAME',
-                                                         'STATE',
-                                                         'geometry']]
+                            on=['STATEFP'])[['NAME',
+                                             'state_code',
+                                             'geometry']]
                      .dropna())
     # clean up county names
-    county_shapes['COUNTYNAME'] = (county_shapes['COUNTYNAME']
-                                   .str.replace(' County', '')
-                                   .str.replace(' Parish', '')
-                                   .str.replace(' Municipality', ''))
+    # county_shapes['COUNTYNAME'] = (county_shapes['COUNTYNAME']
+    #                                .str.replace(' County', '')
+    #                                .str.replace(' Parish', '')
+    #                                .str.replace(' Municipality', ''))
     # rename columns
-    county_shapes = county_shapes.rename(columns={'COUNTYNAME': 'County Name',
-                                                  'STATE': 'state_code'})
+    county_shapes = county_shapes.rename(columns={'NAME': 'County Name'})
 
     # manually rename counties which are improperly named in the facilities data
     proxy_gdf.loc[proxy_gdf['County Name'] == 'Bristo', 'County Name'] = 'Bristol'
@@ -147,10 +159,12 @@ def get_storage_wells_proxy_data(
                  (proxy_gdf['state_code'] == 'MS') &
                  (proxy_gdf['Field Code'] == 4084) &
                  (proxy_gdf['Reservoir Code'] == 1))])
+    
+    # Ensure only lower 48 + DC states are included
+    proxy_gdf = proxy_gdf[proxy_gdf['state_code'].isin(state_fips['state_code'].unique())]
 
     # drop now-unnecessary columns
-    proxy_gdf = proxy_gdf[['year', 'state_code', 'rel_emi',
-                           'geometry', 'Field Code', 'Reservoir Code']]
+    proxy_gdf = proxy_gdf[['year', 'state_code', 'rel_emi', 'geometry']].reset_index()
 
     ###############################################################
     # Normalize and save
@@ -161,12 +175,15 @@ def get_storage_wells_proxy_data(
     proxy_gdf = (proxy_gdf.groupby(['state_code', 'year'])
                  .filter(lambda x: x['rel_emi'].sum() > 0))
     # normalize to sum to 1
-    proxy_gdf['rel_emi'] = (proxy_gdf.groupby(['year', 'state_code'])['rel_emi']
+    proxy_gdf['rel_emi'] = (proxy_gdf.groupby(['year'])['rel_emi']
                             .transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
     # get sums to check normalization
-    sums = proxy_gdf.groupby(["state_code", "year"])["rel_emi"].sum()
+    sums = proxy_gdf.groupby(["year"])["rel_emi"].sum()
     # assert that the sums are close to 1
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Drop state_code
+    proxy_gdf = proxy_gdf.drop(columns=['state_code'])
 
     # Save to parquet
     proxy_gdf.to_parquet(output_path)

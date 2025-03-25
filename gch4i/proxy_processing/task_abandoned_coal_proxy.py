@@ -32,10 +32,9 @@ from gch4i.config import (
     sector_data_dir_path,
     max_year,
     min_year,
-    proxy_data_dir_path,
+    proxy_data_dir_path
 )
 from gch4i.utils import name_formatter
-
 
 pd.set_option("future.no_silent_downcasting", True)
 
@@ -451,6 +450,9 @@ def task_get_abd_coal_proxy_data(
     # constant that roughly equals the number of days in a year.
     year_days = 365.25
 
+    # Ensure active_mines_df has a datetime object for reopen_date
+    active_mines_df["reopen_date"] = pd.to_datetime(active_mines_df["reopen_date"], errors="coerce")
+
     result_list = []
     # for each year we have mine data, calculate emissions based on the basin, mine
     # status, and the number of years closed.
@@ -511,11 +513,14 @@ def task_get_abd_coal_proxy_data(
         year_active_mines_df = active_mines_df.query(
             "(date_abd < @calc_date) & (reopen_date.dt.year >= @calc_date.year)"
         ).assign(
+            year=year,
             operating_days=lambda df: np.where(
-                df["reopen_date"].dt.year.eq(year), calc_date - df["reopen_date"], 0
+                df["reopen_date"].dt.year.eq(year),
+                (calc_date - df["reopen_date"]).dt.days,
+                0
             ),
-            days_closed=lambda df: (calc_date - df["date_abd"]) - df["operating_days"],
-            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
+            days_closed=lambda df: (calc_date - df["date_abd"]).dt.days - df["operating_days"],
+            years_closed=lambda df: df["days_closed"] / year_days,
             # create an empty column to hold the results
             mine_emi=0,
         )
@@ -586,6 +591,9 @@ def task_get_abd_coal_proxy_data(
     proxy_gdf = gpd.GeoDataFrame(result_df, crs=4326).loc[
         :, ["MINE_ID", "state_code", "year", "mine_emi", "geometry"]
     ]
+
+    # Remove mines that have 0 emissions
+    proxy_gdf = proxy_gdf[proxy_gdf["mine_emi"] > 0]
 
     # calculate the relative emissions by state and year for allocation.
     proxy_gdf["rel_emi"] = proxy_gdf.groupby(["state_code", "year"])[
