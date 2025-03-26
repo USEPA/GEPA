@@ -1,14 +1,15 @@
 # %%
 from datetime import datetime
-from numpy import nan
-import pandas as pd
-from gch4i.config import (
-    emi_data_dir_path,
-    proxy_data_dir_path,
-    V3_DATA_PATH,
-    tmp_data_dir_path,
-)
 
+import pandas as pd
+from numpy import nan
+
+from gch4i.config import (
+    V3_DATA_PATH,
+    emi_data_dir_path,
+    prelim_gridded_dir,
+    proxy_data_dir_path,
+)
 
 final_gridded_data_dir = V3_DATA_PATH / "final_gridded_methane"
 
@@ -30,6 +31,7 @@ missing_proxy_rows = []
 missing_final_data_rows = []
 groups = guide_sheet.gch4i_name.unique()
 # %%
+
 
 def main():
     # %%
@@ -53,7 +55,7 @@ def main():
         )  # all proxies present as files
         # create dictionary/row for gch4i_name and add to list of gch4i rows
 
-        prelim_path = tmp_data_dir_path / f"{g}_ch4_emi_flux.nc"
+        prelim_path = prelim_gridded_dir / f"{g}_ch4_emi_flux.nc"
         prelim_data_done = prelim_path.exists()
         final_path = final_gridded_data_dir / f"{g}_ch4_emi_flux.nc"
         final_data_done = final_path.exists()
@@ -137,6 +139,7 @@ def main():
                 {"type": "no_blanks", "format": format0},
             )
             proxy_sheet.autofit()
+
 
 # %%
 if __name__ == "__main__":

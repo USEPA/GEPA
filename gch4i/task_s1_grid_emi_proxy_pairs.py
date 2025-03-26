@@ -75,67 +75,17 @@ from gch4i.utils import (
     fill_missing_year_months,
     grid_allocated_emissions,
     make_emi_grid,
-    normalize,
     scale_emi_to_month,
+    check_raster_proxy_time_geo,
+    write_tif_output,
+)
+from gch4i.gridding_utils import (
+    prepare_emi_df,
+    prepare_proxy_df,
+    get_status_table,
+    update_status,
 )
 
-# import matplotlib.pyplot as plt
-# import numpy as np
-# from pytask import Product, mark, task
-
-
-# # from typing import Annotated
-# def fix_completed_status(status_db_path):
-#     # quick fix for inconsistent labeling of completed status in the database
-#     conn = sqlite3.connect(status_db_path)
-#     cursor = conn.cursor()
-#     cursor.execute(
-#         """
-#         UPDATE gridding_status
-#         SET status = 'complete'
-#         WHERE status = 'completed'
-#         """
-#     )
-#     conn.commit()
-#     conn.close()
-
-# def remove_status(gch4i_name, emi_id, proxy_id):
-#     cursor.execute(
-#         """
-#         DELETE FROM gridding_status
-#         WHERE gch4i_name = ? AND emi_id = ? AND proxy_id = ?
-#         """,
-#         (gch4i_name, emi_id, proxy_id),
-#     )
-#     conn.commit()
-
-
-# Function to update the status of a row
-def update_status(gch4i_name, emi_id, proxy_id, status):
-    cursor.execute(
-        """
-    INSERT INTO gridding_status (gch4i_name, emi_id, proxy_id, status)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(gch4i_name, emi_id, proxy_id) DO UPDATE SET status=excluded.status
-    """,
-        (gch4i_name, emi_id, proxy_id, status),
-    )
-    conn.commit()
-
-
-def get_status(gch4i_name, emi_id, proxy_id):
-    cursor.execute(
-        """
-        SELECT status FROM gridding_status
-        WHERE gch4i_name = ? AND emi_id = ? AND proxy_id = ?
-        """,
-        (gch4i_name, emi_id, proxy_id),
-    )
-    result = cursor.fetchone()
-    return result[0] if result else None
-
-
-# from pytask import Product, task
 gepa_profile = GEPA_spatial_profile()
 out_profile = gepa_profile.profile
 
@@ -143,19 +93,6 @@ gpd.options.io_engine = "pyogrio"
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", 20)
 pd.set_option("future.no_silent_downcasting", True)
-
-
-def get_status_table(status_db_path, working_dir):
-    # get a numan readable version of the status database
-    conn = sqlite3.connect(status_db_path)
-    status_df = pd.read_sql_query("SELECT * FROM gridding_status", conn)
-    conn.close()
-    status_df.to_csv(
-        working_dir / f"gridding_status_{formatted_today}.csv", index=False
-    )
-    return status_df
-
-
 # %%
 
 
@@ -274,13 +211,17 @@ CREATE TABLE IF NOT EXISTS gridding_status (
 )
 conn.commit()
 # %%
+
+status_df = get_status_table(status_db_path, working_dir, formatted_today)
+# %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = True
+SKIP = False
 SKIP_THESE = [
     "complete",
+    "monthly failed, annual complete",
     # "failed state/year QC",
     # "error reading proxy",
     # "emi missing years",
@@ -289,9 +230,9 @@ SKIP_THESE = [
     # "failed raster QC",
     # "failed allocation QC",
     # "proxy year has NAs",
+    # "failed annual raster QC",
+    # "failed monthly raster QC",
 ]
-
-status_df = get_status_table(status_db_path, working_dir)
 unique_pairs_df = mapping_df.drop_duplicates(
     subset=["gch4i_name", "emi_id", "proxy_id"]
 )
@@ -301,6 +242,9 @@ unique_pairs_df = unique_pairs_df.merge(
 
 if SKIP:
     unique_pairs_df = unique_pairs_df[~unique_pairs_df["status"].isin(SKIP_THESE)]
+# unique_pairs_df = unique_pairs_df.query("gch4i_name == '3B_manure_management'")
+unique_pairs_df = unique_pairs_df.query("(gch4i_name == '1A_stationary_combustion')")
+# unique_pairs_df = unique_pairs_df.query("(gch4i_name == '1A_stationary_combustion') & (emi_id == 'stat_comb_elec_oil_emi')")
 unique_pairs_df
 # %%
 conn = sqlite3.connect(status_db_path)
@@ -311,6 +255,12 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
     try:
         logging.info("=" * 83)
         logging.info(f"Gridding {base_name}.")
+        logging.info(
+            f"{row.emi_id} is at {row.emi_geo_level}/{row.emi_time_step} level."
+        )
+        logging.info(
+            f"{row.proxy_id} is at {row.proxy_geo_level}/{row.proxy_time_step} level."
+        )
 
         # get the status of the row from the database. There will only be a status if the
         # file has not yet been done.
@@ -325,17 +275,22 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             )
             # if annual_output_path.exists() and monthly_output_path.exists():
             #     logging.info(f"{base_name} already gridded.\n")
-            #     update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+            #     update_status(cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "complete")
             #     continue
         # elif annual_output_path.exists():
         #     logging.info(f"{base_name} already gridded.\n")
-        #     update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
+        #     update_status(cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "complete")
         #     continue
 
         if not row.proxy_has_file:
             logging.critical(f"{row.proxy_id} proxy file does not exist.\n")
             update_status(
-                row.gch4i_name, row.emi_id, row.proxy_id, "proxy file does not exist"
+                cursor,
+                conn,
+                row.gch4i_name,
+                row.emi_id,
+                row.proxy_id,
+                "proxy file does not exist",
             )
             continue
 
@@ -350,13 +305,6 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
         # 1. state+county/year+month/emissions
         # 2. state/year/emissions
         # 3. national/year/emissions
-
-        logging.info(
-            f"{row.emi_id} is at {row.emi_geo_level}/{row.emi_time_step} level."
-        )
-        logging.info(
-            f"{row.proxy_id} is at {row.proxy_geo_level}/{row.proxy_time_step} level."
-        )
 
         match row.emi_time_step:
             case "monthly":
@@ -389,7 +337,7 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             if missing_years:
                 logging.warning(f"{row.emi_id} is missing years: {missing_years}")
                 logging.warning(f"these years will be filled with 0s.")
-                # update_status(row.gch4i_name, row.emi_id, row.proxy_id, "emi missing years")
+                # update_status(cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "emi missing years")
                 # continue
         else:
             missing_years = False
@@ -409,7 +357,9 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
         elif row.emi_time_step == "annual" and row.proxy_time_step == "annual":
             time_col = "year"
 
-        if row.emi_geo_level == "national":
+        if row.file_type == "netcdf":
+            geo_col = "fips"
+        elif row.emi_geo_level == "national":
             geo_col = None
         elif row.emi_geo_level == "state":
             geo_col = "state_code"
@@ -418,7 +368,6 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
 
         match_cols = [time_col, geo_col]
         match_cols = [x for x in match_cols if x is not None]
-
         # STEP 3: GET AND FORMAT PROXY DATA
         # we apply a different set of functions depending on the proxy type.
         # if vector type
@@ -436,13 +385,20 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                 proxy_gdf = gpd.read_parquet(proxy_input_path).reset_index()
             except Exception as e:
                 update_status(
-                    row.gch4i_name, row.emi_id, row.proxy_id, "error reading proxy"
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "error reading proxy",
                 )
                 logging.critical(f"Error reading {row.proxy_id}: {e}\n")
                 continue
 
             if proxy_gdf.is_empty.any():
                 update_status(
+                    cursor,
+                    conn,
                     row.gch4i_name,
                     row.emi_id,
                     row.proxy_id,
@@ -453,6 +409,8 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
 
             if not proxy_gdf.is_valid.all():
                 update_status(
+                    cursor,
+                    conn,
                     row.gch4i_name,
                     row.emi_id,
                     row.proxy_id,
@@ -482,7 +440,12 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                 except:
                     logging.critical(f"{row.proxy_id} year column has NAs.\n")
                     update_status(
-                        row.gch4i_name, row.emi_id, row.proxy_id, "proxy year has NAs"
+                        cursor,
+                        conn,
+                        row.gch4i_name,
+                        row.emi_id,
+                        row.proxy_id,
+                        "proxy year has NAs",
                     )
                     continue
 
@@ -499,9 +462,7 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                     )
                 except ValueError:
                     proxy_gdf = proxy_gdf.assign(
-                        month=lambda df: pd.to_datetime(
-                            df["month"], format="%b"
-                        ).dt.month,
+                        month=lambda df: pd.to_datetime(df["month"], format="%b").dt.month,
                         year_month=lambda df: pd.to_datetime(
                             df[["year", "month"]].assign(DAY=1)
                         ).dt.strftime("%Y-%m"),
@@ -526,6 +487,31 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                     .transform(normalize)
                 )
                 rel_emi_col = "rel_emi"
+            else:
+                rel_emi_col = row.proxy_rel_emi_col
+
+            # check that the proxy and emi files have matching state years
+            # NOTE: this is going to arise when the proxy data are lacking adequate
+            # spatial or temporal coverage. Failure here will require finding new data
+            # and/or filling in missing state/years.
+            time_geo_qc_pass, time_geo_qc_df = check_state_year_match(
+                emi_df, proxy_gdf, row, geo_col, "year"
+            )
+            time_geo_qc_df.to_csv(time_geo_qc_dir / f"{base_name}_qc_state_year.csv")
+            # if the proxy data do not match the emi, fail, continue out of this pair
+            if time_geo_qc_pass:
+                logging.info(f"QC PASSED: {base_name} passed state/year QC.")
+            else:
+                logging.critical(f"{base_name} failed state/year QC.\n")
+                update_status(
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "failed state/year QC",
+                )
+                continue
 
             # if the proxy file has monthly data, but the emi file does not, we expand
             # the emi file to match the year_month column of the proxy data.
@@ -535,25 +521,6 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             if (row.proxy_time_step == "monthly") & (row.emi_time_step == "annual"):
                 # break
                 emi_df = scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col)
-
-            # check that the proxy and emi files have matching state years
-            # NOTE: this is going to arise when the proxy data are lacking adequate
-            # spatial or temporal coverage. Failure here will require finding new data
-            # and/or filling in missing state/years.
-            time_geo_qc_pass, time_geo_qc_df = check_state_year_match(
-                emi_df, proxy_gdf, row, geo_col, time_col
-            )
-
-            time_geo_qc_df.to_csv(time_geo_qc_dir / f"{base_name}_qc_state_year.csv")
-            # if the proxy data do not match the emi, fail, continue out of this pair
-            if time_geo_qc_pass:
-                logging.info(f"QC PASSED: {base_name} passed state/year QC.")
-            else:
-                logging.critical(f"{base_name} failed state/year QC.\n")
-                update_status(
-                    row.gch4i_name, row.emi_id, row.proxy_id, "failed state/year QC"
-                )
-                continue
 
             # if we have passed the check that the proxy matches the emi by geographic
             # and temporal levels, we are ready to allocate the inventory emissions
@@ -586,7 +553,12 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             else:
                 logging.critical(f"{base_name} failed allocation QC.\n")
                 update_status(
-                    row.gch4i_name, row.emi_id, row.proxy_id, "failed allocation QC"
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "failed allocation QC",
                 )
                 continue
 
@@ -647,7 +619,12 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                         f"{row.emi_id}, {row.proxy_id} gridding failed {e}\n"
                     )
                     update_status(
-                        row.gch4i_name, row.emi_id, row.proxy_id, "gridding failed"
+                        cursor,
+                        conn,
+                        row.gch4i_name,
+                        row.emi_id,
+                        row.proxy_id,
+                        "gridding failed",
                     )
                     continue
 
@@ -656,24 +633,7 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
 
             # read the proxy file
             proxy_ds = xr.open_dataset(proxy_input_path)  # .rename({"geoid": geo_col})
-            # Drop any coordinates in proxy_ds that are not y, x, or the time_col
-            proxy_ds = proxy_ds.drop_vars(
-                [
-                    coord
-                    for coord in proxy_ds.coords
-                    if coord not in [time_col, "y", "x"]
-                ]
-            )
-            proxy_ds = proxy_ds.assign_coords(
-                x=("x", gepa_profile.x), y=("y", gepa_profile.y)
-            )
-            # Reorder the dimensions of proxy_ds to be time, y, x
-            # proxy_ds = proxy_ds.transpose(time_col, "y", "x").sortby([time_col, "y", "x"])
 
-            if "fips" not in emi_df.columns:
-                emi_df = emi_df.merge(
-                    state_gdf[["state_code", "fips"]], on="state_code", how="left"
-                )
             # if the emi is month and the proxy is annual, we expand the dimensions of
             # the proxy, repeating the year values for every month in the year
             # we stack the year/month dimensions into a single year_month so that
@@ -684,11 +644,43 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
                     .stack({"year_month": ["year", "month"]})
                     .sortby(["year_month", "y", "x"])
                 )
-            # proxy_fips = np.unique(proxy_ds.fips.values)
-            # emi_fips = np.unique(emi_df.fips.values)
-            # missing_fips = set(emi_fips) - set(proxy_fips)
-            # if len(missing_fips) != 0:
-            #     logging.critical(f"{row.proxy_id} missing fips: {missing_fips}")
+
+            proxy_ds = proxy_ds.assign_coords(
+                x=("x", gepa_profile.x), y=("y", gepa_profile.y)
+            )
+
+            if "fips" not in emi_df.columns:
+                emi_df = emi_df.merge(
+                    state_gdf[["state_code", "fips"]], on="state_code", how="left"
+                )
+            if "fips" not in proxy_ds.coords:
+                if "geoid" in proxy_ds.coords:
+                    proxy_ds = proxy_ds.rename({"geoid": "fips"})
+                elif "statefp" in proxy_ds.coords:
+                    proxy_ds = proxy_ds.rename({"statefp": "fips"})
+
+            # check that the proxy and emi files have matching state years
+            # NOTE: this is going to arise when the proxy data are lacking adequate
+            # spatial or temporal coverage. Failure here will require finding new data
+            # and/or filling in missing state/years.
+            time_geo_qc_pass, time_geo_qc_df = check_raster_proxy_time_geo(
+                emi_df, proxy_ds, row, geo_col, time_col
+            )
+            time_geo_qc_df.to_csv(time_geo_qc_dir / f"{base_name}_qc_state_year.csv")
+            # if the proxy data do not match the emi, fail, continue out of this pair
+            if time_geo_qc_pass:
+                logging.info(f"QC PASSED: {base_name} passed state/year QC.")
+            else:
+                logging.critical(f"{base_name} failed state/year QC.\n")
+                update_status(
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "failed state/year QC",
+                )
+                continue
 
             match row.emi_geo_level:
                 case "state":
@@ -698,10 +690,6 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             # NOTE: this is slow.
             emi_xr = make_emi_grid(emi_df, admin_gdf, time_col)
 
-            # if the emi is missing a year by now, we need to fill in the missing years
-            # we first remove the year from the proxy, then we add the missing years of
-            # data as zero arrays at the end.
-
             # here we are going to remove missing years from the proxy dataset
             # so we can stack it against the emissions dataset
             if missing_years:
@@ -710,6 +698,7 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
             # assign the emissions array to the proxy dataset
             # proxy_ds["emissions"] = ([time_col, "y", "x"], emi_xr)
             proxy_ds["emissions"] = (emi_xr.dims, emi_xr.data)
+
             # # look to make sure the emissions loaded in the correct orientation
             # proxy_ds["emissions"].sel(year_month=(2020, 1)).where(lambda x: x > 0).plot(
             #     cmap="hot"
@@ -733,59 +722,176 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
         # the monthly data.
         if time_col == "year_month":
             yearly_results = proxy_ds["results"].groupby("year").sum()
-            raster_qc_pass, raster_qc_df = QC_emi_raster_sums(
+            monthly_raster_qc_pass, monthly_raster_qc_df = QC_emi_raster_sums(
                 proxy_ds["results"], emi_df, time_col
             )
-            raster_qc_df.to_csv(
+            monthly_raster_qc_df.to_csv(
                 emi_grid_qc_dir / f"{base_name}_emi_grid_qc_monthly.csv"
             )
-            if not raster_qc_pass:
+            if monthly_raster_qc_pass:
+                write_tif_output(proxy_ds, monthly_output_path)
+                logging.info(f"{base_name} monthly gridding complete.\n")
+            else:
                 logging.critical(f"{base_name} failed monthly raster QC.\n")
-                update_status(
-                    row.gch4i_name, row.emi_id, row.proxy_id, "failed monthly raster QC"
-                )
-                continue
-
-            # if we have passed the QC step, we are ready to write out the monthly
-            # gridded emissions data to a raster file.
-            out_profile.update(count=len(years) * 12)
-            out_arr = np.flip(
-                proxy_ds["results"].transpose("year_month", "y", "x").values, axis=1
-            )
-            with rasterio.open(monthly_output_path, "w", **out_profile) as dst:
-                dst.write(out_arr)
-            logging.info(f"{base_name} monthly gridding complete.\n")
-            update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
         else:
             # if the time step is annual, we need to get the annual emissions data. Here
             # this just gives it a new name, but it is the same as the results variable.
             yearly_results = proxy_ds["results"]
         # now we QC the annual data. This is the final QC step.
-        raster_qc_pass, raster_qc_df = QC_emi_raster_sums(
+        yearly_raster_qc_pass, yearly_raster_qc_df = QC_emi_raster_sums(
             yearly_results, emi_df, "year"
         )
-        raster_qc_df.to_csv(emi_grid_qc_dir / f"{base_name}_emi_grid_qc.csv")
-        if raster_qc_pass:
-            # if we have passed all the QC steps, we are ready to write out the annual
-            # gridded emissions data to a raster file.
-            out_profile.update(count=len(years))
-            out_arr = np.flip(yearly_results.transpose("year", "y", "x").values, axis=1)
-            with rasterio.open(annual_output_path, "w", **out_profile) as dst:
-                dst.write(out_arr)
+        yearly_raster_qc_df.to_csv(emi_grid_qc_dir / f"{base_name}_emi_grid_qc.csv")
+        if yearly_raster_qc_pass:
+            write_tif_output(yearly_results, annual_output_path)
             logging.info(f"{base_name} annual gridding complete.\n")
-            update_status(row.gch4i_name, row.emi_id, row.proxy_id, "complete")
         else:
             logging.critical(f"{base_name} failed annual raster QC.\n")
-            update_status(
-                row.gch4i_name, row.emi_id, row.proxy_id, "failed annual raster QC"
-            )
-            continue
+
+        if time_col == "year_month":
+            if all([monthly_raster_qc_pass, yearly_raster_qc_pass]):
+                update_status(
+                    cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "complete"
+                )
+            elif monthly_raster_qc_pass and not yearly_raster_qc_pass:
+                update_status(
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "monthly complete, annual failed",
+                )
+            elif not monthly_raster_qc_pass and yearly_raster_qc_pass:
+                update_status(
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "monthly failed, annual complete",
+                )
+            elif not monthly_raster_qc_pass and not yearly_raster_qc_pass:
+                update_status(
+                    cursor,
+                    conn,
+                    row.gch4i_name,
+                    row.emi_id,
+                    row.proxy_id,
+                    "monthly failed, annual failed",
+                )
+        elif time_col == "year":
+            if yearly_raster_qc_pass:
+                update_status(
+                    cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "complete"
+                )
+            else:
+                update_status(
+                    cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "failed"
+                )
 
     except Exception as e:
         logging.critical(f"{base_name} failed {e}\n")
-        update_status(row.gch4i_name, row.emi_id, row.proxy_id, "failed")
+        update_status(cursor, conn, row.gch4i_name, row.emi_id, row.proxy_id, "failed")
         continue
 conn.close()
 
 
 # %%
+# alloc_gdf_proj = allocation_gdf.to_crs("ESRI:102003")
+# intersect_mask = alloc_gdf_proj.intersects(cell_gdf.union_all())
+# # %%
+# ax = alloc_gdf_proj[intersect_mask].plot(color="xkcd:slate")
+# alloc_gdf_proj[~intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
+# xlim = ax.get_xlim()
+# ylim = ax.get_ylim()
+# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
+# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
+# ax.set_xlim(xlim)
+# ax.set_ylim(ylim)
+
+# # %%
+# ax = allocation_gdf[intersect_mask].plot(color="xkcd:slate")
+# allocation_gdf[~intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
+# xlim = ax.get_xlim()
+# ylim = ax.get_ylim()
+# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
+# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
+# ax.set_xlim(xlim)
+# ax.set_ylim(ylim)
+# # %%
+# proxy_intersect_mask = proxy_gdf.intersects(state_gdf.union_all())
+
+# ax = proxy_gdf[proxy_intersect_mask].plot(color="xkcd:slate")
+# proxy_gdf[~proxy_intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
+# xlim = ax.get_xlim()
+# ylim = ax.get_ylim()
+# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
+# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
+# ax.set_xlim(xlim)
+# ax.set_ylim(ylim)
+# # %%
+# import matplotlib.pyplot as plt
+
+# state_union = state_gdf.union_all()
+
+# # %%
+# from gch4i.utils import get_cell_gdf
+
+# cell_gdf = get_cell_gdf()
+# cell_gdf_union = cell_gdf.dissolve().to_crs(4326)
+
+# # %%
+
+# data_dict = {}
+# for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_df)):
+#     if row.file_type == "parquet":
+#         proxy_input_path = list(proxy_data_dir_path.glob(f"{row.proxy_id}.*"))[0]
+#         proxy_gdf = gpd.read_parquet(proxy_input_path).reset_index()
+#         print(f"{row.proxy_id} has {proxy_gdf.shape[0]} rows.")
+#         data_dict[row.proxy_id] = proxy_gdf
+
+# # %%
+# for proxy_id, proxy_gdf in data_dict.items():
+#     if "state_code" in proxy_gdf.columns:
+#         state_mask = proxy_gdf.state_code.isin(state_gdf.state_code.unique())
+#         proxy_gdf = proxy_gdf[state_mask]
+#         proxy_out_of_state = proxy_gdf[~state_mask]
+#         display(proxy_out_of_state)
+#         print(f"{proxy_id} has {proxy_out_of_state.shape[0]} rows outside of states.")
+#         proxy_intersect_mask = proxy_gdf.intersects(state_union)
+#         bad_data_gdf = proxy_gdf[~proxy_intersect_mask]
+#         good_data_gdf = proxy_gdf[proxy_intersect_mask]
+#         outside_states = bad_data_gdf.state_code.value_counts()
+#         print(outside_states)
+#     else:
+#         bad_data_gdf = proxy_gdf[~proxy_intersect_mask]
+#         good_data_gdf = proxy_gdf[proxy_intersect_mask]
+
+#     print(f"there are {bad_data_gdf.shape[0]} bad records")
+
+#     if not proxy_intersect_mask.all():
+#         ax = good_data_gdf.plot(color="xkcd:slate", markersize=1, zorder=10)
+#         if "state_code" in bad_data_gdf.columns:
+#             bad_data_gdf.plot(color="xkcd:scarlet", legend=False, markersize=15, ax=ax)
+#         else:
+#             bad_data_gdf.plot(color="xkcd:scarlet", markersize=15, ax=ax)
+#         # xlim = ax.get_xlim()
+#         # ylim = ax.get_ylim()
+#         # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
+#         state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
+#         cell_gdf_union.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
+#         ax.set_title(f"{proxy_id} has {bad_data_gdf.shape[0]} bad records")
+#         # ax.set_xlim(xlim)
+#         # ax.set_ylim(ylim)
+#         plt.show()
+#         plt.close()
+#     print()
+# # %%
+# tmp_pairs_df = mapping_df.drop_duplicates(
+#     subset=["gch4i_name", "emi_id", "proxy_id"]
+# ).merge(
+#     status_df, on=["gch4i_name", "emi_id", "proxy_id"]
+# ).query("gch4i_name == '1A_stationary_combustion'")
+# tmp_pairs_df
+# # %%

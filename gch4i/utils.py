@@ -59,6 +59,7 @@ GWP_CH4 = 25
 # def reverse_flux_calculation():
 #     pass
 
+
 # define a function to normalize the population data by state and year
 def normalize(x):
     return x / x.sum() if x.sum() > 0 else 0
@@ -68,6 +69,64 @@ def normalize(x):
 # defined a new one here to appease xarray.
 def normalize_xr(x):
     return x / x.sum()
+
+
+def check_raster_proxy_time_geo(emi_df, proxy_ds, row, geo_col, time_col):
+    # check that the proxy and emi files have matching state years
+    # NOTE: this is going to arise when the proxy data are lacking adequate
+    # spatial or temporal coverage. Failure here will require finding new data
+    # and/or filling in missing state/years.
+
+    if geo_col is not None:
+        grouper_cols = [geo_col, time_col]
+    else:
+        grouper_cols = [time_col]
+
+    if time_col == "year_month":
+        proxy_ds = proxy_ds.assign_coords(
+            year_month=pd.to_datetime(
+                pd.DataFrame(
+                    {
+                        "year": proxy_ds.year.values,
+                        "month": proxy_ds.month.values,
+                        "day": 1,
+                    }
+                )
+            ).dt.strftime("%Y-%m")
+        )
+
+    rel_emi_check = (
+        proxy_ds["rel_emi"]
+        .groupby(grouper_cols)
+        .sum()
+        .to_dataframe()
+        .reset_index()
+        # .astype({time_col: int})
+        .set_index(grouper_cols)
+    )
+    final_df = emi_df.set_index(grouper_cols).join(rel_emi_check)
+    match_check = final_df[(final_df.ghgi_ch4_kt > 0) & (final_df.rel_emi < 0.9)]
+    if len(match_check) > 0:
+
+        if geo_col:
+            missing_states = match_check.state_code.value_counts()
+            logging.critical(
+                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
+                "proxy state/year columns do not match emissions\n"
+                "missing states and counts of missing times:\n"
+                f"{missing_states.to_string().replace("\n", "\n\t")}"
+                "\n"
+            )
+        else:
+            logging.critical(
+                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
+                "proxy time column does not match emissions\n"
+                "missing times:\n"
+                f"{match_check[match_check['has_proxy'] == False][time_col].unique()}"
+            )
+        return False, match_check
+    else:
+        return True, match_check
 
 
 def check_state_year_match(emi_df, proxy_gdf, row, geo_col, time_col):
@@ -442,41 +501,59 @@ def grid_allocated_emissions(
     return out_ds
 
 
-# TODO: write this to accept months. There will need to be an if/else statement
-# to get the number of days used in the flux calculations.
-# XXX: create an actual datetime column to use?
 def calculate_flux(
-    in_ds: dict[str, np.array], timestep: str = "year"
-) -> dict[str, np.array]:
+    in_ds: xr.DataArray, timestep: str = "year", direction: str = "mass2flux"
+) -> xr.DataArray:
     """calculates flux for dictionary of total emissions year/array pairs"""
     area_matrix = load_area_matrix()
-
     gepa_profile = GEPA_spatial_profile()
+    times = in_ds.time.values
 
-    # for each year in the input dictionary
-    ch4_flux_result_rasters = {}
-    if timestep == "year":
-        for time in in_ds.time:
-            time_var = int(time)
-            data = np.flip(in_ds.sel(time=time), 0)
-            month_days = [calendar.monthrange(time_var, x)[1] for x in range(1, 13)]
-            year_days = np.sum(month_days)
-            conversion_factor_annual = calc_conversion_factor(year_days, area_matrix)
-            ch4_flux_raster = data * conversion_factor_annual
-            ch4_flux_result_rasters[time_var] = ch4_flux_raster
+    def get_days_in_year(year):
+        year = int(year)
+        return 366 if calendar.isleap(year) else 365
+
+    def get_days_in_month(year_month):
+        year, month = year_month.split("-")
+        year = int(year)
+        month = int(month)
+        return calendar.monthrange(year, month)[1]
+
+    if timestep == "year_month":
+        days_in_months = [get_days_in_month(x) for x in times]
+        conv_factors = [calc_conversion_factor(x, area_matrix) for x in days_in_months]
+
+        conv_ds = xr.DataArray(
+            np.flip(conv_factors, 1),
+            dims=["time", "y", "x"],
+            coords=[times, gepa_profile.y, gepa_profile.x],
+            name="conversion_factor",
+        )
+    elif timestep == "year":
+        days_in_year = [get_days_in_year(x) for x in times]
+        conv_factors = [calc_conversion_factor(x, area_matrix) for x in days_in_year]
+
+        conv_ds = xr.DataArray(
+            np.flip(conv_factors, 1),
+            dims=["time", "y", "x"],
+            coords=[times, gepa_profile.y, gepa_profile.x],
+            name="conversion_factor",
+        )
     else:
-        raise ValueError("we can't do months yet...")
+        raise ValueError(
+            f"timestep must be either 'year' or 'year_month', not {timestep}"
+        )
 
-    time_var = list(ch4_flux_result_rasters.keys())
-    arr_stack = np.stack(list(ch4_flux_result_rasters.values()), axis=0)
-    arr_stack = np.flip(arr_stack, axis=1)
-    out_ds = xr.DataArray(
-        arr_stack,
-        dims=["time", "y", "x"],
-        coords=[time_var, gepa_profile.y, gepa_profile.x],
-    ).rename("results")
+    if direction == "mass2flux":
+        flux_da = in_ds * conv_ds
+    elif direction == "flux2mass":
+        flux_da = in_ds / conv_ds
+    else:
+        raise ValueError(
+            f"direction must be either 'mass2flux' or 'flux2mass', not {direction}"
+        )
 
-    return out_ds
+    return flux_da
 
 
 def QC_proxy_allocation(
@@ -617,17 +694,17 @@ def QC_emi_raster_sums(
     # of each other to be considered equal.
     relative_tolerance = 0.0001
     sum_check = emi_sum_check.join(proxy_sum_check).assign(
-        isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"]),
-        diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["results"])
+        isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"], rtol=1e-5),
+        rel_diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["results"])
         / ((df["ghgi_ch4_kt"] + df["results"]) / 2),
-        qc_pass=lambda df: (df["diff"] < relative_tolerance),
+        qc_pass=lambda df: (df["rel_diff"] < relative_tolerance),
     )
 
     # in the cases where the difference is NaN (where the inventory emission value is 0
     # and the allocated value is 0), we fall back on numpy isclose to define
     # if the value is close enough to pass
     sum_check["qc_pass"] = sum_check["isclose"].where(
-        sum_check["diff"].isna(), sum_check["qc_pass"]
+        sum_check["rel_diff"].isna(), sum_check["qc_pass"]
     )
 
     all_pass = sum_check.qc_pass.all()
@@ -665,17 +742,27 @@ def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
 
 
 def write_tif_output(in_ds: xr.Dataset, dst_path: Path, resolution=0.1) -> None:
-    """take an input dictionary with year/array items, write raster to dst_path"""
+    """Write a raster to a tif file from a xarray object
 
-    gepa_profile = GEPA_spatial_profile(resolution)
+    Args:
+        in_ds (xr.Dataset): Input xarray dataset containing the raster data.
+        dst_path (Path): Path to the output tif file.
+        resolution (float, optional): Resolution of the output raster. Defaults to 0.1.
 
-    # one last final check that the coordinates are written out correctly
-    in_ds = in_ds.assign_coords({"x": gepa_profile.x, "y": gepa_profile.y})
+    Returns:
+        None
 
-    in_ds.rio.write_crs(gepa_profile.profile["crs"]).rio.write_transform(
-        gepa_profile.profile["transform"]
-    ).rio.to_raster(dst_path)
-    return None
+    NOTE: this is being used because the rioxarray.to_raster() function is broken. It
+    itroduces noise into the array that I can't explain.
+
+    """
+
+    out_profile = GEPA_spatial_profile(resolution).profile
+
+    out_data = np.flip(in_ds.values, axis=1)
+    out_profile.update(count=out_data.shape[0])
+    with rasterio.open(dst_path, "w", **out_profile) as dst:
+        dst.write(out_data)
 
 
 def load_area_matrix(resolution=0.1) -> np.array:
@@ -759,45 +846,44 @@ def plot_annual_raster_data(v3_data, SOURCE_NAME) -> None:
 
     profile = GEPA_spatial_profile()
 
+    # The EPA color map from their V2 plots
+    custom_colormap = colors.LinearSegmentedColormap.from_list(
+        name="custom_colormap",
+        colors=[
+            "#6F4C9B",
+            "#6059A9",
+            "#5568B8",
+            "#4E79C5",
+            "#4D8AC6",
+            "#4E96BC",
+            "#549EB3",
+            "#59A5A9",
+            "#60AB9E",
+            "#69B190",
+            "#77B77D",
+            "#8CBC68",
+            "#A6BE54",
+            "#BEBC48",
+            "#D1B541",
+            "#DDAA3C",
+            "#E49C39",
+            "#E78C35",
+            "#E67932",
+            "#E4632D",
+            "#DF4828",
+            "#DA2222",
+            "#B8221E",
+            "#95211B",
+            "#721E17",
+            "#521A13",
+        ],
+        N=3000,
+    )
     # Plot the raster data for each year in the dictionary of rasters
     for year in v3_data.time:
         year = int(year.values)
         # subset the dict of rasters for each year
         raster_data = np.flip(v3_data.sel(time=year).values, 0)
-
-        # The EPA color map from their V2 plots
-        custom_colormap = colors.LinearSegmentedColormap.from_list(
-            name="custom_colormap",
-            colors=[
-                "#6F4C9B",
-                "#6059A9",
-                "#5568B8",
-                "#4E79C5",
-                "#4D8AC6",
-                "#4E96BC",
-                "#549EB3",
-                "#59A5A9",
-                "#60AB9E",
-                "#69B190",
-                "#77B77D",
-                "#8CBC68",
-                "#A6BE54",
-                "#BEBC48",
-                "#D1B541",
-                "#DDAA3C",
-                "#E49C39",
-                "#E78C35",
-                "#E67932",
-                "#E4632D",
-                "#DF4828",
-                "#DA2222",
-                "#B8221E",
-                "#95211B",
-                "#721E17",
-                "#521A13",
-            ],
-            N=3000,
-        )
 
         # Set all raster values == 0 to nan so they are not plotted
         raster_data[np.where(raster_data == 0)] = np.nan
@@ -849,11 +935,8 @@ def plot_annual_raster_data(v3_data, SOURCE_NAME) -> None:
         )
         plt.title(annual_plot_title, fontsize=14)
 
-        # Save the plot as a PNG file
-        # plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
-
         # Save the plots as PNG files to the figures directory
-        plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_{year}.png")
+        plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_{year}.png")
 
         # Show the plot for review
         # plt.show()
@@ -947,7 +1030,7 @@ def plot_raster_data_difference(in_da: xr.DataArray, SOURCE_NAME) -> None:
     plt.title(difference_plot_title, fontsize=14)
 
     # Save the plot as a PNG file
-    plt.savefig(str(figures_data_dir_path) + f"/{SOURCE_NAME}_ch4_flux_difference.png")
+    plt.savefig(figures_data_dir_path / f"{SOURCE_NAME}_ch4_flux_difference.png")
 
     # Show the plot for review
     # plt.show()
@@ -1026,35 +1109,38 @@ def us_state_to_abbrev(state_name: str) -> str:
     )
 
 
-def QC_flux_emis(v3_data, SOURCE_NAME, v2_name=None) -> None:
+def QC_flux_emis(v3_flux_da, SOURCE_NAME, v2_name=None) -> None:
     """
     Function to compare and plot the difference between v2 and v3 for each year of the
     raster data for each sector.
     """
 
     # Check for expected years
-    from config import (min_year, max_year)
-    actual_years = set(v3_data.time.values.astype(int))
+    from config import min_year, max_year
+
+    gepa_profile = GEPA_spatial_profile()
+
+    actual_years = set(v3_flux_da.time.values.astype(int))
     expected_years = set(range(min_year, max_year + 1))
     missing_years = expected_years - actual_years
     if missing_years:
         Warning(f"Missing years in v3 data for {SOURCE_NAME}: {sorted(missing_years)}")
-    
+
     # Check for negative values
-    for year in v3_data.time:
+    for year in v3_flux_da.time:
         year_val = int(year.values)
-        v3_arr = np.flip(v3_data.sel(time=year).values, 0)
+        v3_arr = np.flip(v3_flux_da.sel(time=year).values, 0)
         neg_count = np.sum(v3_arr < 0)
         if neg_count > 0:
             neg_percent = (neg_count / v3_arr.size) * 100
-            Warning(f"Source {SOURCE_NAME}, Year {year_val} has {neg_count} negative values ({neg_percent:.2f}% of cells)")
+            Warning(
+                f"Source {SOURCE_NAME}, Year {year_val} has {neg_count} negative values ({neg_percent:.2f}% of cells)"
+            )
 
     # compare against v2 values, if v2_data exists
-    if v2_name is None:
+    if v2_name == "":
         Warning(f"there is no v2 raster data to compare against v3 for {SOURCE_NAME}!")
     else:
-        profile = GEPA_spatial_profile()
-
         # Get v2 flux raster data
         v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
         v2_data_dict = {}
@@ -1069,161 +1155,170 @@ def QC_flux_emis(v3_data, SOURCE_NAME, v2_name=None) -> None:
                 ].values.squeeze(axis=0)
                 v2_data_dict[v2_year] = v2_data
 
-        # Compare v2 data against v3 data for available v2 years
-        result_list = []
-        # for year in v3_data.keys():
-        for year in v3_data.time:
-            year = int(year.values)
-            if year in v2_data_dict.keys():
-                v3_arr = np.flip(v3_data.sel(time=year).values, 0)
-                # Comparison of fluxes:
-                # difference flux raster
-                yearly_dif = v3_arr - v2_data_dict[year]
-                # v2 flux raster sum
-                v2_sum = np.nansum(v2_data_dict[year])
-                # v3 flux raster sum
-                v3_sum = np.nansum(v3_arr)
-                # percent difference between v2 and v3
-                percent_dif = 100 * (v3_sum - v2_sum) / ((v3_sum + v2_sum) / 2)
-                logging.info(
-                    f"year: {year}, v2 flux sum: {v2_sum}, v3 flux sum: {v3_sum}, "
-                    f"percent difference: {percent_dif}"
-                )
-                # descriptive statistics on the difference raster
-                result_list.append(
-                    pd.DataFrame(yearly_dif.ravel())
-                    .dropna(how="all", axis=1)
-                    .describe()
-                    .rename(columns={0: year})
-                )
-                # Comparison of masses:
-                # flux to mass conversion factor
-                area_matrix = load_area_matrix()
-                month_days = [
-                    calendar.monthrange(int(year), x)[1] for x in range(1, 13)
-                ]
-                year_days = np.sum(month_days)
-                conversion_factor_annual = calc_conversion_factor(
-                    year_days, area_matrix
-                )
-                # v2 mass raster sum
-                # divide by the flux conversion factor to transform back into mass units
-                v2_mass_raster = v2_data_dict[year] / conversion_factor_annual
-                v2_mass_sum = np.nansum(v2_mass_raster)
-                # v3 mass raster sum
-                v3_mass_raster = v3_arr / conversion_factor_annual
-                v3_mass_sum = np.nansum(v3_mass_raster)
-                # percent difference between v2 and v3
-                percent_dif_mass = (
-                    100
-                    * (v3_mass_sum - v2_mass_sum)
-                    / ((v3_mass_sum + v2_mass_sum) / 2)
-                )
-                logging.info(
-                    f"year: {year}, v2 mass sum: {v2_mass_sum}, "
-                    f"v3 mass sum: {v3_mass_sum}, "
-                    f"percent difference: {percent_dif_mass}"
-                )
+        v2_flux_da = xr.DataArray(
+            np.flip(np.array(list(v2_data_dict.values())), 1),
+            dims=["time", "y", "x"],
+            coords=[list(v2_data_dict.keys()), gepa_profile.y, gepa_profile.x],
+            name=v2_name,
+        )
 
-                # Set all raster values == 0 to nan so they are not plotted
-                v2_data_dict[year][np.where(v2_data_dict[year] == 0)] = np.nan
-                v3_arr[np.where(v3_arr == 0)] = np.nan
-                yearly_dif[np.where(yearly_dif == 0)] = np.nan
+        # %%
+        v3_time_match_da = v3_flux_da.sel(time=list(v2_data_dict.keys()))
+        flux_diff_da = v3_time_match_da - v2_flux_da
 
-                # Plot the difference between v2 and v3 methane emissions for each year
-                custom_colormap = colors.LinearSegmentedColormap.from_list(
-                    name="custom_colormap",
-                    colors=[
-                        "#2166AC",
-                        "#4393C3",
-                        "#92C5DE",
-                        "#D1E5F0",
-                        "#F7F7F7",
-                        "#FDDBC7",
-                        "#F4A582",
-                        "#D6604D",
-                        "#B2182B",
-                    ],
-                    N=3000,
-                )
-                # Create a figure and axis with the specified projection
-                fig, ax = plt.subplots(
-                    figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
-                )
-                # Set extent to the continental US
-                ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-                # This is a "background map" workaround that allows us to add plot
-                # features like the colorbar and then use rasterio to plot the raster
-                # data on top of the background map.
-                background_map = ax.imshow(
-                    yearly_dif,
-                    cmap=custom_colormap,
-                )
-                # Add natural earth features
-                ax.add_feature(cfeature.LAND)
-                ax.add_feature(cfeature.OCEAN)
-                ax.add_feature(cfeature.COASTLINE)
-                ax.add_feature(cfeature.STATES)
-                # Plot the raster data using rasterio (this uses matplotlib imshow
-                # under the hood)
-                show(
-                    yearly_dif,
-                    transform=profile.profile["transform"],
-                    ax=ax,
-                    cmap=custom_colormap,
-                    interpolation="none",
-                )
-                # Set various plot parameters
-                ax.tick_params(labelsize=10)
-                fig.colorbar(
-                    background_map,
-                    orientation="horizontal",
-                    label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
-                )
-                # Add a title
-                difference_plot_title = (
-                    f"{year} Difference between v2 and v3 methane "
-                    f"emissions from {SOURCE_NAME}"
-                )
-                plt.title(difference_plot_title, fontsize=14)
-                # Save the plot as a PNG file
-                plt.savefig(
-                    str(figures_data_dir_path)
-                    + f"/{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year}.png"
-                )
-                # Show the plot for review
-                # plt.show()
-                # Close the plot
-                plt.close()
+        v2_flux_yearly_sums = np.nansum(v2_flux_da.values, axis=(1, 2))
+        v3_flux_yearly_sums = np.nansum(v3_time_match_da.values, axis=(1, 2))
 
-                # Plot the grid cell level frequencies of v2 and v3 methane emissions
-                # for each year
-                fig, (ax1, ax2) = plt.subplots(2)
-                fig.tight_layout()
-                ax1.hist(v2_data_dict[year].ravel(), bins=100)
-                ax2.hist(v3_arr.ravel(), bins=100)
-                # Add a title
-                histogram_plot_title = (
-                    f"{year} Frequency of methane emissions from "
-                    f"{SOURCE_NAME} at the grid cell level"
-                )
-                ax1.set_title(histogram_plot_title)
-                # Add axis labels
-                ax2.set_xlabel("Methane emissions (Mg a$^{-1}$ km$^{-2}$)")
-                ax1.set_ylabel("v2 frequency")
-                ax2.set_ylabel("v3 frequency")
-                # Save the plot as a PNG file
-                plt.savefig(
-                    str(figures_data_dir_path)
-                    + f"/{SOURCE_NAME}_ch4_flux_histogram_{year}.png"
-                )
-                # Show the plot for review
-                # plt.show()
-                # Close the plot
-                plt.close()
+        flux_dif_df = pd.DataFrame(
+            {
+                "year": list(v2_data_dict.keys()),
+                "v2_sum": v2_flux_yearly_sums,
+                "v3_sum": v3_flux_yearly_sums,
+            }
+        ).assign(metric="flux")
+        flux_dif_df
 
-        result_df = pd.concat(result_list, axis=1)
-        return result_df
+        # %%
+        v3_mass_da = calculate_flux(
+            v3_time_match_da, timestep="year", direction="flux2mass"
+        )
+        v2_mass_da = calculate_flux(v2_flux_da, timestep="year", direction="flux2mass")
+        mass_diff_da = v3_mass_da - v2_mass_da
+
+        v2_mass_yearly_sums = np.nansum(v2_mass_da.values, axis=(1, 2))
+        v3_mass_yearly_sums = np.nansum(v3_mass_da.values, axis=(1, 2))
+
+        mass_dif_df = pd.DataFrame(
+            {
+                "year": list(v2_data_dict.keys()),
+                "v2_sum": v2_mass_yearly_sums,
+                "v3_sum": v3_mass_yearly_sums,
+            }
+        ).assign(metric="mass")
+        mass_dif_df
+
+        qc_df = pd.concat([flux_dif_df, mass_dif_df], axis=0).assign(
+            yearly_dif=lambda df: df["v3_sum"] - df["v2_sum"],
+            percent_dif=lambda df: 100
+            * (df["v3_sum"] - df["v2_sum"])
+            / ((df["v3_sum"] + df["v2_sum"]) / 2),
+        )
+        qc_df
+
+        g = sns.relplot(
+            kind="line",
+            data=qc_df,
+            x="year",
+            y="percent_dif",
+            hue="metric",
+            palette="Set2",
+        )
+        g.figure.suptitle(f"{SOURCE_NAME} v3 vs v2 percent difference")
+        g.set_axis_labels("Year", "Percent difference")
+        # Save the figure
+        g.savefig(
+            figures_data_dir_path / f"{SOURCE_NAME}_v3_vs_v2_percent_difference.png"
+        )
+        plt.close()
+
+        # for year in v3_flux_da.time:
+        for year in flux_diff_da.time:
+            year_val = int(year.values)
+            yearly_dif = np.flip(flux_diff_da.sel(time=year).values, 1)
+
+            # Plot the difference between v2 and v3 methane emissions for each year
+            custom_colormap = colors.LinearSegmentedColormap.from_list(
+                name="custom_colormap",
+                colors=[
+                    "#2166AC",
+                    "#4393C3",
+                    "#92C5DE",
+                    "#D1E5F0",
+                    "#F7F7F7",
+                    "#FDDBC7",
+                    "#F4A582",
+                    "#D6604D",
+                    "#B2182B",
+                ],
+                N=3000,
+            )
+            # Create a figure and axis with the specified projection
+            fig, ax = plt.subplots(
+                figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+            )
+            # Set extent to the continental US
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+            # This is a "background map" workaround that allows us to add plot
+            # features like the colorbar and then use rasterio to plot the raster
+            # data on top of the background map.
+            background_map = ax.imshow(
+                yearly_dif,
+                cmap=custom_colormap,
+            )
+            # Add natural earth features
+            ax.add_feature(cfeature.LAND)
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
+            ax.add_feature(cfeature.STATES)
+            # Plot the raster data using rasterio (this uses matplotlib imshow
+            # under the hood)
+            show(
+                yearly_dif,
+                transform=gepa_profile.profile["transform"],
+                ax=ax,
+                cmap=custom_colormap,
+                interpolation="none",
+            )
+            # Set various plot parameters
+            ax.tick_params(labelsize=10)
+            fig.colorbar(
+                background_map,
+                orientation="horizontal",
+                label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            )
+            # Add a title
+            difference_plot_title = (
+                f"{year_val} Difference between v2 and v3 methane "
+                f"emissions from {SOURCE_NAME}"
+            )
+            plt.title(difference_plot_title, fontsize=14)
+            # Save the plot as a PNG file
+            plt.savefig(
+                figures_data_dir_path
+                / f"{SOURCE_NAME}_ch4_flux_difference_v2_to_v3_{year_val}.png"
+            )
+            # Show the plot for review
+            # plt.show()
+            # Close the plot
+            plt.close()
+
+            # Plot the grid cell level frequencies of v2 and v3 methane emissions
+            # for each year
+            fig, (ax1, ax2) = plt.subplots(2)
+            fig.tight_layout()
+            ax1.hist(v2_data_dict[year_val].ravel(), bins=100)
+            ax2.hist(v3_arr.ravel(), bins=100)
+            # Add a title
+            histogram_plot_title = (
+                f"{year_val} Frequency of methane emissions from "
+                f"{SOURCE_NAME} at the grid cell level"
+            )
+            ax1.set_title(histogram_plot_title)
+            # Add axis labels
+            ax2.set_xlabel("Methane emissions (Mg a$^{-1}$ km$^{-2}$)")
+            ax1.set_ylabel("v2 frequency")
+            ax2.set_ylabel("v3 frequency")
+            # Save the plot as a PNG file
+            plt.savefig(
+                str(figures_data_dir_path)
+                + f"/{SOURCE_NAME}_ch4_flux_histogram_{year_val}.png"
+            )
+            # Show the plot for review
+            # plt.show()
+            # Close the plot
+            plt.close()
+
+        return qc_df
 
 
 def download_url(url, output_path):
@@ -1333,15 +1428,19 @@ def allocate_emis_to_array(proxy_ds, emi_df, row) -> np.array:
 class GEPA_spatial_profile:
     lon_left = -130  # deg
     lon_right = -60  # deg
-    lat_up = 55  # deg
-    lat_low = 20  # deg
+    lat_top = 55  # deg
+    lat_bottom = 20  # deg
+    # lon_left = -129.95  # deg
+    # lon_right = -59.95  # deg
+    # lat_top = 54.95  # deg
+    # lat_bottom = 20.05  # deg
     valid_resolutions = [0.1, 0.01]
 
     def __init__(self, resolution: float = 0.1):
         self.resolution = resolution
         self.check_resolution(self.resolution)
         self.x = np.arange(self.lon_left, self.lon_right, self.resolution)
-        self.y = np.arange(self.lat_low, self.lat_up, self.resolution)
+        self.y = np.arange(self.lat_top, self.lat_bottom, -self.resolution)
         self.height, self.width = self.arr_shape = (len(self.y), len(self.x))
         self.profile = self.get_profile(self.resolution)
 
@@ -1355,7 +1454,7 @@ class GEPA_spatial_profile:
         base_profile = default_gtiff_profile.copy()
         base_profile.update(
             transform=rasterio.Affine(
-                resolution, 0.0, self.lon_left, 0.0, -resolution, self.lat_up
+                resolution, 0.0, self.lon_left, 0.0, -resolution, self.lat_top
             ),
             height=self.height,
             width=self.width,
@@ -1466,6 +1565,7 @@ def warp_to_gepa_grid(
     target_path: Path = None,
     resampling: str = "average",
     num_threads: int = 1,
+    resolution: float = 0.1,
 ):
 
     if target_path is None:
@@ -1544,6 +1644,7 @@ def proxy_from_stack(
 
     # read in the raw population data raster stack as a xarray dataset
     # masked will read the nodata value and set it to NA
+    # xr_ds =xr.open_dataarray(input_path)
     xr_ds = rioxarray.open_rasterio(input_path, masked=True).rename({"band": "year"})
 
     with rasterio.open(input_path) as src:
@@ -1572,7 +1673,7 @@ def proxy_from_stack(
     # apply the normalization function to the population data
     out_ds = (
         xr_ds.groupby(["year", "statefp"])
-        .apply(normalize)
+        .apply(normalize_xr)
         .sortby(["year", "y", "x"])
         .to_dataset(name="rel_emi")
     )
@@ -1765,6 +1866,16 @@ def scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col):
     )
     monthly_scaling
 
+    check_scaling = (
+        monthly_scaling.reset_index()
+        .assign(year=lambda df: df["year_month"].str.split("-").str[0])
+        .groupby(["state_code", "year"])["month_normed"]
+        .sum()
+        .to_frame()
+        .assign(isclose=lambda df: np.isclose(df["month_normed"], 1))
+    )
+    check_scaling["isclose"].all()
+
     tmp_df = (
         emi_df.sort_values(annual_norm)
         .assign(month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])])
@@ -1778,7 +1889,7 @@ def scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col):
         .set_index(grouper_cols)
         .join(
             monthly_scaling,
-            how="left",
+            how="outer",
         )
         .assign(
             ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * df["month_normed"],
@@ -1796,10 +1907,8 @@ def scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col):
         .to_frame()
         .join(emi_df.set_index(annual_norm))
         .assign(
-            isclose=lambda df: df.apply(
-                lambda x: np.isclose(x["month_check"], x["ghgi_ch4_kt"]), axis=1
+            isclose=lambda df: np.isclose(df["month_check"], df["ghgi_ch4_kt"])
             )
-        )
     )
     month_check["isclose"].all()
 
@@ -1846,6 +1955,7 @@ def make_emi_grid(emi_df, admin_gdf, time_col):
             transform=transform,
             fill=0,
             dtype="float32",
+            merge_alg=rasterio.enums.MergeAlg.add,
         )
         return year, emi_raster
 

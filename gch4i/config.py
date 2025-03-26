@@ -16,6 +16,10 @@ tmp_data_dir_path = V3_DATA_PATH / "tmp"
 emi_data_dir_path = V3_DATA_PATH / "emis"
 proxy_data_dir_path = V3_DATA_PATH / "proxy"
 sector_data_dir_path = V3_DATA_PATH / "sector"
+intermediate_data_dir_path = V3_DATA_PATH / "interim"
+
+prelim_gridded_dir = V3_DATA_PATH / "gridded_data_prelim"
+final_gridded_dir = V3_DATA_PATH / "gridded_data_final"
 
 
 # this is used by the file task_download_census_geo.py to download specific census

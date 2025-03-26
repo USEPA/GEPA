@@ -61,6 +61,8 @@ import seaborn as sns
 import xarray as xr
 from geocube.api.core import make_geocube
 from pytask import Product, mark, task
+from rasterio.features import rasterize
+from tqdm.auto import tqdm
 
 from gch4i.config import global_data_dir_path, proxy_data_dir_path, sector_data_dir_path
 from gch4i.utils import GEPA_spatial_profile, name_formatter, normalize_xr
@@ -72,6 +74,7 @@ GEPA_PROFILE.profile["count"] = 1
 
 sector_dir: Path = sector_data_dir_path / "USDA_NASS"
 cdl_path: Path = sector_data_dir_path / "nass_cdl"
+rice_crop_vals = np.array([3])
 
 
 # %% Pytask Function
@@ -84,10 +87,12 @@ def task_rice_proxy(
     census_file_path: Path = sector_dir / "census_2012-2017_rice_area_harvested.csv",
     county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    cdl_layers: list[Path] = list(cdl_path.glob("*rice_perc*.tif")),
+    # cdl_layers: list[Path] = list(cdl_path.glob("*_30m_cdls_rice_binary.tif")),
+    cdl_layers: list[Path] = list(cdl_path.glob("*_30m_cdls_rice_perc.tif")),
     output_path: Annotated[Path, Product] = proxy_data_dir_path / "rice_area_proxy.nc",
 ) -> None:
 
+    # %%
     # here we see that as we cycle through the 3 geographic levels from the ref file,
     # the total area harvested changes. When compared to the actual data file I'm using
     # for 2017, the county totals equal what is in this file. So we have an external
@@ -183,10 +188,12 @@ def task_rice_proxy(
     for (the_year, rice_gdf), ax in zip(data_dict.items(), axs.ravel()):
         rice_gdf.plot("value_num", cmap="Spectral", lw=0.5, ax=ax)
         state_gdf.boundary.plot(ax=ax, lw=0.5, color="xkcd:slate", zorder=-1)
-        ax.set_title(the_year)
+        ax.set_title(f"{the_year} total rice {int(rice_gdf['value_num'].sum()):,}")
     sns.despine()
     plt.show()
 
+
+    # %%
     # read in the population data. This one is reference to create the county grid
     rice_xr = (
         rioxarray.open_rasterio(cdl_layers[0])
@@ -196,22 +203,45 @@ def task_rice_proxy(
     )
     rice_xr
 
+    # high_res_profile = GEPA_spatial_profile(0.01)
+
+    # # create an xarray object matching the specs of the high_res_profile
+    # high_res_xr = xr.DataArray(
+    #     np.zeros(high_res_profile.arr_shape),
+    #     dims=["y", "x"],
+    #     coords={
+    #         "y": high_res_profile.y,
+    #         "x": high_res_profile.x,
+    #     },
+    #     name="high_res_data",
+    # ).rio.write_crs(4326)
+
+    # %%
+    cnty_to_grid = county_gdf[["geoid", "geometry"]].astype({"geoid": int})
+
     # make the county grid
     cnty_grid = make_geocube(
-        vector_data=rice_gdf.reset_index(),
+        vector_data=cnty_to_grid,
         measurements=["geoid"],
         like=rice_xr,
         fill=99,
     )
     rice_gdf[~rice_gdf.index.isin(np.unique(cnty_grid["geoid"].values))]
+    # %%
+    cnty_to_grid[~cnty_to_grid.geoid.isin(np.unique(cnty_grid["geoid"].values))]
+    # %%
+    rice_gdf.index.map(lambda x: str(x)[-3:])
+    
 
+    # %%
     res_dict = {}
-    for cdl_layer_path in cdl_layers:
+    for cdl_layer_path in tqdm(cdl_layers):
         the_year = int(cdl_layer_path.stem.split("_")[0])
         if the_year < 2017:
             rice_gdf = data_dict[2012]
         else:
             rice_gdf = data_dict[2017]
+        print(f"processing {the_year} total rice {int(rice_gdf['value_num'].sum()):,}")
 
         rice_xr = (
             rioxarray.open_rasterio(cdl_layer_path)
@@ -228,75 +258,73 @@ def task_rice_proxy(
             rice_xr.groupby(["geoid"])
             .apply(normalize_xr)
             .sortby(["y", "x"])
-            .where(lambda x: x["geoid"] >= 0, drop=True)
+            # .where(lambda x: x["geoid"] >= 0, drop=True)
         )
 
-        # we not now have a population dataset that is normalized to the county level
-        # so we now allocate the tons of throughput of residential wood combustion to
-        # the county level. This will take the TONS of rwc and allocate it to the
-        # county level by the normalize population data.
-        results = []
-        for geoid, data in cnty_rice_normed_xr.groupby("geoid"):
-            # if this isn't a county, make the values 0
-            if geoid == 99:
-                val = 0
-            else:
-                try:
-                    val = rice_gdf.loc[geoid]["value_num"]
-                except KeyError:
-                    val = 0
-                    # print(f"mismatch between county and raster data {geoid}")
-
-            res = data * val
-            results.append(res)
-
-        # put the results back together
-        rice_xr = (
-            xr.concat(results, dim="stacked_y_x")
-            .unstack("stacked_y_x")
-            .rename("rice_area")
-            # .drop_vars("geoid")
-            .sortby(["y", "x"])
-            .rio.set_spatial_dims(x_dim="x", y_dim="y")
-            .rio.write_crs(4326)
-            .rio.write_transform(rice_xr.rio.transform())
-            .rio.set_attrs(rice_xr.attrs)
+        cnty_rice_prod = rasterize(
+            [
+                (geom, value)
+                for geom, value in zip(rice_gdf.geometry, rice_gdf.value_num)
+            ],
+            out_shape=GEPA_PROFILE.arr_shape,
+            transform=GEPA_PROFILE.profile["transform"],
+            fill=1,
+            dtype="float32",
         )
-        rice_xr
-        rice_xr.plot()
-        mismatch_results = (
-            rice_xr.groupby("geoid")
+
+        cnty_rice_prod = xr.DataArray(
+            cnty_rice_prod,
+            dims=["y", "x"],
+            coords={
+                "y": rice_xr.y,
+                "x": rice_xr.x,
+            },
+        )
+        cnty_rice_prod["geoid"] = cnty_grid["geoid"]
+
+        rice_out_xr = cnty_rice_normed_xr * cnty_rice_prod
+
+        rice_out_xr.where(lambda x: x>0).plot()
+        sum_check = (
+            rice_out_xr.groupby("geoid")
             .sum()
-            .rename("cnty_sum")
+            .rename("sum_check")
             .to_dataframe()
             .drop(columns="spatial_ref")
+            .query("geoid != 99")
             .join(rice_gdf[["value_num"]], how="outer")
-            .assign(is_close=lambda df: np.isclose(df["cnty_sum"], df["value_num"]))
-            .query("is_close == False")
+            .assign(
+                is_close=lambda df: np.isclose(df["sum_check"], df["value_num"])
+            )
         )
-        if not mismatch_results.empty:
-            print(mismatch_results)
+        pass_check = sum_check["is_close"].all()
+        if not pass_check:
+            print(f"gridded sum: {int(sum_check['sum_check'].sum()):,}")
+            print(f"actual sum: {int(sum_check['value_num'].sum()):,}")
+            # raise ValueError(f"year {the_year} failed the check")
+        
 
         # this is a hacky thing, but for some reason the above concat strips the geo
         # information from the xarray and I can't get it back in there. So I save the
         # file to a temporary file and read it back in. rioxarray.open_rasterio
         # restores the geo information so then we can keep going.
 
-        tmp_file = rasterio.MemoryFile()
-        rice_xr.rio.to_raster(tmp_file.name, profile=GEPA_PROFILE.profile)
-        rice_xr = (
-            rioxarray.open_rasterio(tmp_file)
-            .squeeze("band")
-            .drop_vars("band")
-            .assign_coords(year=the_year)
-        )
-        rice_xr.plot()
-        plt.show()
+        # tmp_file = rasterio.MemoryFile()
+        # rice_xr.rio.to_raster(tmp_file.name, profile=GEPA_PROFILE.profile)
+        # rice_xr = (
+        #     rioxarray.open_rasterio(tmp_file)
+        #     .squeeze("band")
+        #     .drop_vars("band")
+        #     .assign_coords(year=the_year)
+        # )
+        # rice_xr.plot()
+        # plt.show()
         res_dict[the_year] = rice_xr
+    # %%
 
     rice_stack_xr = xr.concat(
-        list(res_dict.values()), dim="year", create_index_for_new_dim=True
-    )
+        list(res_dict.values()), dim="year"
+    ).drop_vars("geoid").assign_coords(year=list(res_dict.keys()))
     rice_stack_xr
 
     # make the state grid
@@ -345,3 +373,5 @@ def task_rice_proxy(
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         rice_stack_xr.rio.crs
     ).to_netcdf(output_path)
+
+# %%
