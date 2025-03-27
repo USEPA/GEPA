@@ -37,109 +37,61 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 
 import logging
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 import geopandas as gpd
-import numpy as np
-import osgeo  # noqa
 import pandas as pd
-import rasterio
-import xarray as xr
 from IPython.display import display
-from pyarrow import parquet  # noqa
-from rasterio.features import rasterize
-from shapely import make_valid
 from tqdm.auto import tqdm
 
-from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    global_data_dir_path,
-    proxy_data_dir_path,
-    years,
-)
-from gch4i.create_emi_proxy_mapping import get_gridding_mapping_df
-from gch4i.utils import (
-    GEPA_spatial_profile,
-    # QC_emi_raster_sums,
-    # QC_proxy_allocation,
-    # allocate_emissions_to_proxy,
-    # check_state_year_match,
-    # fill_missing_year_months,
-    # grid_allocated_emissions,
-    # make_emi_grid,
-    # scale_emi_to_month,
-    # check_raster_proxy_time_geo,
-    # write_tif_output,
-)
-from gch4i.gridding_utils import (
-    EmiProxyGridder,
-    get_status_table,
-)
-
-gepa_profile = GEPA_spatial_profile()
-out_profile = gepa_profile.profile
+from gch4i.config import V3_DATA_PATH, logging_dir
+from gch4i.gridding_utils import EmiProxyGridder, GriddingMapper, get_status_table
 
 gpd.options.io_engine = "pyogrio"
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", 20)
 pd.set_option("future.no_silent_downcasting", True)
-# %%
-
-
-# the mapping file that collections information needed for gridding on all emi/proxy
-# pairs. This is the data driven approach to gridding that will be used in the
-# production version of the gridding script.
-mapping_file_path: Path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-v2_data_path: Path = V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
-# the path to the state and county shapefiles.
-# state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-# county_geo_path: Path = global_data_dir_path / "tl_2020_us_county.zip"
-
 # create the log file for today that writes out the status of all the gridding
 # operations.
 logger = logging.getLogger(__name__)
 now = datetime.now()
 formatted_today = now.strftime("%Y-%m-%d")
 formatted_datetime = now.strftime("%Y-%m-%d %H:%M:%S")
+# %%
 
-from gch4i.config import logging_dir
 
-log_file_path = logging_dir / f"gridding_log_{formatted_today}.log"
+# the mapping file that collections information needed for gridding on all emi/proxy
+# pairs. This is the data driven approach to gridding that will be used in the
+# production version of the gridding script.
 status_db_path = logging_dir / "gridding_status.db"
-
+v2_data_path: Path = V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
+mapping_file_path: Path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+log_file_path = logging_dir / f"gridding_log_{formatted_today}.log"
+# start the log file
 logging.basicConfig(
     filename=log_file_path,
     encoding="utf-8",
     level=logging.INFO,
     format="%(levelname)s %(message)s",
 )
-
-
-# %% STEP 1. Load GHGI-Proxy Mapping Files
-
-# load the v2 file
-v2_df = pd.read_csv(v2_data_path).rename(columns={"v3_gch4i_name": "gch4i_name"})
-# %%
-
 # collection all the information needed on the emi/proxy pairs for gridding
-mapping_df = get_gridding_mapping_df(mapping_file_path)
 # %%
+g_mapper = GriddingMapper(mapping_file_path)
+status_df = get_status_table(status_db_path, logging_dir, formatted_today, save=True)
 
-mapping_df.set_index(["gch4i_name", "emi_id", "proxy_id"]).drop(
+g_mapper.mapping_df.set_index(["gch4i_name", "emi_id", "proxy_id"]).drop(
     columns="proxy_rel_emi_col"
 ).drop_duplicates(keep="last").reset_index(drop=True)
 
 display(
     (
-        mapping_df.groupby(
+        g_mapper.mapping_df.groupby(
             [
                 "file_type",
                 "emi_time_step",
@@ -153,67 +105,14 @@ display(
         .reset_index()
     )
 )
-# %%
 
-# we need this as a reference file to filter out the states that are not in the gridding
-# region of lower 48 + DC.
-# state_gdf = (
-#     gpd.read_file(state_geo_path)
-#     .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-#     .rename(columns=str.lower)
-#     .rename(columns={"stusps": "state_code", "name": "state_name"})
-#     .astype({"statefp": int})
-#     # get only lower 48 + DC
-#     .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-#     .rename(columns={"statefp": "fips"})
-#     .to_crs(4326)
-# )
 
-# county_gdf = (
-#     gpd.read_file(county_geo_path)
-#     .loc[:, ["NAME", "STATEFP", "COUNTYFP", "geometry"]]
-#     .rename(columns=str.lower)
-#     .rename(columns={"name": "county_name"})
-#     .astype({"statefp": int, "countyfp": int})
-#     .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-#     .assign(
-#         fips=lambda df: (
-#             df["statefp"].astype(str) + df["countyfp"].astype(str).str.zfill(3)
-#         ).astype(int)
-#     )
-#     .to_crs(4326)
-# )
-# geo_filter = state_gdf.state_code.unique().tolist() + ["OF"]
-# %%
-
-# %%
-# Create a connection to the SQLite database
-
-conn = sqlite3.connect(status_db_path)
-cursor = conn.cursor()
-
-# Create a table to store the status of each row
-cursor.execute(
-    """
-CREATE TABLE IF NOT EXISTS gridding_status (
-    gch4i_name TEXT,
-    emi_id TEXT,
-    proxy_id TEXT,
-    status TEXT,
-    PRIMARY KEY (gch4i_name, emi_id, proxy_id)
-)
-"""
-)
-conn.commit()
-# %%
-
-status_df = get_status_table(status_db_path, logging_dir, formatted_today)
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = False
+SKIP = True
 SKIP_THESE = [
     "complete",
     "monthly failed, annual complete",
@@ -228,24 +127,27 @@ SKIP_THESE = [
     # "failed annual raster QC",
     # "failed monthly raster QC",
 ]
-unique_pairs_df = mapping_df.drop_duplicates(
+ready_for_gridding_df = g_mapper.mapping_df.drop_duplicates(
     subset=["gch4i_name", "emi_id", "proxy_id"]
 )
-unique_pairs_df = unique_pairs_df.merge(
+ready_for_gridding_df = ready_for_gridding_df.merge(
     status_df, on=["gch4i_name", "emi_id", "proxy_id"]
 )
 
 if SKIP:
-    unique_pairs_df = unique_pairs_df[~unique_pairs_df["status"].isin(SKIP_THESE)]
+    ready_for_gridding_df = ready_for_gridding_df[
+        ~ready_for_gridding_df["status"].isin(SKIP_THESE)
+    ]
 # unique_pairs_df = unique_pairs_df.query("gch4i_name == '1B1a_abandoned_coal'")
-unique_pairs_df = unique_pairs_df.query("(gch4i_name == '1A_stationary_combustion')")
+# ready_for_gridding_df = ready_for_gridding_df.query("(gch4i_name == '1A_stationary_combustion')")
 # unique_pairs_df = unique_pairs_df.query("(gch4i_name == '1A_stationary_combustion') & (emi_id == 'stat_comb_elec_oil_emi')")
-unique_pairs_df
+ready_for_gridding_df
 # %%
 
-for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_df)):
+for row in tqdm(
+    ready_for_gridding_df.itertuples(index=False), total=len(ready_for_gridding_df)
+):
     out_qc_dir = logging_dir / row.gch4i_name
-    out_qc_dir.mkdir(exist_ok=True, parents=True)
     try:
         epg = EmiProxyGridder(row, status_db_path, out_qc_dir)
         epg.run_gridding()
@@ -253,7 +155,7 @@ for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_
     except Exception as e:
         print(epg.base_name, epg.status, e)
 
-        
+
 # %%
 # alloc_gdf_proj = allocation_gdf.to_crs("ESRI:102003")
 # intersect_mask = alloc_gdf_proj.intersects(cell_gdf.union_all())
