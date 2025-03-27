@@ -129,56 +129,7 @@ def check_raster_proxy_time_geo(emi_df, proxy_ds, row, geo_col, time_col):
         return True, match_check
 
 
-def check_state_year_match(emi_df, proxy_gdf, row, geo_col, time_col):
 
-    # check if all the proxy state / time columns are in the emissions data
-    # NOTE: this check happens again later, but at a siginificant time cost
-    # if the data are large. It is here to catch the error early and break
-    # the loop with critical message.
-
-    if geo_col is not None:
-        grouper_cols = [geo_col, time_col]
-    else:
-        grouper_cols = [time_col]
-
-    proxy_unique = (
-        proxy_gdf[grouper_cols]
-        .drop_duplicates()
-        .assign(has_proxy=True)
-        .set_index(grouper_cols)
-    )
-    match_check = (
-        emi_df[grouper_cols]
-        .set_index(grouper_cols)
-        .join(proxy_unique)
-        .fillna({"has_proxy": False})
-        .sort_values("has_proxy")
-        .reset_index()
-    )
-
-    if not match_check.has_proxy.all():
-        if geo_col:
-            missing_states = (
-                match_check[match_check["has_proxy"] == False].groupby(geo_col).size()
-            )
-            logging.critical(
-                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
-                "proxy state/year columns do not match emissions\n"
-                "missing states and counts of missing times:\n"
-                # f"{missing_states}\n"
-                f"{missing_states.to_string().replace("\n", "\n\t")}"
-                "\n"
-            )
-        else:
-            logging.critical(
-                f"QC FAILED: {row.emi_id}, {row.proxy_id}\n"
-                "proxy time column does not match emissions\n"
-                "missing times:\n"
-                f"{match_check[match_check['has_proxy'] == False][time_col].unique()}"
-            )
-        return False, match_check
-    else:
-        return True, match_check
 
 
 def allocate_emissions_to_proxy(
@@ -1830,97 +1781,7 @@ def create_final_proxy_df(proxy_df):
     return proxy_gdf
 
 
-def scale_emi_to_month(proxy_gdf, emi_df, geo_col, time_col):
-    """
-    Function to scale the emissions data to a monthly basis
-    Parameters:
 
-    - proxy_gdf: GeoDataFrame containing proxy data with relative emissions.
-    - emi_df: DataFrame containing emissions data with monthly values.
-    Returns:
-    - month_check: DataFrame containing the check for monthly emissions.
-    """
-    # calculate the relative MONTHLY proxy emissions
-    logging.info("Calculating monthly scaling factors for emissions data")
-
-    if geo_col is not None:
-        grouper_cols = [geo_col, time_col]
-        annual_norm = [geo_col, "year"]
-    else:
-        grouper_cols = [time_col]
-        annual_norm = ["year"]
-
-    monthly_scaling = (
-        proxy_gdf.groupby(grouper_cols)["annual_rel_emi"]
-        .sum()
-        .rename("month_scale")
-        .reset_index()
-        .assign(
-            year=lambda df: df["year_month"].str.split("-").str[0],
-            month_normed=lambda df: df.groupby(annual_norm)["month_scale"].transform(
-                normalize
-            ),
-        )
-        .drop(columns=["month_scale", "year"])
-        .set_index(grouper_cols)
-    )
-    monthly_scaling
-
-    check_scaling = (
-        monthly_scaling.reset_index()
-        .assign(year=lambda df: df["year_month"].str.split("-").str[0])
-        .groupby(["state_code", "year"])["month_normed"]
-        .sum()
-        .to_frame()
-        .assign(isclose=lambda df: np.isclose(df["month_normed"], 1))
-    )
-    check_scaling["isclose"].all()
-
-    tmp_df = (
-        emi_df.sort_values(annual_norm)
-        .assign(month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])])
-        .explode("month")
-        .reset_index(drop=True)
-        .assign(
-            year_month=lambda df: pd.to_datetime(
-                df[["year", "month"]].assign(DAY=1)
-            ).dt.strftime("%Y-%m"),
-        )
-        .set_index(grouper_cols)
-        .join(
-            monthly_scaling,
-            how="outer",
-        )
-        .assign(
-            ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * df["month_normed"],
-        )
-        .drop(columns=["month_normed"])
-        .reset_index()
-        .dropna(subset=["ghgi_ch4_kt"])
-    )
-    tmp_df
-
-    month_check = (
-        tmp_df.groupby(annual_norm)["ghgi_ch4_kt"]
-        .sum()
-        .rename("month_check")
-        .to_frame()
-        .join(emi_df.set_index(annual_norm))
-        .assign(
-            isclose=lambda df: np.isclose(df["month_check"], df["ghgi_ch4_kt"])
-            )
-    )
-    month_check["isclose"].all()
-
-    if not month_check["isclose"].all():
-        logging.critical("Monthly emissions do not sum to the expected values")
-        raise ValueError(
-            "Monthly emissions do not sum to the expected values. Check the log for "
-            "details."
-        )
-    else:
-        logging.info("Monthly emissions check passed!")
-    return tmp_df
 
 
 def make_emi_grid(emi_df, admin_gdf, time_col):

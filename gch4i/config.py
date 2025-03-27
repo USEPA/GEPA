@@ -21,6 +21,8 @@ intermediate_data_dir_path = V3_DATA_PATH / "interim"
 prelim_gridded_dir = V3_DATA_PATH / "gridded_data_prelim"
 final_gridded_dir = V3_DATA_PATH / "gridded_data_final"
 
+logging_dir = V3_DATA_PATH.parents[0] / "gridding_log_and_qc"
+gridded_output_dir = logging_dir / "gridded_output"
 
 # this is used by the file task_download_census_geo.py to download specific census
 # geometry files
