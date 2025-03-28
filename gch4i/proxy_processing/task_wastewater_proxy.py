@@ -47,12 +47,12 @@ from gch4i.config import (
     emi_data_dir_path,
     sector_data_dir_path,
     min_year,
+    global_data_dir_path,
     years
 )
 
 from gch4i.utils import (
-    us_state_to_abbrev,
-    normalize
+    us_state_to_abbrev_dict
 )
 
 # %% File paths
@@ -185,51 +185,6 @@ def create_wastewater_proxy_files(
         industry_df.reset_index(inplace=True, drop=True)
         
         return industry_df
-
-
-
-    def convert_state_names_to_codes(df, state_column):
-        """
-        Convert full state names in a DataFrame column to two-letter state codes.
-
-
-        Parameters:
-        df (pd.DataFrame): The DataFrame containing the state names.
-        state_column (str): The name of the column containing the full state names.
-
-        Returns:
-        pd.DataFrame: DataFrame with the state column changed to two-letter state codes.
-        """
-        
-        # Dictionary mapping full state names to their two-letter codes
-        state_name_to_code = {
-            'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
-            'Colorado': 'CO', 'Connecticut': 'CT', 'District of Columbia': 'DC', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
-            'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA', 'Kansas': 'KS',
-            'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD', 'Massachusetts': 'MA',
-            'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO', 'Montana': 'MT',
-            'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM',
-            'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH', 'Oklahoma': 'OK',
-            'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD',
-            'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT', 'Virginia': 'VA', 'Washington': 'WA',
-            'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
-        }
-
-        # Get set of valid state codes
-        valid_codes = set(state_name_to_code.values())
-        
-        # Check if values are already state codes
-        current_values = set(df[state_column].unique())
-        if current_values.issubset(valid_codes):
-            return df
-        
-        # Convert all caps to title case
-        df[state_column] = df[state_column].str.title()
-
-        # Map the full state names to their two-letter codes using the dictionary
-        df[state_column] = df[state_column].map(state_name_to_code)
-        
-        return df
 
 
     def calculate_potw_emissions_proxy(emi_df, echo_df, year_range):
@@ -521,8 +476,6 @@ def create_wastewater_proxy_files(
         echo_df['emis_kt'] = echo_df['emis_kt'].astype(float)
         ghgrp_df['emis_kt_tot'] = ghgrp_df['emis_kt_tot'].astype(float)
 
-        ghgrp_df = convert_state_names_to_codes(ghgrp_df, 'State')
-        
         # Rename columns to match the desired output
         ghgrp_df = ghgrp_df.rename(columns={
                 'Year': 'year',
@@ -632,9 +585,6 @@ def create_wastewater_proxy_files(
         
         return facility_info.reset_index(drop=True), facility_emis.reset_index(drop=True)
 
-    def rename_columns(df, column_mapping):
-        """Rename columns based on a mapping dictionary."""
-        return df.rename(columns=column_mapping)
 
     def merge_facility_and_emissions_data(facility_info, facility_emis):
         """Merge facility info and emissions data."""
@@ -858,6 +808,7 @@ def create_wastewater_proxy_files(
         else:
             return pd.DataFrame()
 
+
     def create_final_proxy_df(proxy_df):   
         """
         Function to create the final proxy df that is ready for gridding
@@ -892,6 +843,51 @@ def create_wastewater_proxy_files(
 
         return proxy_gdf
 
+
+    def update_facility_coordinates(
+        df: pd.DataFrame,
+        permit_number: str, 
+        new_latitude: float, 
+        new_longitude: float
+    ) -> pd.DataFrame:
+        """
+        Update latitude and longitude values for a specific NPDES permit number
+        
+        Args:
+            df: DataFrame containing ECHO facility data
+            permit_number: NPDES Permit Number to update
+            new_latitude: New latitude value
+            new_longitude: New longitude value
+        
+        Returns:
+            Updated DataFrame
+        """
+        # Create a copy to avoid modifying the original
+        df_copy = df.copy()
+        
+        # Find rows matching the permit number
+        mask = df_copy['NPDES Permit Number'] == permit_number
+        
+        # Check if any rows match
+        if not mask.any():
+            print(f"No facility found with NPDES Permit Number '{permit_number}'")
+            return df_copy
+        
+        # Store original values for reporting
+        orig_lat = df_copy.loc[mask, 'Facility Latitude'].values[0]
+        orig_lon = df_copy.loc[mask, 'Facility Longitude'].values[0]
+        
+        # Update coordinates
+        df_copy.loc[mask, 'Facility Latitude'] = new_latitude
+        df_copy.loc[mask, 'Facility Longitude'] = new_longitude
+        
+        # Report changes
+        print(f"Updated coordinates for permit {permit_number}:")
+        print(f"  Original: ({orig_lat}, {orig_lon})")
+        print(f"  New:      ({new_latitude}, {new_longitude})")
+        print(f"  Rows updated: {mask.sum()}")
+        
+        return df_copy
     # %% Step 2.1 Read in and process FRS data
 
     # Subset the FRS data to only those sectors we need 
@@ -987,7 +983,7 @@ def create_wastewater_proxy_files(
         brewery_df = pd.concat([brewery_df[~brewery_df['latitude'].isna()], added_lat_longs])
 
         # Change state names to state codes
-        brewery_df = convert_state_names_to_codes(brewery_df, 'state')
+        brewery_df['state'] = brewery_df['state'].str.title().map(us_state_to_abbrev_dict)
 
         # Rename columns to match the FRS data
         brewery_df = brewery_df.rename(columns={'state': 'state_code'})
@@ -1048,6 +1044,29 @@ def create_wastewater_proxy_files(
     # Process POTW facilities
     echo_potw = clean_and_group_echo_data(echo_full, 'POTW')
 
+    # Drop facilities that are missing latitude and longitude information
+    echo_potw = echo_potw[abs(echo_potw['Facility Latitude']) > 0].copy()
+
+    # Fix the lat long for facilities that have incorrect coordinates
+    
+    # Fix a facility in MA that has incorrect coordinates. The lat long are swapped in the ECHO data.
+    echo_potw = update_facility_coordinates(
+    echo_potw, 
+    'MAG580028', 
+    42.327778, 
+    -73.371667
+    )
+
+    # Fix a facility in ME that has incorrect coordinates
+    # For some reason years 2012-2018 have coordinates just across the border in Canada.
+    # We will replace all of the coordinates with the correct coordinates from 2019 - 2022.
+    echo_potw = update_facility_coordinates(
+    echo_potw, 
+    'ME0101320', 
+    45.154937, 
+    -67.39516
+    )
+
     # Process NON-POTW facilities
     echo_nonpotw = clean_and_group_echo_data(echo_full, 'NON-POTW')
 
@@ -1085,24 +1104,18 @@ def create_wastewater_proxy_files(
     # Main processing
     facility_info, facility_emis = read_and_filter_ghgrp_data(ghgrp_facility_ii_inputfile, ghgrp_emi_ii_inputfile, years=years)
 
-    # Column renaming mappings
-    facility_info_columns = {
+    facility_info = facility_info.rename(columns={
         'primary_naics': 'NAICS Code',
         'state_name': 'State',
         'year': 'Year',
-    }
+    })
 
-    facility_emis_columns = {
-        'reporting_year': 'Year',
-
-    }
-
-    facility_info = rename_columns(facility_info, facility_info_columns)
-    facility_emis = rename_columns(facility_emis, facility_emis_columns)
+    facility_emis = facility_emis.rename(columns={'reporting_year': 'Year'})
 
     ghgrp_ind = merge_facility_and_emissions_data(facility_info, facility_emis)
     ghgrp_ind['NAICS Code'] = ghgrp_ind['NAICS Code'].astype(str)
 
+    ghgrp_ind['State'] = ghgrp_ind['State'].str.title().map(us_state_to_abbrev_dict)
 
     # Filter data for different industries
     industry_filters = {
@@ -1115,7 +1128,7 @@ def create_wastewater_proxy_files(
     }
 
     ghgrp_industries = {key: filter_by_naics(ghgrp_ind, value) for key, value in industry_filters.items()}
-
+    
     # Create distinct dataframes for each industry
     ghgrp_pp = ghgrp_industries['pp']
     ghgrp_mp = ghgrp_industries['mp']
@@ -1145,7 +1158,6 @@ def create_wastewater_proxy_files(
     final_brew = create_final_proxy_df(final_brew)
     final_ref = create_final_proxy_df(final_ref)
     final_nonseptic = create_final_proxy_df(final_nonseptic)
-
 
     # %% Save the final proxy dataframes to parquet files
     final_pp.to_parquet(pp_output_file, index=False)

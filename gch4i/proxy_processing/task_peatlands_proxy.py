@@ -22,22 +22,20 @@ Notes:                  - This script assigns GHGI emissions from peatland produ
 # %% Import Libraries
 from pathlib import Path
 from typing import Annotated
+import numpy as np
+import geopandas as gpd
 import pandas as pd
 
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    emi_data_dir_path,
     sector_data_dir_path,
-    proxy_data_dir_path,
-    years,
+    proxy_data_dir_path
 )
 from gch4i.utils import (
     geocode_address,
-    create_final_proxy_df,
     normalize
 )
-
 
 # %% Input data paths
 peatland_producers_path = sector_data_dir_path / "peatlands" / "peat_producers_2013.csv"
@@ -98,7 +96,9 @@ def task_peatlands_proxy(
         geometry=gpd.points_from_xy(peatlands_proxy['longitude'], peatlands_proxy['latitude'], crs='EPSG:4326')
     )
 
-    peatlands_proxy = peatlands_proxy[['state_code', 'year', 'rel_emi', 'geometry']]
+    peatlands_proxy = peatlands_proxy[['state_code', 'rel_emi', 'geometry']]
 
     # Save proxy data
     peatlands_proxy.to_parquet(proxy_output_path, index=False)
+
+# %%
