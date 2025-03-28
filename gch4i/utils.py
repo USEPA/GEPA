@@ -1408,3 +1408,35 @@ def create_final_proxy_df(proxy_df):
     proxy_gdf = proxy_gdf[['state_code', 'year', 'rel_emi', 'geometry']]
 
     return proxy_gdf
+
+def convert_FIPS_to_two_letter_code(df, state_column):
+        """
+        Convert numeric FIPS state values in a DataFrame column to two-letter state codes.
+
+        Parameters:
+        df (pd.DataFrame): The DataFrame containing the state names.
+        state_column (str): The name of the column containing the FIPS numeric names.
+
+        Returns:
+        pd.DataFrame: DataFrame with the state column changed to two-letter state codes.
+        """
+        
+        # Dictionary mapping full state names to their two-letter codes
+        fips_state_abbr = {
+        "1": "AL", "2": "AK", "4": "AZ", "5": "AR", "6": "CA",
+        "8": "CO", "9": "CT", "10": "DE", "11": "DC", "12": "FL", 
+        "13": "GA", "15": "HI", "16": "ID", "17": "IL", "18": "IN",
+        "19": "IA", "20": "KS", "21": "KY", "22": "LA", "23": "ME", 
+        "24": "MD", "25": "MA", "26": "MI", "27": "MN", "28": "MS",
+        "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH",
+        "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND",
+        "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI", 
+        "45": "SC", "46": "SD", "47": "TN", "48": "TX", "49": "UT",
+        "50": "VT", "51": "VA", "53": "WA", "54": "WV", "55": "WI",
+        "56": "WY"
+        }
+
+        # Map the full state names to their two-letter codes using the dictionary
+        df['state_code'] = df[state_column].astype(int).astype(str).map(fips_state_abbr)
+        
+        return df
