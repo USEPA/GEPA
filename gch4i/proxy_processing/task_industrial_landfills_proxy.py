@@ -1,3 +1,22 @@
+"""
+Name:                   task_industrial_landfills_proxy.py
+Date Last Modified:     2025-04-02
+Authors Name:           H. Lohman (RTI International)
+Purpose:                Mapping of industrial landfills reporting and non-reporting
+                        food & beverage and pulp & paper proxy emissions
+gch4i_name:             5A_industrial_landfills
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        GHGRP Subpart TT: "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV"
+                        FRS NAICS Codes: global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
+                        FRS Facilities: global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
+                        Mills OnLine: sector_data_dir_path / "landfills/Mills_OnLine.xlsx"
+                        EPA Food Opportunities Map: sector_data_dir_path / "landfills/Food Manufacturers and Processors.xlsx"
+Output Files:           - proxy_data_dir_path / "ind_landfills_pp_r_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_fb_r_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_fb_nr_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
