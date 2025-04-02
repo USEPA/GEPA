@@ -52,10 +52,11 @@ from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
     global_data_dir_path,
-    gridded_output_dir,
     logging_dir,
     proxy_data_dir_path,
     years,
+    min_year,
+    max_year,
 )
 from gch4i.utils import (
     Avogadro,
@@ -405,9 +406,7 @@ class EmiProxyGridder(BaseGridder):
             self.emi_time_step == "monthly" or self.proxy_time_step == "monthly"
         )
         if self.has_monthly:
-            self.monthly_output_path = (
-                gridded_output_dir / f"{self.base_name}_monthly.tif"
-            )
+            self.monthly_output_path = self.qc_dir / f"{self.base_name}_monthly.tif"
         else:
             self.monthly_output_path = None
         self.time_col = self.get_time_col()
@@ -447,8 +446,6 @@ class EmiProxyGridder(BaseGridder):
                 .transform(normalize)
             )
             self.proxy_rel_emi_col = "rel_emi"
-        else:
-            self.proxy_rel_emi_col = self.proxy_rel_emi_col
 
     def get_time_col(self):
         if self.emi_time_step == "monthly" or self.proxy_time_step == "monthly":
@@ -498,7 +495,7 @@ class EmiProxyGridder(BaseGridder):
                     "fips",
                     "ghgi_ch4_kt",
                 ]
-                self.femi_df = pd.read_csv(
+                self.emi_df = pd.read_csv(
                     self.emi_input_path,
                     usecols=self.emi_cols,
                 ).query("(state_code.isin(@self.geo_filter)) & (ghgi_ch4_kt > 0)")
@@ -656,6 +653,13 @@ class EmiProxyGridder(BaseGridder):
                 month=lambda df: pd.to_datetime(df["year_month"]).dt.month
             )
 
+        # TODO: future improvement is to check that all points fall within the state
+        # or gridded region, but the operation itself is very time consuming depending
+        # on the number of records in a proxy dataset
+        # self.proxy_gdf.query(f"state_code.isin({self.geo_filter})").intersects(
+        #     self.state_gdf.boundary.union_all()
+        # ).all()
+
     def scale_emi_to_month(self):
         """
         Function to scale the emissions data to a monthly basis
@@ -779,7 +783,7 @@ class EmiProxyGridder(BaseGridder):
             )
         )
 
-    def QC_proxy_allocation(self, plot=False, plot_path=None) -> pd.DataFrame:
+    def QC_proxy_allocation(self, plot=False, plot_path=None):
         """take proxy emi allocations and check against state inventory"""
 
         emi_sums = (
@@ -977,7 +981,7 @@ class EmiProxyGridder(BaseGridder):
         # create a dictionary to hold the rasterized emissions
         ch4_kt_result_rasters = {}
         for time_var, time_data in self.allocation_gdf.groupby(self.time_col):
-            print(time_var)
+            # print(time_var)
 
             # orig_emi_val = data["allocated_ch4_kt"].sum()
             # if we need to disaggregate non-point data. Maybe extra, but this accounts for
@@ -986,18 +990,18 @@ class EmiProxyGridder(BaseGridder):
             if not (time_data.geometry.type == "Points").all():
                 data_to_concat = []
                 for geom_type, geom_data in time_data.groupby(time_data.geom_type):
-                    print(geom_type)
+                    # print(geom_type)
                     # regular points can just be passed on "as is"
                     if geom_type == "Point":
                         # get the point data
-                        print("doing point data")
+                        # print("doing point data")
                         point_data = geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
-                        print(point_data.is_empty.any())
+                        # print(point_data.is_empty.any())
                         data_to_concat.append(point_data)
                     # if we have multipoint data, we need to disaggregate the emissions
                     # across the individual points and align them with the cells
                     elif geom_type == "MultiPoint":
-                        print("doing multipoint data")
+                        # print("doing multipoint data")
                         # ref_val = geom_data["allocated_ch4_kt"].sum()
                         multi_point_data = (
                             geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
@@ -1022,12 +1026,12 @@ class EmiProxyGridder(BaseGridder):
                         ).to_crs(4326)
                         # print(ref_val)
                         # print(multi_point_data["allocated_ch4_kt"].sum())
-                        print(f" any empty data: {multi_point_data.is_empty.any()}")
+                        # print(f" any empty data: {multi_point_data.is_empty.any()}")
                         data_to_concat.append(multi_point_data)
                     # if the data are any kind of lines, compute the relative length within
                     # each cell
                     elif "Line" in geom_type:
-                        print("doing line data")
+                        # print("doing line data")
                         line_data = (
                             geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
                             # project to equal area for area calculations
@@ -1052,12 +1056,12 @@ class EmiProxyGridder(BaseGridder):
                             # back to 4326 for rasterization
                             .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
                         )
-                        print(f" any empty data: {line_data.is_empty.any()}")
+                        # print(f" any empty data: {line_data.is_empty.any()}")
                         data_to_concat.append(line_data)
                     # if the data are any kind of  polygons, compute the relative area in
                     # each cell
                     elif "Polygon" in geom_type:
-                        print("doing polygon data")
+                        # print("doing polygon data")
                         polygon_data = (
                             geom_data.loc[:, ["geometry", "allocated_ch4_kt"]]
                             # project to equal area for area calculations
@@ -1085,7 +1089,7 @@ class EmiProxyGridder(BaseGridder):
                             .to_crs(4326).loc[:, ["geometry", "allocated_ch4_kt"]]
                         )
                         # print(polygon_data["allocated_ch4_kt"].sum())
-                        print(f" any empty data: {polygon_data.is_empty.any()}")
+                        # print(f" any empty data: {polygon_data.is_empty.any()}")
                         data_to_concat.append(polygon_data)
                     else:
                         raise ValueError(
@@ -1111,9 +1115,9 @@ class EmiProxyGridder(BaseGridder):
                     ~(ready_data.geometry.is_empty | ~ready_data.geometry.is_valid)
                 ]
 
-            print("compare pre and post processing sums:")
-            print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
-            print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
+            # print("compare pre and post processing sums:")
+            # print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
+            # print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
 
             # now rasterize the emissions and sum within cells
             ch4_kt_raster = rasterize(
@@ -1184,7 +1188,7 @@ class EmiProxyGridder(BaseGridder):
         # NOTE: this is kind of slow.
 
         def emi_rasterize(e_df, adm_gdf, out_shape, transform, year):
-            emi_gdf = adm_gdf.merge(e_df, on="fips")
+            emi_gdf = e_df.merge(adm_gdf, on="fips")
             emi_raster = rasterize(
                 [
                     (geom, value)
@@ -1194,7 +1198,7 @@ class EmiProxyGridder(BaseGridder):
                 transform=transform,
                 fill=0,
                 dtype="float32",
-                merge_alg=rasterio.enums.MergeAlg.add,
+                # merge_alg=rasterio.enums.MergeAlg.add,
             )
             return year, emi_raster
 
@@ -1218,7 +1222,7 @@ class EmiProxyGridder(BaseGridder):
 
         emi_rasters_3d = np.stack(emi_rasters, axis=0)
         # flip the y axis as xarray expects
-        # emi_rasters_3d = np.flip(emi_rasters_3d, axis=1)
+        emi_rasters_3d = np.flip(emi_rasters_3d, axis=1)
 
         self.emi_xr = xr.DataArray(
             emi_rasters_3d,
@@ -1241,18 +1245,18 @@ class EmiProxyGridder(BaseGridder):
         else:
             grouper_cols = [self.time_col]
 
-        if self.time_col == "year_month":
-            self.proxy_ds = self.proxy_ds.assign_coords(
-                year_month=pd.to_datetime(
-                    pd.DataFrame(
-                        {
-                            "year": self.proxy_ds.year.values,
-                            "month": self.proxy_ds.month.values,
-                            "day": 1,
-                        }
-                    )
-                ).dt.strftime("%Y-%m")
-            )
+        # if self.time_col == "year_month":
+        #     self.proxy_ds = self.proxy_ds.assign_coords(
+        #         year_month=pd.to_datetime(
+        #             pd.DataFrame(
+        #                 {
+        #                     "year": self.proxy_ds.year.values,
+        #                     "month": self.proxy_ds.month.values,
+        #                     "day": 1,
+        #                 }
+        #             )
+        #         ).dt.strftime("%Y-%m")
+        #     )
 
         rel_emi_check = (
             self.proxy_ds["rel_emi"]
@@ -1304,9 +1308,15 @@ class EmiProxyGridder(BaseGridder):
         if self.emi_time_step == "monthly" and self.proxy_time_step == "annual":
             self.proxy_ds = (
                 self.proxy_ds.expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
-                .stack({"year_month": ["year", "month"]})
+                .stack({"year_month": ["year", "month"]}, create_index=False)
                 .sortby(["year_month", "y", "x"])
             )
+            year_months = pd.to_datetime(
+                self.proxy_ds[["year", "month"]].to_dataframe().assign(day=1)
+            ).dt.strftime("%Y-%m")
+            self.proxy_ds = self.proxy_ds.assign_coords(
+                year_month=("year_month", year_months)
+            ).transpose("year_month", "y", "x")
 
         self.proxy_ds = self.proxy_ds.assign_coords(
             x=("x", self.gepa_profile.x), y=("y", self.gepa_profile.y)
@@ -1362,18 +1372,23 @@ class EmiProxyGridder(BaseGridder):
     def QC_emi_raster_sums(self, QC_time_col):
         """compares yearly array sums to inventory emissions"""
 
-        emi_sum_check = (
-            self.emi_df.groupby(self.time_col)["ghgi_ch4_kt"].sum().to_frame()
+        # emi_sum_check = (
+        #     self.emi_df.groupby(self.time_col)["ghgi_ch4_kt"].sum().to_frame()
+        # )
+        # proxy_sum_check = self.proxy_ds.sum(dim=["x", "y"]).to_dataframe()
+
+        grid_result_df = (
+            self.proxy_ds["results"].groupby(QC_time_col).sum(dim=...).to_dataframe()
         )
-        proxy_sum_check = self.proxy_ds.sum(dim=["x", "y"]).to_dataframe()
+        emi_result_df = self.emi_df.groupby(QC_time_col)["ghgi_ch4_kt"].sum()
 
         if QC_time_col == "year_month" and isinstance(
-            proxy_sum_check.index, pd.MultiIndex
+            grid_result_df.index, pd.MultiIndex
         ):
-            proxy_sum_check.index = proxy_sum_check.index.map(
+            grid_result_df.index = grid_result_df.index.map(
                 lambda x: f"{x[0]}-{x[1]:02d}"
             )
-            relative_tolerance = 0.003
+            relative_tolerance = 0.0001
         else:
             relative_tolerance = 0.0001
 
@@ -1382,11 +1397,18 @@ class EmiProxyGridder(BaseGridder):
         # the two values are close enough to be considered equal.
         # The default value is 1e-5, which means that the two values must be within 0.01%
         # of each other to be considered equal.
-        raster_qc_df = emi_sum_check.join(proxy_sum_check).assign(
-            isclose=lambda df: np.isclose(df["ghgi_ch4_kt"], df["results"], rtol=1e-5),
-            rel_diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["results"])
-            / ((df["ghgi_ch4_kt"] + df["results"]) / 2),
-            qc_pass=lambda df: (df["rel_diff"] < relative_tolerance),
+        raster_qc_df = (
+            emi_result_df.to_frame()
+            .join(grid_result_df)
+            .assign(
+                diff=lambda x: x["ghgi_ch4_kt"] - x["results"],
+                rel_diff=lambda df: np.abs(df["ghgi_ch4_kt"] - df["results"])
+                / ((df["ghgi_ch4_kt"] + df["results"]) / 2),
+                isclose=lambda df: np.isclose(
+                    df["ghgi_ch4_kt"], df["results"], atol=0, rtol=1e-5
+                ),
+                qc_pass=lambda df: (df["rel_diff"] < relative_tolerance),
+            )
         )
 
         # in the cases where the difference is NaN (where the inventory emission value is 0
@@ -1620,6 +1642,15 @@ class GroupGridder(BaseGridder):
                 f"{self.annual_source_count}."
             )
         self.all_source_qc_df = pd.concat([pd.read_csv(x) for x in qc_files], axis=0)
+
+        # NOTE: this is a minor hack to deal with a column name change in the QC files
+        # this should be removed once all the QC files have been updated.
+        if (
+            ("rel_diff" in self.all_source_qc_df.columns)
+            and ("diff" in self.all_source_qc_df.columns)
+        ):
+            self.all_source_qc_df["diff"] = self.all_source_qc_df["rel_diff"]
+
         self.source_qc_df = (
             self.all_source_qc_df.groupby("year")
             .agg(
@@ -1793,8 +1824,6 @@ class GroupGridder(BaseGridder):
         output at the end of each sector script.
         """
 
-        profile = GEPA_spatial_profile()
-
         # The EPA color map from their V2 plots
         custom_colormap = colors.LinearSegmentedColormap.from_list(
             name="custom_colormap",
@@ -1864,7 +1893,7 @@ class GroupGridder(BaseGridder):
             # hood)
             show(
                 raster_data,
-                transform=profile.profile["transform"],
+                transform=self.gepa_profile.profile["transform"],
                 ax=ax,
                 cmap=custom_colormap,
                 interpolation="none",
@@ -1900,8 +1929,6 @@ class GroupGridder(BaseGridder):
         for each sector.
         """
         # Define the geographic transformation parameters
-
-        profile = GEPA_spatial_profile()
 
         # Get the first and last years of the data
         list_of_data_years = list(self.annual_flux_da.time.values)
@@ -1963,7 +1990,7 @@ class GroupGridder(BaseGridder):
         # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
         show(
             difference_raster,
-            transform=profile.profile["transform"],
+            transform=self.gepa_profile.profile["transform"],
             ax=ax,
             cmap=custom_colormap,
             interpolation="none",
@@ -2066,11 +2093,6 @@ class GroupGridder(BaseGridder):
         raster data for each sector.
         """
 
-        # Check for expected years
-        from config import max_year, min_year
-
-        gepa_profile = GEPA_spatial_profile()
-
         actual_years = set(self.annual_flux_da.time.values.astype(int))
         expected_years = set(range(min_year, max_year + 1))
         missing_years = expected_years - actual_years
@@ -2119,7 +2141,7 @@ class GroupGridder(BaseGridder):
                 coords=[
                     list(v2_data_dict.keys()),
                     np.flip(self.gepa_profile.y),
-                    gepa_profile.x,
+                    self.gepa_profile.x,
                 ],
                 name=self.v2_name,
             )
@@ -2236,7 +2258,7 @@ class GroupGridder(BaseGridder):
                 # under the hood)
                 show(
                     yearly_dif,
-                    transform=gepa_profile.profile["transform"],
+                    transform=self.gepa_profile.profile["transform"],
                     ax=ax,
                     cmap=custom_colormap,
                     interpolation="none",

@@ -233,6 +233,8 @@ def task_rice_proxy(
     rice_gdf.index.map(lambda x: str(x)[-3:])
     
 
+
+
     # %%
     res_dict = {}
     for cdl_layer_path in tqdm(cdl_layers):
@@ -335,6 +337,30 @@ def task_rice_proxy(
     rice_stack_xr["statefp"] = state_grid["statefp"]
     # plot the data to check
     rice_stack_xr["statefp"].plot()
+    # %%
+    rice_stack_xr.sel(year=2017).plot()
+    # %%
+    # NOTE: the inventory reports emissions in MN. However neither the CDL nor the
+    # census data have any data for MN. So we need to add a dummy value for MN.
+    # Create a GeoDataFrame with just the state of Minnesota
+    mn_gdf = state_gdf.query("state_name == 'Minnesota'").assign(emi=1)
+    mn_gdf
+    # Create an xarray object from the Minnesota GeoDataFrame
+    mn_grid = make_geocube(
+        vector_data=mn_gdf,
+        measurements=["emi"],
+        like=rice_xr,
+        fill=0,
+    )
+    mn_grid["emi"].plot()
+    rice_stack_xr = rice_stack_xr + mn_grid["emi"]
+    rice_stack_xr.sel(year=2020).plot()
+    # Plot every year of tmp
+    for year in  rice_stack_xr.year.values:
+        rice_stack_xr.sel(year=year).plot()
+        plt.title(f"Year: {year}")
+        plt.show()
+    # %%
 
     # apply the normalization function to the data
     out_ds = (
@@ -369,7 +395,7 @@ def task_rice_proxy(
 
     # plot. Not hugely informative, but shows the data is there.
     out_ds["rel_emi"].sel(year=2020).plot.imshow()
-
+    # %%
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         rice_stack_xr.rio.crs
     ).to_netcdf(output_path)

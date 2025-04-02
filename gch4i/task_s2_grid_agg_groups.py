@@ -56,6 +56,7 @@ display(
 )
 
 # %%
+# example for running all gridding groups
 # for each gridding group that is ready, perform final gridding
 for gch4i_name, gridding_data in tqdm(
     ready_for_gridding_df.groupby("gch4i_name"),
@@ -73,37 +74,21 @@ for gch4i_name, gridding_data in tqdm(
         continue
     print()
 # %%
-# gch4i_name = '1B1a_abandoned_coal'
-gch4i_name = '1A_mobile_combustion'
+# Example for running a single group
+# gch4i_name = '3A_enteric_fermentation'
+gch4i_name = '3B_manure_management'
+# gch4i_name = '5D1_domestic_wastewater'
 gridding_data = ready_for_gridding_df.query(f"gch4i_name == '{gch4i_name}'")
 group_gridder = GroupGridder(gch4i_name, gridding_data, prelim_gridded_dir)
 group_gridder.run_gridding()
 # %%
-group_gridder.annual_flux_da.sel(time=2012).where(lambda x: x>0).plot()
-group_gridder.annual_flux_da.sel(time=2012).where(lambda x: x>0).plot()
-# %%
-group_gridder.v2_flux_da.sel(time=2012).where(lambda x: x>0).plot()
-# %%
-group_gridder.annual_mass_da.where(lambda x: x>0).sel(time=2012).plot()
-# %%
-group_gridder.flux_diff_da.sel(time=2012).plot()
-# group_gridder.flux_diff_da.sel(time=2012).where(lambda x: x>0).plot()
-# %%
-group_gridder.mass_diff_da.sel(time=2012).where(lambda x: x>0).plot()
-# %%
-group_gridder.annual_mass_da.sel(time=2012).where(lambda x: x>0).plot()
+import rasterio
+annual_arr_list = []
+for raster_path in group_gridder.annual_raster_list:
+    with rasterio.open(raster_path) as src:
+        arr_data = src.read()
+        annual_arr_list.append(arr_data)
 
-
+for arr in annual_arr_list:
+    print(arr.shape)
 # %%
-(group_gridder.annual_mass_da.x == group_gridder.flux_diff_da.x).all()
-# %%
-(group_gridder.annual_mass_da.y == group_gridder.flux_diff_da.y).all()
-# group_gridder.flux_diff_da
-# %%
-(group_gridder.annual_mass_da.y == group_gridder.mass_diff_da.y).all()
-# %%
-
-(group_gridder.annual_mass_da.x == group_gridder.mass_diff_da.x).all()
-
-# %%
-

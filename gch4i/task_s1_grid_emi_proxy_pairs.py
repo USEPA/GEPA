@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 # %%
 
 import logging
@@ -105,17 +105,15 @@ display(
         .reset_index()
     )
 )
-
-
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = True
+SKIP = False
 SKIP_THESE = [
-    "complete",
-    "monthly failed, annual complete",
+    # "complete",
+    # "monthly failed, annual complete",
     # "failed state/year QC",
     # "error reading proxy",
     # "emi missing years",
@@ -126,6 +124,7 @@ SKIP_THESE = [
     # "proxy year has NAs",
     # "failed annual raster QC",
     # "failed monthly raster QC",
+    # "failed",
 ]
 ready_for_gridding_df = g_mapper.mapping_df.drop_duplicates(
     subset=["gch4i_name", "emi_id", "proxy_id"]
@@ -138,12 +137,13 @@ if SKIP:
     ready_for_gridding_df = ready_for_gridding_df[
         ~ready_for_gridding_df["status"].isin(SKIP_THESE)
     ]
-# unique_pairs_df = unique_pairs_df.query("gch4i_name == '1B1a_abandoned_coal'")
-# ready_for_gridding_df = ready_for_gridding_df.query("(gch4i_name == '1A_stationary_combustion')")
-# unique_pairs_df = unique_pairs_df.query("(gch4i_name == '1A_stationary_combustion') & (emi_id == 'stat_comb_elec_oil_emi')")
+ready_for_gridding_df = ready_for_gridding_df.query(
+    "(gch4i_name == '3B_manure_management')"
+#     " | (gch4i_name == '5D2_industrial_wastewater')"
+)
 ready_for_gridding_df
 # %%
-
+# example for running all emi/proxy pairs
 for row in tqdm(
     ready_for_gridding_df.itertuples(index=False), total=len(ready_for_gridding_df)
 ):
@@ -154,103 +154,24 @@ for row in tqdm(
         print(epg.base_name, epg.status)
     except Exception as e:
         print(epg.base_name, epg.status, e)
-
-
 # %%
-# alloc_gdf_proj = allocation_gdf.to_crs("ESRI:102003")
-# intersect_mask = alloc_gdf_proj.intersects(cell_gdf.union_all())
-# # %%
-# ax = alloc_gdf_proj[intersect_mask].plot(color="xkcd:slate")
-# alloc_gdf_proj[~intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
-# xlim = ax.get_xlim()
-# ylim = ax.get_ylim()
-# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
-# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
-# ax.set_xlim(xlim)
-# ax.set_ylim(ylim)
+# example for running a single emi/proxy pair
+gch4i_name = "3A_enteric_fermentation"
+emi_id = "enteric_fermentation_swine_emi"
+proxy_id = "livestock_swine_proxy"
+row = ready_for_gridding_df.query(
+    f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"
+).iloc[0]
 
-# # %%
-# ax = allocation_gdf[intersect_mask].plot(color="xkcd:slate")
-# allocation_gdf[~intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
-# xlim = ax.get_xlim()
-# ylim = ax.get_ylim()
-# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
-# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
-# ax.set_xlim(xlim)
-# ax.set_ylim(ylim)
-# # %%
-# proxy_intersect_mask = proxy_gdf.intersects(state_gdf.union_all())
-
-# ax = proxy_gdf[proxy_intersect_mask].plot(color="xkcd:slate")
-# proxy_gdf[~proxy_intersect_mask].plot(color="xkcd:orange", markersize=15, ax=ax)
-# xlim = ax.get_xlim()
-# ylim = ax.get_ylim()
-# # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
-# state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
-# ax.set_xlim(xlim)
-# ax.set_ylim(ylim)
-# # %%
-# import matplotlib.pyplot as plt
-
-# state_union = state_gdf.union_all()
-
-# # %%
-# from gch4i.utils import get_cell_gdf
-
-# cell_gdf = get_cell_gdf()
-# cell_gdf_union = cell_gdf.dissolve().to_crs(4326)
-
-# # %%
-
-# data_dict = {}
-# for row in tqdm(unique_pairs_df.itertuples(index=False), total=len(unique_pairs_df)):
-#     if row.file_type == "parquet":
-#         proxy_input_path = list(proxy_data_dir_path.glob(f"{row.proxy_id}.*"))[0]
-#         proxy_gdf = gpd.read_parquet(proxy_input_path).reset_index()
-#         print(f"{row.proxy_id} has {proxy_gdf.shape[0]} rows.")
-#         data_dict[row.proxy_id] = proxy_gdf
-
-# # %%
-# for proxy_id, proxy_gdf in data_dict.items():
-#     if "state_code" in proxy_gdf.columns:
-#         state_mask = proxy_gdf.state_code.isin(state_gdf.state_code.unique())
-#         proxy_gdf = proxy_gdf[state_mask]
-#         proxy_out_of_state = proxy_gdf[~state_mask]
-#         display(proxy_out_of_state)
-#         print(f"{proxy_id} has {proxy_out_of_state.shape[0]} rows outside of states.")
-#         proxy_intersect_mask = proxy_gdf.intersects(state_union)
-#         bad_data_gdf = proxy_gdf[~proxy_intersect_mask]
-#         good_data_gdf = proxy_gdf[proxy_intersect_mask]
-#         outside_states = bad_data_gdf.state_code.value_counts()
-#         print(outside_states)
-#     else:
-#         bad_data_gdf = proxy_gdf[~proxy_intersect_mask]
-#         good_data_gdf = proxy_gdf[proxy_intersect_mask]
-
-#     print(f"there are {bad_data_gdf.shape[0]} bad records")
-
-#     if not proxy_intersect_mask.all():
-#         ax = good_data_gdf.plot(color="xkcd:slate", markersize=1, zorder=10)
-#         if "state_code" in bad_data_gdf.columns:
-#             bad_data_gdf.plot(color="xkcd:scarlet", legend=False, markersize=15, ax=ax)
-#         else:
-#             bad_data_gdf.plot(color="xkcd:scarlet", markersize=15, ax=ax)
-#         # xlim = ax.get_xlim()
-#         # ylim = ax.get_ylim()
-#         # cell_gdf.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
-#         state_gdf.plot(ax=ax, color="xkcd:lightgreen", alpha=0.5)
-#         cell_gdf_union.plot(ax=ax, color="xkcd:lightblue", alpha=0.5)
-#         ax.set_title(f"{proxy_id} has {bad_data_gdf.shape[0]} bad records")
-#         # ax.set_xlim(xlim)
-#         # ax.set_ylim(ylim)
-#         plt.show()
-#         plt.close()
-#     print()
-# # %%
-# tmp_pairs_df = mapping_df.drop_duplicates(
-#     subset=["gch4i_name", "emi_id", "proxy_id"]
-# ).merge(
-#     status_df, on=["gch4i_name", "emi_id", "proxy_id"]
-# ).query("gch4i_name == '1A_stationary_combustion'")
-# tmp_pairs_df
-# # %%
+out_qc_dir = logging_dir / row.gch4i_name
+epg = EmiProxyGridder(row, status_db_path, out_qc_dir)
+epg.run_gridding()
+# %%
+import rasterio
+# %%
+with rasterio.open(epg.annual_output_path) as src:
+    arr = src.read()
+arr.shape
+# %%
+epg.proxy_ds["results"].transpose(epg.time_col, "y", "x")
+# %%
