@@ -93,17 +93,20 @@ def get_ng_import_proxy_data(
     # Normalize relative emissions to sum to 1 for each year and state
     # drop state-years with 0 total volume
     proxy_gdf = (
-        proxy_gdf.groupby(['state_code', 'year'])
+        proxy_gdf.groupby(['year'])
         .filter(lambda x: x['rel_emi'].sum() > 0)
         )
     # normalize to sum to 1
     proxy_gdf['rel_emi'] = (
-        proxy_gdf.groupby(['year', 'state_code'])['rel_emi']
+        proxy_gdf.groupby(['year'])['rel_emi']
         .transform(lambda x: x / x.sum() if x.sum() > 0 else 0))
     # get sums to check normalization
-    sums = proxy_gdf.groupby(["state_code", "year"])["rel_emi"].sum()
+    sums = proxy_gdf.groupby(["year"])["rel_emi"].sum()
     # assert that the sums are close to 1
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
+
+    # Drop state_code column
+    proxy_gdf = proxy_gdf.drop(columns=['state_code'])
 
     # Save to parquet
     proxy_gdf.to_parquet(output_path)
