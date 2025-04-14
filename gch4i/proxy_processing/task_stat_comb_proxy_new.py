@@ -43,24 +43,30 @@ Global_Func_Path = V3_DATA_PATH.parent / "Global_Functions" / "Global_Functions"
 # State
 state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 
-# Activity Data
-EPA_ARP_facilities = GEPA_Stat_Path / "InputData" / "ARP_Data" / "EPA_ARP_2012-2022_Facility_Info.csv"
-EPA_ARP_inputfile = GEPA_Stat_Path / "InputData/ARP_Data/EPA_ARP_2012-2022.csv"
-
-# GHGRP Data (reporting format changed in 2015)
-GHGRP_subC_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv" #subpart C facility IDs and emissions (locations not available)
-GHGRP_subD_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv" #subpart D facility IDs and emissions 
-GHGRP_subDfacility_loc_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv" #subpart D facility info (for all years, with ID & lat and lons)
-
 # Stationary Combustion Emission Files
 elec_coal_emi_path: Path = emi_data_dir_path / "stat_comb_elec_coal_emi.csv"
 elec_gas_emi_path: Path = emi_data_dir_path / "stat_comb_elec_gas_emi.csv"
 elec_oil_emi_path: Path = emi_data_dir_path / "stat_comb_elec_oil_emi.csv"
 elec_wood_emi_path: Path = emi_data_dir_path / "stat_comb_elec_wood_emi.csv"
 
-# EIA 923 Data
+# EIA 923 Data (data source for electricity generation proxies in v3)
 EIA_923_path: Path = sector_data_dir_path / "eia/EIA-923"
 EIA_923_plant_locs_path: Path = sector_data_dir_path / "eia/EIA-923/Power_Plants.csv"
+
+# Oregon power plant location for electricity generation proxies
+# https://ghgdata.epa.gov/ghgp/service/facilityDetail/2012?id=1007940&ds=E&et=FC_CL&popup=true
+#       Latitude: 45.6981567
+#       Longitude: -119.7986057
+
+# ARP Data (data source for electricity generation proxies in v2). Work with Vince
+# to determine which data source makes the most sense for the v4 proxy.
+# EPA_ARP_facilities = GEPA_Stat_Path / "InputData" / "ARP_Data" / "EPA_ARP_2012-2022_Facility_Info.csv"
+# EPA_ARP_inputfile = GEPA_Stat_Path / "InputData/ARP_Data/EPA_ARP_2012-2022.csv"
+
+# GHGRP Data (reporting format changed in 2015)
+GHGRP_subC_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv" #subpart C facility IDs and emissions (locations not available)
+GHGRP_subD_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv" #subpart D facility IDs and emissions 
+GHGRP_subDfacility_loc_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv" #subpart D facility info (for all years, with ID & lat and lons)
 
 ########################################################################################
 # %% elec_coal_proxy, elec_gas_proxy, elec_oil_proxy, elec_wood_proxy
@@ -79,7 +85,7 @@ def task_get_electricity_generation_proxy_data(
 ):
     """
     Relative emissions and location information for reporting facilities are taken from
-    the Clean Air Markets Program Data (CAMPD) and the Acid Rain Program (ARP) Data.
+    the EIA Survey 923 Data. In v2, the ARP data was used
     """
 
     # Read in state geometries of lower 48 and DC
@@ -154,9 +160,9 @@ def task_get_electricity_generation_proxy_data(
                                1.0,  # natural gas boilers
                                1.0,  # natural gas boilers
                                1.0,  # natural gas boilers
-                               1.0,  # COAL PLACEHOLDER
-                               1.0,  # COAL PLACEHOLDER
-                               1.0,  # COAL PLACEHOLDER
+                               0.7,  # weighted average of ARP CH4 factors from v2 GEPA
+                               0.7,  # weighted average of ARP CH4 factors from v2 GEPA
+                               0.7,  # weighted average of ARP CH4 factors from v2 GEPA
                                0.85,  # oil
                                1.0,  # wood
                            ],
@@ -210,11 +216,9 @@ def task_get_electricity_generation_proxy_data(
     power_plants_df = (power_plants_df
                        .assign(ch4_flux=power_plants_df['fuel_qty'] * power_plants_df['ch4_f'])
                        .drop(columns=['tech_desc', 'ch4_f', 'fuel_qty'])
-                    #    .groupby(['plant_id', 'state_code', 'year', 'month', "year_month", 'fuel'])
-                    #    .sum('ch4_flux')
                        .sort_values(['plant_id', 'year', 'month'])
                        .query("state_code.isin(@state_gdf['state_code'])")
-                       .reset_index()
+                       .reset_index(drop=True)
                        )
 
     # Create individual fuel proxies
@@ -222,6 +226,28 @@ def task_get_electricity_generation_proxy_data(
     gas_proxy = power_plants_df.query("fuel == 'Gas'").reset_index(drop=True)
     oil_proxy = power_plants_df.query("fuel == 'Oil'").reset_index(drop=True)
     wood_proxy = power_plants_df.query("fuel == 'Wood'").reset_index(drop=True)
+
+    # Manually add Oregon coal proxy data - one location and assume emissions are
+    # uniformly distributed across the year (rel_emi = 1/12 for each year)
+    # Oregon has state-level emissions for 2012-2020 (emissions = 0 for 2021, 2022)
+    OR_coal_proxy_imonth = pd.DataFrame({'plant_id': [np.nan], 'state_code': ['OR'], 'latitude': [45.6981567], 'longitude': [-119.7986057], 'fuel': ['Coal'], 'ch4_flux': [1.0]})
+
+    OR_coal_proxy_iyear = pd.DataFrame()
+    for imonth in range(1, 13):
+        data_temp = OR_coal_proxy_imonth.copy()
+        data_temp['month'] = imonth
+        data_temp['month_str'] = f"{imonth:02}"  # convert to 2-digit months
+        OR_coal_proxy_iyear = pd.concat([OR_coal_proxy_iyear, data_temp]).reset_index(drop=True)
+
+    OR_coal_proxy = pd.DataFrame()
+    for iyear in years:
+        data_temp = OR_coal_proxy_iyear.copy()
+        data_temp['year'] = iyear
+        OR_coal_proxy = pd.concat([OR_coal_proxy, data_temp]).reset_index(drop=True)
+
+    OR_coal_proxy = OR_coal_proxy.assign(year_month=OR_coal_proxy.year.astype(str)+'_'+OR_coal_proxy.month_str).drop(columns={"month_str"})
+
+    coal_proxy = pd.concat([coal_proxy, OR_coal_proxy]).reset_index(drop=True)
 
     # Function to calculate relative emissions for monthly proxy data
     def calc_rel_emi(df):
