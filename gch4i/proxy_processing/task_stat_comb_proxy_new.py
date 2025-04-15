@@ -78,10 +78,10 @@ def task_get_electricity_generation_proxy_data(
     state_path=state_path,
     facility_path=EIA_923_plant_locs_path,
     input_path=EIA_923_path,
-    elec_coal_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_coal_proxy_new.parquet',
-    elec_gas_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_gas_proxy_new.parquet',
-    elec_oil_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_oil_proxy_new.parquet',
-    elec_wood_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_wood_proxy_new.parquet',
+    elec_coal_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_coal_proxy.parquet',
+    elec_gas_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_gas_proxy.parquet',
+    elec_oil_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_oil_proxy.parquet',
+    elec_wood_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'elec_wood_proxy.parquet',
 ):
     """
     Relative emissions and location information for reporting facilities are taken from
