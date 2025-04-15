@@ -1,3 +1,22 @@
+"""
+Name:                   task_industrial_landfills_proxy.py
+Date Last Modified:     2025-04-02
+Authors Name:           H. Lohman (RTI International)
+Purpose:                Mapping of industrial landfills reporting and non-reporting
+                        food & beverage and pulp & paper proxy emissions
+gch4i_name:             5A_industrial_landfills
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        GHGRP Subpart TT: "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV"
+                        FRS NAICS Codes: global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
+                        FRS Facilities: global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
+                        Mills OnLine: sector_data_dir_path / "landfills/Mills_OnLine.xlsx"
+                        EPA Food Opportunities Map: sector_data_dir_path / "landfills/Food Manufacturers and Processors.xlsx"
+Output Files:           - proxy_data_dir_path / "ind_landfills_pp_r_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_fb_r_proxy.parquet"
+                        - proxy_data_dir_path / "ind_landfills_fb_nr_proxy.parquet"
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
@@ -100,6 +119,9 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
         .drop(columns=["facility_id", "latitude", "longitude", "city", "zip"])
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
+
+    reporting_pulp_paper_gdf['rel_emi'] = reporting_pulp_paper_gdf.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_pulp_paper_gdf = reporting_pulp_paper_gdf.drop(columns='ch4_kt')
 
     reporting_pulp_paper_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
     return None
@@ -279,6 +301,9 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .loc[:, ["state_code", "geometry"]]
     )
 
+    nonreporting_pulp_paper_gdf['rel_emi'] = nonreporting_pulp_paper_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_pulp_paper_gdf = nonreporting_pulp_paper_gdf.drop(columns='ch4_kt')
+
     nonreporting_pulp_paper_gdf.to_parquet(nonreporting_pulp_paper_proxy_output_path)
     return None
 
@@ -350,6 +375,9 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
+    reporting_food_beverage_gdf['rel_emi'] = reporting_food_beverage_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_food_beverage_gdf = reporting_food_beverage_gdf.drop(columns='ch4_kt')
+    
     reporting_food_beverage_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
     return None
 
@@ -619,6 +647,8 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                        "ghgrp_match", "FRS_match", "geo_match"])
         .loc[:, ["state_code", "geometry", "rel_emi"]]
     )
+    nonreporting_food_beverage_gdf['rel_emi'] = nonreporting_food_beverage_gdf.groupby(["state_code", "year"])['avg_waste_t'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    nonreporting_food_beverage_gdf = nonreporting_food_beverage_gdf.drop(columns='avg_waste_t')
 
     nonreporting_food_beverage_gdf.to_parquet(nonreporting_food_beverage_proxy_output_path)
     return None

@@ -1,16 +1,17 @@
 """
 Name:                   task_msw_landfills_proxy.py
-Date Last Modified:     2025-02-04
+Date Last Modified:     2025-04-02
 Authors Name:           H. Lohman (RTI International)
-Purpose:                Mapping of msw_landfill emissions to State, Year, emissions
-                        format
+Purpose:                Mapping of municipal solid waste (MSW) landfills reporting and
+                        non-reporting proxy emissions
 gch4i_name:             5A_msw_landfills
-Input Files:            - {ghgi_data_dir_path}/{5A_msw_landfills}/
-                            State_MSW_LF_1990-2022_LA.xlsx
-Output Files:           - {emi_data_dir_path}/
-                            msw_landfills_r_emi.csv
-                            msw_landfills_nr_emi.csv
-Notes:                  - 
+Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        GHGRP Subpart HH: "https://data.epa.gov/efservice/hh_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV"
+                        FRS NAICS Codes: global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
+                        FRS Facilities: global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
+                        Non-Reporting Facilities: sector_data_dir_path / "landfills/Non-Reporting_LF_DB_2020_1.12.2021.xlsx"
+Output Files:           - proxy_data_dir_path / "msw_landfills_r_proxy.parquet"
+                        - proxy_data_dir_path / "msw_landfills_nr_proxy.parquet"
 """
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path

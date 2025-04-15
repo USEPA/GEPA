@@ -48,6 +48,7 @@ dependencies:
   - pyogrio # use
   - rioxarray
   - pip
+  # - osgeo
   - xlsxwriter
   - lxml
   - pip:

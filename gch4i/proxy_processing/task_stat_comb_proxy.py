@@ -1,6 +1,6 @@
 """
 Name:                   task_stat_comb_proxy.py
-Date Last Modified:     2024-10-31
+Date Last Modified:     2025-04-15
 Authors Name:           H. Lohman (RTI International); A. Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
 Input Files:            - State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -11,11 +11,11 @@ Input Files:            - State Geo: global_data_dir_path / "tl_2020_us_state.zi
                         - GHGRP Subpart D: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
                         - GHGRP Subpart D Locations: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
 
-Output Files:           - elec_coal_proxy.parquet
-                        - elec_gas_proxy.parquet
-                        - elec_oil_proxy.parquet
-                        - elec_wood_proxy.parquet
-                        - indu_proxy.parquet
+Output Files:           - {proxy_data_dir_path} / elec_coal_proxy.parquet
+                        - {proxy_data_dir_path} / elec_gas_proxy.parquet
+                        - {proxy_data_dir_path} / elec_oil_proxy.parquet
+                        - {proxy_data_dir_path} / elec_wood_proxy.parquet
+                        - {proxy_data_dir_path} / indu_proxy.parquet
 Notes:                  - Work with the GHGI Inventory Team to determine if we should
                           use ARP or EIA 923 data for the electricity generation proxies.
                         - Update the GHGRP Subpart C and D data to rely on the API links
@@ -25,7 +25,7 @@ Notes:                  - Work with the GHGI Inventory Team to determine if we s
 # %% STEP 0.1. Load Packages
 
 from pathlib import Path
-import os
+# import os
 from typing import Annotated
 from pytask import Product, mark, task
 
@@ -450,7 +450,7 @@ def task_get_reporting_indu_proxy_data(
 
     # Read in Subpart C
     GHGRP_C = (
-        pd.read_csv(GHGRP_subC_inputfile, index_col=False)
+        pd.read_csv(subpart_C, index_col=False)
         .query('ghg_gas_name == "Methane"')
         .query('reporting_year >= @min_year & reporting_year <= @max_year')
         .drop(columns='ghg_gas_name')
@@ -458,7 +458,7 @@ def task_get_reporting_indu_proxy_data(
     )
     # Read in Subpart D
     GHGRP_D = (
-        pd.read_csv(GHGRP_subD_inputfile, index_col=False)
+        pd.read_csv(subpart_D, index_col=False)
         .query('ghg_name == "Methane"')
         .drop_duplicates(subset=['facility_id'])
         .reset_index(drop=True)
@@ -480,7 +480,7 @@ def task_get_reporting_indu_proxy_data(
     # Read in Facility List
     # Keep most recent unique facility info (no year)
     GHGRP_Facilities = (
-        pd.read_csv(GHGRP_subDfacility_loc_inputfile, index_col=False)
+        pd.read_csv(facility_path, index_col=False)
         .sort_values(by=['facility_id', 'year'], ascending=[True, False])
         .drop_duplicates(subset=['facility_id'], keep='first')
         .drop(columns='year')
@@ -488,7 +488,7 @@ def task_get_reporting_indu_proxy_data(
     )
 
     # Merge C_Only with Facility Info
-    indu_proxy = (
+    proxy_gdf = (
         GHGRP_C_Only.merge(
             GHGRP_Facilities,
             on='facility_id'
@@ -502,23 +502,45 @@ def task_get_reporting_indu_proxy_data(
         )
         # Convert Metrtic Tons to KT (1 KT = 1000 Metric Tons)
         .assign(
-            rel_emi=lambda df: df["ghg_quantity"] / 1000
+            ch4_flux=lambda df: df["ghg_quantity"] / 1000
         )
-        [['facility_id', 'facility_name', 'state_code', 'year', 'rel_emi', 'latitude', 'longitude']]
+        [[
+            'facility_id',
+            'facility_name',
+            'state_code',
+            'year',
+            'ch4_flux',
+            'latitude',
+            'longitude'
+            ]]
         .reset_index(drop=True)
     )
 
-    indu_proxy = (
+    proxy_gdf = (
         gpd.GeoDataFrame(
-            indu_proxy,
+            proxy_gdf,
             geometry=gpd.points_from_xy(
-                indu_proxy['longitude'],
-                indu_proxy['latitude'],
+                proxy_gdf['longitude'],
+                proxy_gdf['latitude'],
                 crs=4326
             )
         )
         .drop(columns=['latitude', 'longitude'])
     )
 
-    indu_proxy.to_parquet(reporting_indu_proxy_output_path)
+    # Normalize relative emissions to sum to 1 for each year and state
+    # Drop state-years with 0 total volume
+    proxy_gdf = (
+        proxy_gdf.groupby(['state_code', 'year'])
+        .filter(lambda x: x['ch4_flux'].sum() > 0)
+    )
+    # Normalize annual state emissions to sum to 1
+    proxy_gdf['annual_rel_emi'] = (
+        proxy_gdf.groupby(['year', 'state_code'])['ch4_flux']
+        .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    )
+    # Drop the original ch4_flux column
+    proxy_gdf = proxy_gdf.drop(columns=['ch4_flux'])
+
+    proxy_gdf.to_parquet(reporting_indu_output_path)
     return None
