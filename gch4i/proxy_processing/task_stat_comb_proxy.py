@@ -1,13 +1,25 @@
 """
 Name:                   task_stat_comb_proxy.py
 Date Last Modified:     2024-10-31
-Authors Name:           A. Burnette (RTI International)
+Authors Name:           H. Lohman (RTI International); A. Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
-Input Files:            -
-Output Files:           - elec_coal_proxy.parquet, elec_gas_proxy.parquet,
-                        elec_oil_proxy.parquet, elec_wood_proxy.parquet,
-                        indu_proxy.parquet
-Notes:                  -
+Input Files:            - State Geo: global_data_dir_path / "tl_2020_us_state.zip"
+                        - EIA 923 Heat Input: sector_data_dir_path / "eia/EIA-923"
+                        - EIA Plant Locations: sector_data_dir_path / "eia/EIA-923/Power_Plants.csv"
+                        - Oregon Plant: https://ghgdata.epa.gov/ghgp/service/facilityDetail/2012?id=1007940&ds=E&et=FC_CL&popup=true
+                        - GHGRP Subpart C: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
+                        - GHGRP Subpart D: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
+                        - GHGRP Subpart D Locations: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+
+Output Files:           - elec_coal_proxy.parquet
+                        - elec_gas_proxy.parquet
+                        - elec_oil_proxy.parquet
+                        - elec_wood_proxy.parquet
+                        - indu_proxy.parquet
+Notes:                  - Work with the GHGI Inventory Team to determine if we should
+                          use ARP or EIA 923 data for the electricity generation proxies.
+                        - Update the GHGRP Subpart C and D data to rely on the API links
+                          similar to methods used in other proxies (e.g., landfills).
 """
 ########################################################################################
 # %% STEP 0.1. Load Packages
