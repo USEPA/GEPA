@@ -29,6 +29,7 @@ import calendar
 import logging
 import sqlite3
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 import cartopy.crs as ccrs
@@ -43,9 +44,10 @@ import rasterio
 import rioxarray
 import seaborn as sns
 import xarray as xr
+from IPython.display import display
 from joblib import Parallel, delayed
+from matplotlib.colors import TwoSlopeNorm
 from rasterio.features import rasterize
-from rasterio.plot import show
 from tqdm.auto import tqdm
 
 from gch4i.config import (
@@ -53,10 +55,11 @@ from gch4i.config import (
     emi_data_dir_path,
     global_data_dir_path,
     logging_dir,
-    proxy_data_dir_path,
-    years,
-    min_year,
     max_year,
+    min_year,
+    proxy_data_dir_path,
+    status_db_path,
+    years,
 )
 from gch4i.utils import (
     Avogadro,
@@ -73,97 +76,119 @@ logger = logging.getLogger(__name__)
 REL_EMI_COL_LIST = ["rel_emi", "ch4", "emis_kt", "ch4_flux"]
 
 
-class GriddingMapper:
-    def __init__(self, map_path):
-        self.mapping_file_path: Path = map_path
-        self.save_file: bool = True
+class GriddingInfo:
+    def __init__(self, update_mapping=False, save_file=False):
+        self.update_mapping: bool = update_mapping
+        self.save_file: bool = save_file
+        self.v2_data_path: Path = (
+            V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
+        )
+        self.data_guide_path: Path = (
+            V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+        )
+        self.emi_proxy_info_path: Path = (
+            V3_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv"
+        )
+        self.status_db_path: Path = logging_dir / "gridding_status.db"
+        self.guide_sheet = pd.read_excel(
+            self.data_guide_path, sheet_name="emi_proxy_mapping"
+        )
+        self.v2_df = pd.read_csv(self.v2_data_path).rename(
+            columns={"v3_gch4i_name": "gch4i_name"}
+        )
         self.get_mapping_df()
+        self.get_ready_pairs()
+        self.get_ready_groups()
 
     def get_mapping_df(self):
 
-        self.guide_sheet = pd.read_excel(
-            self.mapping_file_path, sheet_name="emi_proxy_mapping"
-        )
-        emi_proxy_mapping = self.guide_sheet[
-            ["gch4i_name", "emi_id", "proxy_id"]
-        ].drop_duplicates()
-        emi_proxy_mapping
+        if self.update_mapping:
+            emi_proxy_mapping = self.guide_sheet[
+                ["gch4i_name", "emi_id", "proxy_id"]
+            ].drop_duplicates()
+            emi_proxy_mapping
 
-        n_unique_proxies = emi_proxy_mapping.proxy_id.nunique()
-        n_unique_emis = emi_proxy_mapping.emi_id.nunique()
+            n_unique_proxies = emi_proxy_mapping.proxy_id.nunique()
+            n_unique_emis = emi_proxy_mapping.emi_id.nunique()
 
-        all_proxy_cols = {}
-        proxy_results = {}
-        for data in tqdm(
-            self.guide_sheet.drop_duplicates("proxy_id")
-            .sort_values("proxy_id")
-            .itertuples(),
-            desc="Checking proxy files",
-            total=n_unique_proxies,
-        ):
-            proxy_name = data.proxy_id
-            proxy_paths = list(proxy_data_dir_path.glob(f"{proxy_name}.*"))
-            if proxy_paths:
-                proxy_path = proxy_paths[0]
-                if proxy_path.suffix == ".parquet":
-                    proxy_path = list(proxy_paths)[0]
-                    proxy_name = proxy_path.stem
-                    check_proxy, proxy_cols = self.check_proxy_file(proxy_path)
-                    proxy_results[proxy_name] = check_proxy
-                    all_proxy_cols[proxy_name] = proxy_cols
-                elif proxy_path.suffix == ".nc":
-                    proxy_path = list(proxy_paths)[0]
-                    check_proxy = self.check_proxy_nc(proxy_path)
-                    proxy_results[proxy_name] = check_proxy
-                    # all_proxy_cols[proxy_name] = proxy_cols
+            all_proxy_cols = {}
+            proxy_results = {}
+            for data in tqdm(
+                self.guide_sheet.drop_duplicates("proxy_id")
+                .sort_values("proxy_id")
+                .itertuples(),
+                desc="Checking proxy files",
+                total=n_unique_proxies,
+            ):
+                proxy_name = data.proxy_id
+                proxy_paths = list(proxy_data_dir_path.glob(f"{proxy_name}.*"))
+                if proxy_paths:
+                    proxy_path = proxy_paths[0]
+                    if proxy_path.suffix == ".parquet":
+                        proxy_path = list(proxy_paths)[0]
+                        proxy_name = proxy_path.stem
+                        check_proxy, proxy_cols = self.check_proxy_file(proxy_path)
+                        proxy_results[proxy_name] = check_proxy
+                        all_proxy_cols[proxy_name] = proxy_cols
+                    elif proxy_path.suffix == ".nc":
+                        proxy_path = list(proxy_paths)[0]
+                        check_proxy = self.check_proxy_nc(proxy_path)
+                        proxy_results[proxy_name] = check_proxy
+                        # all_proxy_cols[proxy_name] = proxy_cols
 
-            else:
-                print(f"{proxy_name} not found")
+                else:
+                    print(f"{proxy_name} not found")
 
-        all_emi_cols = {}
-        emi_results = {}
-        for data in tqdm(
-            self.guide_sheet.drop_duplicates("emi_id")
-            .sort_values("emi_id")
-            .itertuples(),
-            desc="Checking emi files",
-            total=n_unique_emis,
-        ):
-            emi_name = data.emi_id
-            emi_paths = list(emi_data_dir_path.glob(f"{emi_name}.csv"))
-            if not emi_paths:
-                print(f"{emi_name} not found")
-                continue
-            emi_path = emi_paths[0]
-            check_emi, col_list = self.check_emi_file(emi_path)
-            emi_results[emi_name] = check_emi
-            all_emi_cols[emi_name] = col_list
+            all_emi_cols = {}
+            emi_results = {}
+            for data in tqdm(
+                self.guide_sheet.drop_duplicates("emi_id")
+                .sort_values("emi_id")
+                .itertuples(),
+                desc="Checking emi files",
+                total=n_unique_emis,
+            ):
+                emi_name = data.emi_id
+                emi_paths = list(emi_data_dir_path.glob(f"{emi_name}.csv"))
+                if not emi_paths:
+                    print(f"{emi_name} not found")
+                    continue
+                emi_path = emi_paths[0]
+                check_emi, col_list = self.check_emi_file(emi_path)
+                emi_results[emi_name] = check_emi
+                all_emi_cols[emi_name] = col_list
 
-        proxy_result_df = pd.DataFrame.from_dict(proxy_results, orient="index")
-        proxy_result_df = self.make_has_cols_bool(proxy_result_df)
+            proxy_result_df = pd.DataFrame.from_dict(proxy_results, orient="index")
+            proxy_result_df = self.make_has_cols_bool(proxy_result_df)
 
-        emi_result_df = pd.DataFrame.from_dict(emi_results, orient="index")
-        emi_result_df = self.make_has_cols_bool(emi_result_df)
+            emi_result_df = pd.DataFrame.from_dict(emi_results, orient="index")
+            emi_result_df = self.make_has_cols_bool(emi_result_df)
 
-        self.mapping_df = (
-            emi_proxy_mapping.merge(
-                emi_result_df.drop(columns=["emi_has_emi_col"]),
-                left_on="emi_id",
-                right_index=True,
-                how="left",
+            self.mapping_df = (
+                emi_proxy_mapping.merge(
+                    emi_result_df.drop(columns=["emi_has_emi_col"]),
+                    left_on="emi_id",
+                    right_index=True,
+                    how="left",
+                )
+                .merge(
+                    proxy_result_df,
+                    left_on="proxy_id",
+                    right_index=True,
+                    how="left",
+                )
+                .fillna({"proxy_has_file": False})
             )
-            .merge(
-                proxy_result_df,
-                left_on="proxy_id",
-                right_index=True,
-                how="left",
-            )
-            .fillna({"proxy_has_file": False})
-        )
-        if self.save_file:
-            self.mapping_df.to_csv(
-                V3_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv", index=False
-            )
+            if self.save_file:
+                self.mapping_df.to_csv(self.emi_proxy_info_path, index=False)
+        else:
+            if not self.emi_proxy_info_path.exists():
+                raise FileNotFoundError(
+                    "The emi_proxy_info_path file does not exist. "
+                    "Please run the update_mapping option to create it."
+                )
+
+            self.mapping_df = pd.read_csv(self.emi_proxy_info_path)
 
     def make_has_cols_bool(self, in_df):
         has_cols = in_df.filter(like="has").columns
@@ -298,15 +323,85 @@ class GriddingMapper:
         )
         return res_dict
 
+    def display_time_geo_summary(self):
+        display(
+            (
+                self.mapping_df.groupby(
+                    [
+                        "file_type",
+                        "emi_time_step",
+                        "proxy_time_step",
+                        "emi_geo_level",
+                        "proxy_geo_level",
+                    ]
+                )
+                .size()
+                .rename("pair_count")
+                .reset_index()
+            )
+        )
 
-def get_status_table(status_db_path, working_dir=None, the_date=None, save=True):
-    # get a numan readable version of the status database
-    conn = sqlite3.connect(status_db_path)
-    status_df = pd.read_sql_query("SELECT * FROM gridding_status", conn)
-    conn.close()
-    if save:
-        status_df.to_csv(working_dir / f"gridding_status_{the_date}.csv", index=False)
-    return status_df
+    def get_status_table(self, save=True):
+        # get a numan readable version of the status database
+        conn = sqlite3.connect(self.status_db_path)
+        self.status_df = pd.read_sql_query("SELECT * FROM gridding_status", conn)
+        conn.close()
+        if save:
+            the_date = datetime.now().strftime("%Y-%m-%d")
+            self.status_df.to_csv(
+                logging_dir / f"gridding_status_{the_date}.csv", index=False
+            )
+
+    def get_ready_pairs(self):
+        # get the emi/proxy pairs that are ready for gridding
+        self.get_status_table(save=False)
+
+        self.pairs_ready_for_gridding_df = self.mapping_df.drop_duplicates(
+            subset=["gch4i_name", "emi_id", "proxy_id"]
+        )
+        self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df.merge(
+            self.status_df, on=["gch4i_name", "emi_id", "proxy_id"]
+        )
+
+        # if SKIP:
+        #     self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df[
+        #         ~self.pairs_ready_for_gridding_df["status"].isin(SKIP_THESE)
+        #     ]
+
+    def get_ready_groups(self):
+        # get the status of each gridding group
+        self.get_status_table(save=False)
+        self.group_ready_status = (
+            self.status_df.groupby("gch4i_name")["status"]
+            .apply(lambda x: x.eq("complete").all())
+            .to_frame()
+        )
+
+        # filter the emi/proxy data to only those groups that are ready for gridding
+        # NOTE: not all v3 gridding groups have a v2 product
+        self.ready_groups_df = (
+            self.group_ready_status[self.group_ready_status["status"] == True]
+            .join(self.v2_df.set_index("gch4i_name"))
+            .fillna({"v2_key": ""})
+            .astype({"v2_key": str})
+        ).merge(self.mapping_df, on="gch4i_name", how="left")
+
+    def display_group_status(self):
+        # display the progress of the gridding groups
+        print("percent of gridding groups ready")
+        display(
+            self.group_ready_status["status"]
+            .value_counts(normalize=True)
+            .multiply(100)
+            .round(2)
+        )
+
+    def display_pair_status(self):
+        # display the progress of the emi/proxy pairs
+        print("percent of emi/proxy pairs by status")
+        display(
+            self.status_df["status"].value_counts(normalize=True).multiply(100).round(2)
+        )
 
 
 class BaseGridder(object):
@@ -366,7 +461,7 @@ class BaseGridder(object):
         """
         out_profile = self.gepa_profile.profile
         out_data = in_ds.values
-        # out_data = np.flip(in_ds.values, axis=1)
+        out_data = np.flip(in_ds.values, axis=1)
         out_profile.update(count=out_data.shape[0])
         with rasterio.open(dst_path, "w", **out_profile) as dst:
             dst.write(out_data)
@@ -374,9 +469,10 @@ class BaseGridder(object):
 
 class EmiProxyGridder(BaseGridder):
 
-    def __init__(self, emi_proxy_in_data, db_path, qc_dir):
+    def __init__(self, emi_proxy_in_data, qc_dir):
         BaseGridder.__init__(self)
         self.qc_dir = qc_dir
+        self.db_path = status_db_path
         self.file_type = emi_proxy_in_data.file_type
         self.emi_time_step = emi_proxy_in_data.emi_time_step
         self.emi_geo_level = emi_proxy_in_data.emi_geo_level
@@ -391,7 +487,6 @@ class EmiProxyGridder(BaseGridder):
         self.proxy_has_rel_emi_col = emi_proxy_in_data.proxy_has_rel_emi_col
         self.proxy_rel_emi_col = emi_proxy_in_data.proxy_rel_emi_col
         self.proxy_geo_level = emi_proxy_in_data.proxy_geo_level
-        self.db_path = db_path
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         self.get_status()
@@ -544,7 +639,9 @@ class EmiProxyGridder(BaseGridder):
             .reset_index()
         )
 
-        self.time_geo_qc_df.to_csv(self.qc_dir / f"{self.base_name}_qc_state_year.csv")
+        self.time_geo_qc_df.to_csv(
+            self.qc_dir / f"{self.base_name}_qc_state_{time_col}.csv"
+        )
 
         if not self.time_geo_qc_df.has_proxy.all():
             if self.geo_col:
@@ -555,7 +652,7 @@ class EmiProxyGridder(BaseGridder):
                 )
                 logging.critical(
                     f"QC FAILED: {self.emi_id}, {self.proxy_id}\n"
-                    "proxy state/year columns do not match emissions\n"
+                    f"proxy state/{time_col} columns do not match emissions\n"
                     "missing states and counts of missing times:\n"
                     # f"{missing_states}\n"
                     f"{failed_states.to_string().replace("\n", "\n\t")}"
@@ -573,10 +670,10 @@ class EmiProxyGridder(BaseGridder):
             self.time_geo_qc_pass = True
 
         if self.time_geo_qc_pass:
-            logging.info(f"QC PASS: state/year QC.")
+            logging.info(f"QC PASS: state/{time_col} QC.")
         else:
-            logging.critical(f"QC FAIL: state/year QC.\n")
-            self.status = "failed state/year QC"
+            logging.critical(f"QC FAIL: state/{time_col} QC.\n")
+            self.status = f"failed state/{time_col} QC"
             self.update_status()
             raise ValueError(f"{self.base_name} {self.status}")
 
@@ -692,7 +789,7 @@ class EmiProxyGridder(BaseGridder):
             .drop(columns=["month_scale", "year"])
             .set_index(self.match_cols)
         )
-        monthly_scaling
+        display(monthly_scaling)
 
         check_scaling = (
             monthly_scaling.reset_index()
@@ -702,7 +799,7 @@ class EmiProxyGridder(BaseGridder):
             .to_frame()
             .assign(isclose=lambda df: np.isclose(df["month_normed"], 1))
         )
-        check_scaling["isclose"].all()
+        print("check scaling passed: ", check_scaling["isclose"].all())
 
         tmp_df = (
             self.emi_df.sort_values(annual_norm)
@@ -1115,9 +1212,9 @@ class EmiProxyGridder(BaseGridder):
                     ~(ready_data.geometry.is_empty | ~ready_data.geometry.is_valid)
                 ]
 
-            # print("compare pre and post processing sums:")
-            # print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
-            # print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
+            print("compare pre and post processing sums:")
+            print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
+            print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
 
             # now rasterize the emissions and sum within cells
             ch4_kt_raster = rasterize(
@@ -1137,7 +1234,7 @@ class EmiProxyGridder(BaseGridder):
 
         time_var = list(ch4_kt_result_rasters.keys())
         arr_stack = np.stack(list(ch4_kt_result_rasters.values()), axis=0)
-        # arr_stack = np.flip(arr_stack, axis=1)
+        arr_stack = np.flip(arr_stack, axis=1)
         self.proxy_ds = xr.Dataset(
             {"results": ([self.time_col, "y", "x"], arr_stack)},
             coords={
@@ -1159,9 +1256,12 @@ class EmiProxyGridder(BaseGridder):
         # NOTE: this is going to arise when the proxy data are lacking adequate
         # spatial or temporal coverage. Failure here will require finding new data
         # and/or filling in missing state/years.
-        self.check_vector_proxy_time_geo("year")
         if (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
+            self.check_vector_proxy_time_geo("year")
             self.scale_emi_to_month()
+            self.check_vector_proxy_time_geo("year_month")
+        elif self.proxy_time_step == self.emi_time_step:
+            self.check_vector_proxy_time_geo(self.time_col)
         self.allocate_emissions_to_proxy()
         self.QC_proxy_allocation()
         self.grid_allocated_emissions()
@@ -1587,15 +1687,65 @@ class EmiProxyGridder(BaseGridder):
 
 
 class GroupGridder(BaseGridder):
+    # custom_colormap = colors.LinearSegmentedColormap.from_list(
+    #     name="custom_colormap",
+    #     colors=[
+    #         "#2166AC",
+    #         "#4393C3",
+    #         "#92C5DE",
+    #         "#D1E5F0",
+    #         "#F7F7F7",
+    #         "#FDDBC7",
+    #         "#F4A582",
+    #         "#D6604D",
+    #         "#B2182B",
+    #     ],
+    #     N=3000,
+    # )
+
+    # The EPA color map from their V2 plots
+    emi_custom_colormap = colors.LinearSegmentedColormap.from_list(
+        name="emi_cmap",
+        colors=[
+            "#6F4C9B",
+            "#6059A9",
+            "#5568B8",
+            "#4E79C5",
+            "#4D8AC6",
+            "#4E96BC",
+            "#549EB3",
+            "#59A5A9",
+            "#60AB9E",
+            "#69B190",
+            "#77B77D",
+            "#8CBC68",
+            "#A6BE54",
+            "#BEBC48",
+            "#D1B541",
+            "#DDAA3C",
+            "#E49C39",
+            "#E78C35",
+            "#E67932",
+            "#E4632D",
+            "#DF4828",
+            "#DA2222",
+            "#B8221E",
+            "#95211B",
+            "#721E17",
+            "#521A13",
+        ],
+        N=3000,
+    )
+
     def __init__(self, group_name, in_data, dst_dir):
         BaseGridder.__init__(self)
         self.group_name = group_name
         self.data_df = in_data
+        self.dst_dir = dst_dir
         self.qc_dir = logging_dir / self.group_name
         self.annual_source_count = self.data_df.shape[0]
         self.get_monthly_source_count()
         self.v2_name = self.data_df["v2_key"].iloc[0]
-        self.dst_dir = dst_dir
         self.tif_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.tif"
         self.tif_kt_output_path = (
             self.dst_dir / f"{self.group_name}_ch4_kt_per_year.tif"
@@ -1645,9 +1795,8 @@ class GroupGridder(BaseGridder):
 
         # NOTE: this is a minor hack to deal with a column name change in the QC files
         # this should be removed once all the QC files have been updated.
-        if (
-            ("rel_diff" in self.all_source_qc_df.columns)
-            and ("diff" in self.all_source_qc_df.columns)
+        if ("rel_diff" in self.all_source_qc_df.columns) and (
+            "diff" in self.all_source_qc_df.columns
         ):
             self.all_source_qc_df["diff"] = self.all_source_qc_df["rel_diff"]
 
@@ -1672,6 +1821,7 @@ class GroupGridder(BaseGridder):
         )
 
     def get_group_emi_df(self):
+        """get all the original emissions files and sum up emissions by year."""
         emi_results_list = []
         for row in self.data_df.itertuples():
             emi_df = pd.read_csv(emi_data_dir_path / f"{row.emi_id}.csv")
@@ -1688,20 +1838,19 @@ class GroupGridder(BaseGridder):
         )
 
     def get_input_raster_paths(self):
+        """get all the input emi/proxy pair paths."""
         all_raster_list = []
         for row in self.data_df.itertuples():
             base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
             result = list(self.qc_dir.glob(f"{base_name}*.tif"))
             all_raster_list.extend(result)
-        # all_raster_list = list(self.qc_dir.glob(f"{self.group_name}*.tif"))
+
+        # split the lists into annual and monthly
         annual_raster_list = [
             raster for raster in all_raster_list if "monthly" not in raster.name
         ]
 
-        monthly_raster_list = [
-            raster for raster in all_raster_list if "monthly" in raster.name
-        ]
-
+        # check that we got the number of files we expected
         if annual_raster_list:
             if len(annual_raster_list) == self.annual_source_count:
                 self.annual_raster_list = annual_raster_list
@@ -1713,7 +1862,12 @@ class GroupGridder(BaseGridder):
         else:
             raise ValueError("No annual rasters found.")
 
+        # if we expect monthly raster files, get the list of paths and check that we
+        # have the right number of files
         if self.monthly_source_count > 0:
+            monthly_raster_list = [
+                raster for raster in all_raster_list if "monthly" in raster.name
+            ]
             if monthly_raster_list:
                 if len(monthly_raster_list) == self.monthly_source_count:
                     self.monthly_raster_list = monthly_raster_list
@@ -1728,6 +1882,7 @@ class GroupGridder(BaseGridder):
                 )
 
     def read_and_sum_source_rasters(self):
+        """Read the annual rasters and sum them into a single array."""
         annual_arr_list = []
         for raster_path in self.annual_raster_list:
             with rasterio.open(raster_path) as src:
@@ -1739,6 +1894,7 @@ class GroupGridder(BaseGridder):
         else:
             self.annual_group_arr = annual_arr_list[0]
 
+        self.annual_group_arr = np.flip(self.annual_group_arr, axis=1)
         self.gridded_yearly_sum = np.nansum(self.annual_group_arr, axis=(1, 2))
 
         self.annual_mass_da = xr.DataArray(
@@ -1750,12 +1906,6 @@ class GroupGridder(BaseGridder):
                 "x": self.gepa_profile.x,
             },
             name=self.group_name,
-            attrs={
-                "units": "kt",
-                "long_name": f"CH4 emissions from {self.group_name} gridded to 1km x 1km",
-                "source": self.group_name,
-                "description": f"CH4 emissions from {self.group_name} gridded to 1km x 1km",
-            },
         )
 
     def QC_group_grid(self):
@@ -1787,141 +1937,92 @@ class GroupGridder(BaseGridder):
             self.qc_dir / f"{self.group_name}_v3_emi_check.csv", index=False
         )
 
-        fig, ax1 = plt.subplots()
-        color = "xkcd:lavender"
-        ax1.set_xlabel("Year")
-        ax1.set_ylabel("Inventory Emissions (kt)", color=color)
-        ax1.plot(
-            self.emi_check_df["year"], self.emi_check_df["ghgi_ch4_kt"], color=color
-        )
-        ax1.tick_params(axis="y", labelcolor=color)
-        ax2 = ax1.twinx()
-        color = "xkcd:orange"
-        ax2.set_ylabel("Relative Difference (%)", color=color)
-        ax2.plot(self.emi_check_df["year"], self.emi_check_df["rel_diff"], color=color)
-        ax2.tick_params(axis="y", labelcolor=color)
-        fig.suptitle(
-            f"Comparison of Inventory Emissions and\nGridded Emissions for {self.group_name}"
-        )
-        fig.tight_layout()
-        plt.savefig(
-            self.qc_dir / f"{self.group_name}_v3_emi_check.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
-
         if not all(self.emi_check_df["qc_pass"]):
             print(f"\tare all emis eq: {self.emi_check_df["emi_eq"].all()}")
             print(f"\tare all grid eq: {self.emi_check_df["grid_eq"].all()}")
             raise ValueError("QC FAILED")
         else:
-            print(f"QC PASSED")
+            print(
+                f"QC PASSED: v3 gridded emissions for {self.group_name} "
+                "match inventory emissions."
+            )
+
+        self._plot_v3_emission_check()
+
+    def _plot_v3_emission_check(self) -> None:
+        fig, (ax1, ax2) = plt.subplots(
+            2, layout="constrained", figsize=(10, 6), dpi=300
+        )
+        fig.suptitle(
+            f"{self.group_name}\n"
+            "Comparison of v3 Inventory Emissions and Gridded Emissions",
+            fontsize=14,
+        )
+
+        ax1.set_xlabel("Year")
+        ax1.set(title="Inventory Emissions")
+        ax1.set_ylabel("Emissions (kt)")
+        ax1.plot(
+            self.emi_check_df["year"],
+            self.emi_check_df["ghgi_ch4_kt"],
+            color="xkcd:violet",
+        )
+
+        ax2.plot(
+            self.emi_check_df["year"],
+            self.emi_check_df["rel_diff"],
+            color="xkcd:green",
+        )
+        ax2.axhline(0, color="xkcd:slate", linestyle="--")
+        ax2.set(title="Relative difference between inventory and gridded emissions")
+        ax2.set_ylabel("Relative Difference (%)")
+
+        plt.savefig(
+            self.qc_dir / f"{self.group_name}_v3_emi_check.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.show()
+        plt.close(fig)
 
     def plot_annual_raster_data(self) -> None:
         """
         Function to plot the raster data for each year in the dictionary of rasters that are
         output at the end of each sector script.
         """
-
-        # The EPA color map from their V2 plots
-        custom_colormap = colors.LinearSegmentedColormap.from_list(
-            name="custom_colormap",
-            colors=[
-                "#6F4C9B",
-                "#6059A9",
-                "#5568B8",
-                "#4E79C5",
-                "#4D8AC6",
-                "#4E96BC",
-                "#549EB3",
-                "#59A5A9",
-                "#60AB9E",
-                "#69B190",
-                "#77B77D",
-                "#8CBC68",
-                "#A6BE54",
-                "#BEBC48",
-                "#D1B541",
-                "#DDAA3C",
-                "#E49C39",
-                "#E78C35",
-                "#E67932",
-                "#E4632D",
-                "#DF4828",
-                "#DA2222",
-                "#B8221E",
-                "#95211B",
-                "#721E17",
-                "#521A13",
-            ],
-            N=3000,
+        fg = self.annual_flux_da.where(lambda x: x > 0).plot.imshow(
+            col="time",
+            col_wrap=3,
+            cmap=self.emi_custom_colormap,
+            transform=ccrs.PlateCarree(),  # remember to provide this!
+            subplot_kws={"projection": ccrs.PlateCarree()},
+            cbar_kwargs={
+                "orientation": "horizontal",
+                "shrink": 0.8,
+                "aspect": 40,
+                "extend": "neither",
+                "label": "methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            },
+            robust=True,
+            figsize=(20, 20),
         )
-        # Plot the raster data for each year in the dictionary of rasters
-        for year in self.annual_flux_da.time:
-            year = int(year.values)
-            # subset the dict of rasters for each year
-            raster_data = self.annual_flux_da.sel(time=year).values
-            # raster_data = np.flip(self.annual_flux_da.sel(time=year).values, 0)
-
-            # Set all raster values == 0 to nan so they are not plotted
-            raster_data[np.where(raster_data == 0)] = np.nan
-
-            # Plot the raster with Cartopy
-            fig, ax = plt.subplots(
-                figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
-            )
-
-            # Set extent to the continental US
-            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-
-            # This is a "background map" workaround that allows us to add plot features like
-            # the colorbar and then use rasterio to plot the raster data on top of the
-            # background map.
-            background_map = ax.imshow(
-                raster_data,
-                cmap=custom_colormap,
-            )
-
-            # Add natural earth features
+        for ax in fg.axs.ravel():
             ax.add_feature(cfeature.LAND)
             ax.add_feature(cfeature.OCEAN)
             ax.add_feature(cfeature.COASTLINE)
             ax.add_feature(cfeature.STATES)
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
 
-            # Plot the raster data using rasterio (this uses matplotlib imshow under the
-            # hood)
-            show(
-                raster_data,
-                transform=self.gepa_profile.profile["transform"],
-                ax=ax,
-                cmap=custom_colormap,
-                interpolation="none",
-            )
+        fg.fig.suptitle(
+            f"{self.group_name}\nGridded methane flux emissions", fontsize=14
+        )
 
-            # Set various plot parameters
-            ax.tick_params(labelsize=10)
-            fig.colorbar(
-                background_map,
-                orientation="horizontal",
-                label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
-            )
-
-            # Add a title
-            annual_plot_title = f"{year} EPA methane emissions from {self.group_name}"
-            annual_plot_title = (
-                f"{year} EPA methane emissions from {self.group_name.split('_')[-1]}"
-            )
-            plt.title(annual_plot_title, fontsize=14)
-
-            # Save the plots as PNG files to the figures directory
-            plt.savefig(self.qc_dir / f"{self.group_name}_ch4_flux_{year}.png")
-
-            # Show the plot for review
-            # plt.show()
-
-            # close the plot
-            plt.close()
+        # Save the plots as PNG files to the figures directory
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_annual_flux.png")
+        # Show the plot for review
+        plt.show()
+        # close the plot
+        plt.close()
 
     def plot_raster_data_difference(self) -> None:
         """
@@ -1938,85 +2039,45 @@ class GroupGridder(BaseGridder):
         last_year_data = self.annual_flux_da.sel(
             time=np.max(self.annual_flux_da.time.values)
         )
-        # first_year_data = np.flip(first_year_data.values, 1)
-        first_year_data = first_year_data.values
-        # last_year_data = np.flip(last_year_data.values, 1)
-        last_year_data = last_year_data.values
 
         # Calculate the difference between the first and last years
-        difference_raster = last_year_data - first_year_data
-
-        # Set all raster values == 0 to nan so they are not plotted
-        difference_raster[np.where(difference_raster == 0)] = np.nan
-
-        custom_colormap = colors.LinearSegmentedColormap.from_list(
-            name="custom_colormap",
-            colors=[
-                "#2166AC",
-                "#4393C3",
-                "#92C5DE",
-                "#D1E5F0",
-                "#F7F7F7",
-                "#FDDBC7",
-                "#F4A582",
-                "#D6604D",
-                "#B2182B",
-            ],
-            N=3000,
+        self.difference_raster = (last_year_data - first_year_data).where(
+            lambda x: x > 0
         )
 
-        # Create a figure and axis with the specified projection
-        fig, ax = plt.subplots(
-            figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+        c_map, c_norm = self._get_cmap(self.difference_raster)
+        fg = self.difference_raster.plot(
+            cmap=c_map,
+            transform=ccrs.PlateCarree(),  # remember to provide this!
+            subplot_kws={"projection": ccrs.PlateCarree()},
+            cbar_kwargs={
+                "orientation": "horizontal",
+                "shrink": 0.8,
+                "aspect": 40,
+                "norm": c_norm,
+                "extend": "neither",
+                "label": "Difference in methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            },
+            robust=True,
+            figsize=(20, 10),
         )
-
-        # Set extent to the continental US
-        ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-
-        # This is a "background map" workaround that allows us to add plot features like
-        # the colorbar and then use rasterio to plot the raster data on top of the
-        # background map.
-        background_map = ax.imshow(
-            difference_raster,
-            cmap=custom_colormap,
-        )
-
-        # Add natural earth features
-        ax.add_feature(cfeature.LAND)
-        ax.add_feature(cfeature.OCEAN)
-        ax.add_feature(cfeature.COASTLINE)
-        ax.add_feature(cfeature.STATES)
-
-        # Plot the raster data using rasterio (this uses matplotlib imshow under the hood)
-        show(
-            difference_raster,
-            transform=self.gepa_profile.profile["transform"],
-            ax=ax,
-            cmap=custom_colormap,
-            interpolation="none",
-        )
-
-        # Set various plot parameters
-        ax.tick_params(labelsize=10)
-        fig.colorbar(
-            background_map,
-            orientation="horizontal",
-            label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
-        )
+        fg.axes.add_feature(cfeature.LAND)
+        fg.axes.add_feature(cfeature.OCEAN)
+        fg.axes.add_feature(cfeature.COASTLINE)
+        fg.axes.add_feature(cfeature.STATES)
+        fg.axes.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
 
         # Add a title
         difference_plot_title = (
-            f"Difference between {list_of_data_years[0]} and "
-            f"{list_of_data_years[-1]} methane emissions from {self.group_name}"
+            f"{self.group_name}: Difference between {list_of_data_years[0]} and\n"
+            f"{list_of_data_years[-1]} methane emissions"
         )
-        plt.title(difference_plot_title, fontsize=14)
+        fg.figure.suptitle(difference_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
         plt.savefig(self.qc_dir / f"{self.group_name}_ch4_flux_difference.png")
-
         # Show the plot for review
-        # plt.show()
-
+        plt.show()
         # close the plot
         plt.close()
 
@@ -2093,6 +2154,8 @@ class GroupGridder(BaseGridder):
         raster data for each sector.
         """
 
+        # Plot the difference between v2 and v3 methane emissions for each year
+
         actual_years = set(self.annual_flux_da.time.values.astype(int))
         expected_years = set(range(min_year, max_year + 1))
         missing_years = expected_years - actual_years
@@ -2110,7 +2173,8 @@ class GroupGridder(BaseGridder):
             if neg_count > 0:
                 neg_percent = (neg_count / v3_arr.size) * 100
                 Warning(
-                    f"Source {self.group_name}, Year {year_val} has {neg_count} negative values ({neg_percent:.2f}% of cells)"
+                    f"Source {self.group_name}, Year {year_val} has {neg_count} "
+                    "negative values ({neg_percent:.2f}% of cells)"
                 )
 
         # compare against v2 values, if v2_data exists
@@ -2140,7 +2204,7 @@ class GroupGridder(BaseGridder):
                 dims=["time", "y", "x"],
                 coords=[
                     list(v2_data_dict.keys()),
-                    np.flip(self.gepa_profile.y),
+                    self.gepa_profile.y,
                     self.gepa_profile.x,
                 ],
                 name=self.v2_name,
@@ -2198,118 +2262,150 @@ class GroupGridder(BaseGridder):
             )
             self.flux_qc_df
 
-            g = sns.relplot(
-                kind="line",
-                data=self.flux_qc_df,
-                x="year",
-                y="percent_dif",
-                hue="metric",
-                palette="Set2",
+            self._plot_percent_dif_fig()
+            self._plot_difference_histogram()
+            self._plot_difference_map()
+
+    def _plot_percent_dif_fig(self):
+        g = sns.relplot(
+            kind="line",
+            data=self.flux_qc_df,
+            x="year",
+            y="percent_dif",
+            hue="metric",
+            palette=sns.color_palette(["xkcd:violet", "xkcd:green"], 2),
+        )
+        g.figure.suptitle(f"{self.group_name} v2 v v3 percent difference")
+        g.set_axis_labels("Year", "Percent difference")
+        g.savefig(self.qc_dir / f"{self.group_name}_v3_vs_v2_percent_difference.png")
+        plt.show()
+        plt.close()
+
+    def _plot_difference_map(self):
+        c_map, c_norm = self._get_cmap(self.flux_diff_da)
+        fg = self.flux_diff_da.plot.imshow(
+            col="time",
+            col_wrap=3,
+            cmap=c_map,
+            transform=ccrs.PlateCarree(),  # remember to provide this!
+            subplot_kws={"projection": ccrs.PlateCarree()},
+            cbar_kwargs={
+                "orientation": "horizontal",
+                "shrink": 0.8,
+                "aspect": 40,
+                "norm": c_norm,
+                "extend": "neither",
+                "label": "Difference in methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            },
+            robust=True,
+            figsize=(20, 14),
+        )
+        for ax in fg.axs.ravel():
+            ax.add_feature(cfeature.LAND)
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
+            ax.add_feature(cfeature.STATES)
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+        fg.fig.suptitle(f"{self.group_name} v2 to v3 methane emissions difference")
+        # Add labels to the color bar
+        cbar = fg.cbar
+        cbar.ax.text(
+            -0.01,
+            0.5,
+            "v2 higher",
+            va="center",
+            ha="right",
+            transform=cbar.ax.transAxes,
+        )
+        cbar.ax.text(
+            1.01, 0.5, "v3 higher", va="center", ha="left", transform=cbar.ax.transAxes
+        )
+        plt.savefig(
+            self.qc_dir / f"{self.group_name}_ch4_flux_difference_maps_v2_to_v3.png"
+        )
+        plt.show()
+        plt.close()
+
+    def _plot_difference_histogram(self):
+        """
+        Function to plot a histogram of the differences between v2 and v3 fluxes for each year.
+        This is useful for visualizing the distribution of differences in flux values.
+        """
+        fig, axs = plt.subplots(
+            3, 3, figsize=(20, 12), sharex=True, sharey=True, layout="constrained"
+        )
+        for year, ax in zip(self.flux_diff_da.time.values, axs.ravel()):
+            annual_flux = (
+                self.annual_flux_da.sel(time=year)
+                .where(lambda x: x > 0)
+                .values.flatten()
             )
-            g.figure.suptitle(f"{self.group_name} v3 vs v2 percent difference")
-            g.set_axis_labels("Year", "Percent difference")
-            # Save the figure
-            g.savefig(
-                self.qc_dir / f"{self.group_name}_v3_vs_v2_percent_difference.png"
+            v2_flux = (
+                self.v2_flux_da.sel(time=year).where(lambda x: x > 0).values.flatten()
             )
-            plt.close()
 
-            # for year in v3_flux_da.time:
-            for year in self.flux_diff_da.time:
-                year_val = int(year.values)
-                yearly_dif = self.flux_diff_da.sel(time=year).values
-                # yearly_dif = np.flip(self.flux_diff_da.sel(time=year).values, 1)
+            # Remove NaN values
+            annual_flux = annual_flux[~np.isnan(annual_flux)]
+            v2_flux = v2_flux[~np.isnan(v2_flux)]
+            bins = np.histogram_bin_edges(
+                np.concatenate([annual_flux, v2_flux]), bins=75
+            )
 
-                # Plot the difference between v2 and v3 methane emissions for each year
-                custom_colormap = colors.LinearSegmentedColormap.from_list(
-                    name="custom_colormap",
-                    colors=[
-                        "#2166AC",
-                        "#4393C3",
-                        "#92C5DE",
-                        "#D1E5F0",
-                        "#F7F7F7",
-                        "#FDDBC7",
-                        "#F4A582",
-                        "#D6604D",
-                        "#B2182B",
-                    ],
-                    N=3000,
-                )
-                # Create a figure and axis with the specified projection
-                fig, ax = plt.subplots(
-                    figsize=(10, 10), subplot_kw={"projection": ccrs.PlateCarree()}
-                )
-                # Set extent to the continental US
-                ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-                # This is a "background map" workaround that allows us to add plot
-                # features like the colorbar and then use rasterio to plot the raster
-                # data on top of the background map.
-                background_map = ax.imshow(
-                    yearly_dif,
-                    cmap=custom_colormap,
-                )
-                # Add natural earth features
-                ax.add_feature(cfeature.LAND)
-                ax.add_feature(cfeature.OCEAN)
-                ax.add_feature(cfeature.COASTLINE)
-                ax.add_feature(cfeature.STATES)
-                # Plot the raster data using rasterio (this uses matplotlib imshow
-                # under the hood)
-                show(
-                    yearly_dif,
-                    transform=self.gepa_profile.profile["transform"],
-                    ax=ax,
-                    cmap=custom_colormap,
-                    interpolation="none",
-                )
-                # Set various plot parameters
-                ax.tick_params(labelsize=10)
-                fig.colorbar(
-                    background_map,
-                    orientation="horizontal",
-                    label="Methane emissions (Mg a$^{-1}$ km$^{-2}$)",
-                )
-                # Add a title
-                difference_plot_title = (
-                    f"{year_val} Difference between v2 and v3 methane "
-                    f"emissions from {self.group_name}"
-                )
-                plt.title(difference_plot_title, fontsize=14)
-                # Save the plot as a PNG file
-                plt.savefig(
-                    self.qc_dir
-                    / f"{self.group_name}_ch4_flux_difference_v2_to_v3_{year_val}.png"
-                )
-                # Show the plot for review
-                # plt.show()
-                # Close the plot
-                plt.close()
+            # Create histogram
+            annual_flux, _ = np.histogram(annual_flux, bins)
+            v2_flux, _ = np.histogram(v2_flux, bins)
 
-                # Plot the grid cell level frequencies of v2 and v3 methane emissions
-                # for each year
-                fig, (ax1, ax2) = plt.subplots(2)
-                fig.tight_layout()
-                ax1.hist(v2_data_dict[year_val].ravel(), bins=100)
-                ax2.hist(v3_arr.ravel(), bins=100)
-                # Add a title
-                histogram_plot_title = (
-                    f"{year_val} Frequency of methane emissions from "
-                    f"{self.group_name} at the grid cell level"
-                )
-                ax1.set_title(histogram_plot_title)
-                # Add axis labels
-                ax2.set_xlabel("Methane emissions (Mg a$^{-1}$ km$^{-2}$)")
-                ax1.set_ylabel("v2 frequency")
-                ax2.set_ylabel("v3 frequency")
-                # Save the plot as a PNG file
-                plt.savefig(
-                    self.qc_dir / f"{self.group_name}_ch4_flux_histogram_{year_val}.png"
-                )
-                # Show the plot for review
-                # plt.show()
-                # Close the plot
-                plt.close()
+            width = np.diff(bins)[0] * 0.4  # Adjust width for better visibility
+
+            ax.bar(
+                bins[:-1] + width / 2,
+                annual_flux,
+                width=width,
+                label="v3 Flux",
+                align="edge",
+                color="xkcd:violet",
+            )
+            ax.bar(
+                bins[:-1] - width / 2,
+                v2_flux,
+                width=width,
+                label="V2 Flux",
+                align="edge",
+                color="xkcd:green",
+            )
+
+            ax.legend(loc="upper right", fontsize=8)
+            ax.set(title=f"{int(year)}", yscale="log")
+            plt.xlabel("Flux Value")
+            plt.ylabel("Frequency")
+
+        for ax in axs.ravel()[-2:]:
+            ax.set_visible(False)
+        fig.suptitle(f"{self.group_name} v2/v3 Flux Comparison", fontsize=16)
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_flux_histogram.png")
+        plt.show()
+        plt.close()
+
+    def _get_cmap(self, in_da):
+        # Define the colormap normalization. This depends on if there are values
+        # greater than or less than 0. If they are all greater, use the reds colormap,
+        # if they are all less than 0, use the blues colormap. If there are both,
+        # use a two-slope normalization with a center at 0.
+        # print(f"c_min: {c_min}, c_max: {c_max}")
+
+        c_min = np.nanmin(in_da.values)
+        c_max = np.nanmax(in_da.values)
+        if c_min < 0 and c_max > 0:
+            c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
+            c_map = "coolwarm"
+        elif c_min >= 0:
+            c_norm = colors.Normalize(vmin=0, vmax=c_max)
+            c_map = "Reds"
+        elif c_max <= 0:
+            c_norm = colors.Normalize(vmin=c_min, vmax=0)
+            c_map = "Blues"
+
+        return c_map, c_norm
 
     def run_gridding(self):
         self.get_source_QC_df()

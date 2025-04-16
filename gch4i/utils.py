@@ -256,10 +256,13 @@ class GEPA_spatial_profile:
     def __init__(self, resolution: float = 0.1):
         self.resolution = resolution
         self.check_resolution(self.resolution)
-        self.x = np.arange(self.lon_left, self.lon_right, self.resolution)
-        self.y = np.arange(self.lat_top, self.lat_bottom, -self.resolution)
+        # NOTE: the x and y are in the order of what xarray expects and we add 0.05 to
+        # align these with how xarray lists coordinates as cell centers. This is
+        # slightly different than GDAL, which will list top left corner coords.
+        self.x = np.arange(self.lon_left, self.lon_right, self.resolution) + 0.05
+        self.y = np.arange(self.lat_bottom, self.lat_top, self.resolution) + 0.05
         self.height, self.width = self.arr_shape = (len(self.y), len(self.x))
-        self.profile = self.get_profile(self.resolution)
+        self.get_profile()
 
     def check_resolution(self, resolution):
         if resolution not in self.valid_resolutions:
@@ -267,18 +270,18 @@ class GEPA_spatial_profile:
                 f"resolution must be one of {', '.join(self.valid_resolutions)}"
             )
 
-    def get_profile(self, resolution):
+    def get_profile(self):
         base_profile = default_gtiff_profile.copy()
         base_profile.update(
             transform=rasterio.Affine(
-                resolution, 0.0, self.lon_left, 0.0, -resolution, self.lat_top
+                self.resolution, 0.0, self.lon_left, 0.0, -self.resolution, self.lat_top
             ),
             height=self.height,
             width=self.width,
             crs=4326,
             dtype="float32",
         )
-        return base_profile
+        self.profile = base_profile
 
 
 def make_raster_binary(

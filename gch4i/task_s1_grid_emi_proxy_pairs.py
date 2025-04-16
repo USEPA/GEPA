@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 
 import logging
@@ -51,27 +51,19 @@ from IPython.display import display
 from tqdm.auto import tqdm
 
 from gch4i.config import V3_DATA_PATH, logging_dir
-from gch4i.gridding_utils import EmiProxyGridder, GriddingMapper, get_status_table
+from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo
 
 gpd.options.io_engine = "pyogrio"
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", 20)
 pd.set_option("future.no_silent_downcasting", True)
+# %%
 # create the log file for today that writes out the status of all the gridding
 # operations.
 logger = logging.getLogger(__name__)
 now = datetime.now()
 formatted_today = now.strftime("%Y-%m-%d")
 formatted_datetime = now.strftime("%Y-%m-%d %H:%M:%S")
-# %%
-
-
-# the mapping file that collections information needed for gridding on all emi/proxy
-# pairs. This is the data driven approach to gridding that will be used in the
-# production version of the gridding script.
-status_db_path = logging_dir / "gridding_status.db"
-v2_data_path: Path = V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
-mapping_file_path: Path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 log_file_path = logging_dir / f"gridding_log_{formatted_today}.log"
 # start the log file
 logging.basicConfig(
@@ -80,31 +72,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s %(message)s",
 )
-# collection all the information needed on the emi/proxy pairs for gridding
 # %%
-g_mapper = GriddingMapper(mapping_file_path)
-status_df = get_status_table(status_db_path, logging_dir, formatted_today, save=True)
-
-g_mapper.mapping_df.set_index(["gch4i_name", "emi_id", "proxy_id"]).drop(
-    columns="proxy_rel_emi_col"
-).drop_duplicates(keep="last").reset_index(drop=True)
-
-display(
-    (
-        g_mapper.mapping_df.groupby(
-            [
-                "file_type",
-                "emi_time_step",
-                "proxy_time_step",
-                "emi_geo_level",
-                "proxy_geo_level",
-            ]
-        )
-        .size()
-        .rename("pair_count")
-        .reset_index()
-    )
-)
+g_info = GriddingInfo()
+g_info.display_group_status()
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
@@ -112,7 +82,7 @@ display(
 # skip it. Otherwise it will try to run it again.
 SKIP = False
 SKIP_THESE = [
-    # "complete",
+    "complete",
     # "monthly failed, annual complete",
     # "failed state/year QC",
     # "error reading proxy",
@@ -126,52 +96,50 @@ SKIP_THESE = [
     # "failed monthly raster QC",
     # "failed",
 ]
-ready_for_gridding_df = g_mapper.mapping_df.drop_duplicates(
-    subset=["gch4i_name", "emi_id", "proxy_id"]
-)
-ready_for_gridding_df = ready_for_gridding_df.merge(
-    status_df, on=["gch4i_name", "emi_id", "proxy_id"]
-)
 
-if SKIP:
-    ready_for_gridding_df = ready_for_gridding_df[
-        ~ready_for_gridding_df["status"].isin(SKIP_THESE)
-    ]
-ready_for_gridding_df = ready_for_gridding_df.query(
-    "(gch4i_name == '3B_manure_management')"
-#     " | (gch4i_name == '5D2_industrial_wastewater')"
+# %%
+gch4i_name = "3B_manure_management"
+gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+    f"gch4i_name == '{gch4i_name}'"
 )
-ready_for_gridding_df
+gridding_rows
 # %%
 # example for running all emi/proxy pairs
 for row in tqdm(
-    ready_for_gridding_df.itertuples(index=False), total=len(ready_for_gridding_df)
+    gridding_rows.itertuples(index=False),
+    total=len(gridding_rows),
 ):
     out_qc_dir = logging_dir / row.gch4i_name
     try:
-        epg = EmiProxyGridder(row, status_db_path, out_qc_dir)
+        epg = EmiProxyGridder(row, out_qc_dir)
         epg.run_gridding()
         print(epg.base_name, epg.status)
     except Exception as e:
         print(epg.base_name, epg.status, e)
 # %%
 # example for running a single emi/proxy pair
-gch4i_name = "3A_enteric_fermentation"
-emi_id = "enteric_fermentation_swine_emi"
-proxy_id = "livestock_swine_proxy"
-row = ready_for_gridding_df.query(
+
+# gch4i_name, emi_id, proxy_id = (
+#     "1A_stationary_combustion",
+#     "stat_comb_elec_gas_emi",
+#     "elec_gas_proxy",
+# )
+# gch4i_name, emi_id, proxy_id = (
+#     "1A_stationary_combustion",
+#     "stat_comb_elec_gas_emi",
+#     "elec_gas_proxy",
+# )
+gch4i_name, emi_id, proxy_id = (
+    "3B_manure_management",
+    "manure_management_turkeys_emi",
+    "livestock_turkeys_proxy",
+)
+row = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"
 ).iloc[0]
 
 out_qc_dir = logging_dir / row.gch4i_name
-epg = EmiProxyGridder(row, status_db_path, out_qc_dir)
+epg = EmiProxyGridder(row, out_qc_dir)
 epg.run_gridding()
-# %%
-import rasterio
-# %%
-with rasterio.open(epg.annual_output_path) as src:
-    arr = src.read()
-arr.shape
-# %%
-epg.proxy_ds["results"].transpose(epg.time_col, "y", "x")
+epg.status
 # %%

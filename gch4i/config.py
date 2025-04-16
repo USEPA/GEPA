@@ -24,6 +24,8 @@ final_gridded_dir = V3_DATA_PATH / "gridded_data_final"
 logging_dir = V3_DATA_PATH.parents[0] / "gridding_log_and_qc"
 gridded_output_dir = logging_dir / "gridded_output"
 
+status_db_path = logging_dir / "gridding_status.db"
+
 # this is used by the file task_download_census_geo.py to download specific census
 # geometry files
 census_geometry_list = ["county", "state", "primaryroads"]
