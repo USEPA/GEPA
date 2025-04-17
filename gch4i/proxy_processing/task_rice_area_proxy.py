@@ -87,11 +87,22 @@ def task_rice_proxy(
     census_file_path: Path = sector_dir / "census_2012-2017_rice_area_harvested.csv",
     county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    # cdl_layers: list[Path] = list(cdl_path.glob("*_30m_cdls_rice_binary.tif")),
     cdl_layers: list[Path] = list(cdl_path.glob("*_30m_cdls_rice_perc.tif")),
+    monthly_scale_path: Path = (
+        sector_data_dir_path / "Rice_Emissions_Scenario_D_MAY16.nc"
+    ),
     output_path: Annotated[Path, Product] = proxy_data_dir_path / "rice_area_proxy.nc",
 ) -> None:
 
+    # %%
+    month_ds = xr.open_dataset(monthly_scale_path, decode_times=False)
+    month_ds["data"].where(lambda x: x > 0).plot.imshow(
+        col="time", col_wrap=4, cmap="Spectral"
+    )
+    # %%
+    monthly_scaling = month_ds["data"].groupby("time").sum(dim=...).to_series()
+    monthly_scaling = monthly_scaling / monthly_scaling.sum()
+    monthly_scaling.plot()
     # %%
     # here we see that as we cycle through the 3 geographic levels from the ref file,
     # the total area harvested changes. When compared to the actual data file I'm using
@@ -192,7 +203,6 @@ def task_rice_proxy(
     sns.despine()
     plt.show()
 
-
     # %%
     # read in the population data. This one is reference to create the county grid
     rice_xr = (
@@ -231,9 +241,6 @@ def task_rice_proxy(
     cnty_to_grid[~cnty_to_grid.geoid.isin(np.unique(cnty_grid["geoid"].values))]
     # %%
     rice_gdf.index.map(lambda x: str(x)[-3:])
-    
-
-
 
     # %%
     res_dict = {}
@@ -286,7 +293,7 @@ def task_rice_proxy(
 
         rice_out_xr = cnty_rice_normed_xr * cnty_rice_prod
 
-        rice_out_xr.where(lambda x: x>0).plot()
+        rice_out_xr.where(lambda x: x > 0).plot()
         sum_check = (
             rice_out_xr.groupby("geoid")
             .sum()
@@ -295,16 +302,13 @@ def task_rice_proxy(
             .drop(columns="spatial_ref")
             .query("geoid != 99")
             .join(rice_gdf[["value_num"]], how="outer")
-            .assign(
-                is_close=lambda df: np.isclose(df["sum_check"], df["value_num"])
-            )
+            .assign(is_close=lambda df: np.isclose(df["sum_check"], df["value_num"]))
         )
         pass_check = sum_check["is_close"].all()
         if not pass_check:
             print(f"gridded sum: {int(sum_check['sum_check'].sum()):,}")
             print(f"actual sum: {int(sum_check['value_num'].sum()):,}")
             # raise ValueError(f"year {the_year} failed the check")
-        
 
         # this is a hacky thing, but for some reason the above concat strips the geo
         # information from the xarray and I can't get it back in there. So I save the
@@ -324,9 +328,12 @@ def task_rice_proxy(
         res_dict[the_year] = rice_xr
     # %%
 
-    rice_stack_xr = xr.concat(
-        list(res_dict.values()), dim="year"
-    ).drop_vars("geoid").assign_coords(year=list(res_dict.keys()))
+    rice_stack_xr = (
+        xr.concat(list(res_dict.values()), dim="year")
+        .drop_vars("geoid")
+        .assign_coords(year=list(res_dict.keys()))
+        # .assign_coords(year=pd.to_datetime(list(res_dict.keys()), format="%Y"))
+    )
     rice_stack_xr
 
     # make the state grid
@@ -352,29 +359,68 @@ def task_rice_proxy(
         like=rice_xr,
         fill=0,
     )
-    mn_grid["emi"].plot()
+
     rice_stack_xr = rice_stack_xr + mn_grid["emi"]
-    rice_stack_xr.sel(year=2020).plot()
-    # Plot every year of tmp
-    for year in  rice_stack_xr.year.values:
-        rice_stack_xr.sel(year=year).plot()
-        plt.title(f"Year: {year}")
-        plt.show()
+    rice_stack_xr.where(lambda x: x > 0).plot.imshow(
+        col="year", col_wrap=4, cmap="Spectral"
+    )
+    # %%
+    # Expand monthly_scaling.values into a 12, 350, 700 array
+    # to apply the monthly scaling, we need to expand the monthly_scaling into the same
+    # shape as the yearly data. The monthly_scaling is a 12-element array, so we need to
+    # expand it to 12, 350, 700. We can do this by first expanding the dimensions of the
+    # monthly_scaling to 12, 1, 1 and then tiling it to 12, 350, 700.
+    # This will give us a 3D array where each month has the same scaling factor
+    expanded_monthly_scaling = np.tile(
+        monthly_scaling.values[:, np.newaxis, np.newaxis], (1, 350, 700)
+    )
+    expanded_monthly_scaling.shape  # Should be (12, 350, 700)
+    # we then expand this into n years x 12 months
+    expanded_monthly_scaling = np.repeat(expanded_monthly_scaling, 11, axis=0)
+
+    # we expand the yearly data, repeating the yearly value for each month
+    # and then multiply the monthly scaling by the yearly data
+    month_rice_stack_xr = (
+        rice_stack_xr.expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
+        .stack({"year_month": ["year", "month"]}, create_index=False)
+        .sortby(["year_month", "y", "x"])
+        .transpose("year_month", "y", "x")
+    )
+    # fix the year month index
+    year_months = pd.to_datetime(
+        pd.DataFrame(
+            {"year": month_rice_stack_xr.year, "month": month_rice_stack_xr.month}
+        ).assign(day=1)
+    ).dt.strftime("%Y-%m")
+    month_rice_stack_xr = month_rice_stack_xr.assign_coords(
+        year_month=("year_month", year_months)
+    )
+    month_rice_stack_xr = month_rice_stack_xr * expanded_monthly_scaling
+    month_rice_stack_xr
     # %%
 
     # apply the normalization function to the data
     out_ds = (
-        rice_stack_xr.groupby(["statefp", "year"])
+        month_rice_stack_xr.groupby(["statefp", "year_month"])
         .apply(normalize_xr)
         .to_dataset(name="rel_emi")
-        # .expand_dims(year=years)
-        .sortby(["year", "y", "x"])
+        .sortby(["year_month", "y", "x"])
+        .drop_vars(["year", "month"])
+        .assign_coords(
+            year=("year_month", month_rice_stack_xr.year.values),
+            month=("year_month", month_rice_stack_xr.month.values),
+        )
     )
-    out_ds["rel_emi"].shape
-
+    out_ds["annual_rel_emi"] = (
+        month_rice_stack_xr.groupby(["statefp", "year"])
+        .apply(normalize_xr)
+        .sortby(["year_month", "y", "x"])
+    )
+    out_ds
+    # %%
     # check that the normalization worked
     all_eq_df = (
-        out_ds["rel_emi"]
+        out_ds["annual_rel_emi"]
         .groupby(["statefp", "year"])
         .sum()
         .rename("sum_check")
@@ -394,10 +440,13 @@ def task_rice_proxy(
         raise ValueError("not all values are normed correctly!")
 
     # plot. Not hugely informative, but shows the data is there.
-    out_ds["rel_emi"].sel(year=2020).plot.imshow()
+    out_ds["annual_rel_emi"].sel(year_month="2020-01").where(
+        lambda x: x > 0
+    ).plot.imshow()
     # %%
-    out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
+    out_ds.transpose("year_month", "y", "x").round(10).rio.write_crs(
         rice_stack_xr.rio.crs
     ).to_netcdf(output_path)
+
 
 # %%

@@ -283,7 +283,7 @@ class GriddingInfo:
         data_vars.remove("spatial_ref")
         if data_vars:
             if len(data_vars) > 1:
-                warnings.Warn(
+                warnings.warn(
                     f"More than one data variable in the netcdf file: {data_vars}"
                 )
             proxy_has_rel_emi_col = True
@@ -295,12 +295,13 @@ class GriddingInfo:
         proxy_has_state_col = "statefp" in coords
         proxy_has_county_col = "geoid" in coords
         proxy_has_year_col = "year" in coords
+        proxy_has_year_month_col = "year_month" in coords
         proxy_has_geom_col = all(x in coords for x in ["x", "y"])
 
-        if proxy_has_year_col:
-            proxy_time_step = "annual"
-        else:
+        if proxy_has_year_month_col:
             proxy_time_step = "monthly"
+        else:
+            proxy_time_step = "annual"
 
         if proxy_has_county_col:
             proxy_geo_level = "county"
@@ -775,28 +776,48 @@ class EmiProxyGridder(BaseGridder):
         else:
             annual_norm = ["year"]
 
-        monthly_scaling = (
-            self.proxy_gdf.groupby(self.match_cols)["annual_rel_emi"]
-            .sum()
-            .rename("month_scale")
-            .reset_index()
-            .assign(
-                year=lambda df: df["year_month"].str.split("-").str[0],
-                month_normed=lambda df: df.groupby(annual_norm)[
-                    "month_scale"
-                ].transform(normalize),
+        if self.file_type == "parquet":
+            self.monthly_scaling = (
+                self.proxy_gdf.groupby(self.match_cols)["annual_rel_emi"]
+                .sum()
+                .rename("month_scale")
+                .reset_index()
+                .assign(
+                    year=lambda df: df["year_month"].str.split("-").str[0],
+                    month_normed=lambda df: df.groupby(annual_norm)[
+                        "month_scale"
+                    ].transform(normalize),
+                )
+                .drop(columns=["month_scale", "year"])
+                .set_index(self.match_cols)
             )
-            .drop(columns=["month_scale", "year"])
-            .set_index(self.match_cols)
-        )
-        display(monthly_scaling)
+            display(self.monthly_scaling)
 
+        elif self.file_type == "netcdf":
+            self.monthly_scaling = (
+                self.proxy_ds["annual_rel_emi"]
+                .groupby(self.match_cols)
+                .sum(dim=...)
+                .rename("month_scale")
+                .to_dataframe()
+                .reset_index()
+                .assign(
+                    year=lambda df: df["year_month"].str.split("-").str[0],
+                    month_normed=lambda df: df.groupby(annual_norm)[
+                        "month_scale"
+                    ].transform(normalize),
+                )
+                .drop(columns=["month_scale", "year"])
+                .set_index(self.match_cols)
+            )
+            display(self.monthly_scaling)
         check_scaling = (
-            monthly_scaling.reset_index()
+            self.monthly_scaling.reset_index()
             .assign(year=lambda df: df["year_month"].str.split("-").str[0])
-            .groupby(["state_code", "year"])["month_normed"]
+            .groupby(annual_norm)["month_normed"]
             .sum()
             .to_frame()
+            .query("month_normed > 0")
             .assign(isclose=lambda df: np.isclose(df["month_normed"], 1))
         )
         print("check scaling passed: ", check_scaling["isclose"].all())
@@ -813,7 +834,7 @@ class EmiProxyGridder(BaseGridder):
             )
             .set_index(self.match_cols)
             .join(
-                monthly_scaling,
+                self.monthly_scaling,
                 how="outer",
             )
             .assign(
@@ -1341,7 +1362,7 @@ class EmiProxyGridder(BaseGridder):
         # and/or filling in missing state/years.
 
         if self.geo_col is not None:
-            grouper_cols = [self.geo_col, self.time_col]
+            grouper_cols = [self.geo_col, "year"]
         else:
             grouper_cols = [self.time_col]
 
@@ -1365,13 +1386,14 @@ class EmiProxyGridder(BaseGridder):
             .to_dataframe()
             .reset_index()
             .set_index(grouper_cols)
+            .assign(has_proxy=lambda df: df["rel_emi"] > 0)
         )
         final_df = self.emi_df.set_index(grouper_cols).join(rel_emi_check)
         self.time_geo_qc_df = final_df[
             (final_df.ghgi_ch4_kt > 0) & (final_df.rel_emi < 0.9)
         ]
         self.time_geo_qc_df.to_csv(self.qc_dir / f"{self.base_name}_qc_state_year.csv")
-        if len(self.time_geo_qc_df) > 0:
+        if len(final_df.query("(ghgi_ch4_kt > 0) & ~has_proxy")) > 0:
             if self.geo_col:
                 missing_states = self.time_geo_qc_df.state_code.value_counts()
                 logging.critical(
@@ -1400,6 +1422,19 @@ class EmiProxyGridder(BaseGridder):
         self.proxy_ds = xr.open_dataset(
             self.proxy_input_path
         )  # .rename({"geoid": geo_col})
+        self.proxy_ds = self.proxy_ds.assign_coords(
+            x=("x", self.gepa_profile.x), y=("y", self.gepa_profile.y)
+        )
+
+        if "fips" not in self.emi_df.columns:
+            self.emi_df = self.emi_df.merge(
+                self.state_gdf[["state_code", "fips"]], on="state_code", how="left"
+            )
+        if "fips" not in self.proxy_ds.coords:
+            if "geoid" in self.proxy_ds.coords:
+                self.proxy_ds = self.proxy_ds.rename({"geoid": "fips"})
+            elif "statefp" in self.proxy_ds.coords:
+                self.proxy_ds = self.proxy_ds.rename({"statefp": "fips"})
 
         # if the emi is month and the proxy is annual, we expand the dimensions of
         # the proxy, repeating the year values for every month in the year
@@ -1418,19 +1453,9 @@ class EmiProxyGridder(BaseGridder):
                 year_month=("year_month", year_months)
             ).transpose("year_month", "y", "x")
 
-        self.proxy_ds = self.proxy_ds.assign_coords(
-            x=("x", self.gepa_profile.x), y=("y", self.gepa_profile.y)
-        )
-
-        if "fips" not in self.emi_df.columns:
-            self.emi_df = self.emi_df.merge(
-                self.state_gdf[["state_code", "fips"]], on="state_code", how="left"
-            )
-        if "fips" not in self.proxy_ds.coords:
-            if "geoid" in self.proxy_ds.coords:
-                self.proxy_ds = self.proxy_ds.rename({"geoid": "fips"})
-            elif "statefp" in self.proxy_ds.coords:
-                self.proxy_ds = self.proxy_ds.rename({"statefp": "fips"})
+        elif (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
+            print("DEBUG: scaling emis")
+            self.scale_emi_to_month()
 
         # check that the proxy and emi files have matching state years
         # NOTE: this is going to arise when the proxy data are lacking adequate
@@ -1784,7 +1809,6 @@ class GroupGridder(BaseGridder):
             result = list(self.qc_dir.glob(f"{base_name}_emi_grid_qc.csv"))
             qc_files.extend(result)
 
-        # qc_files = list(self.qc_dir.glob(f"{self.group_name}_emi_grid_qc.csv"))
         qc_files = [x for x in qc_files if "monthly" not in x.name]
         if len(qc_files) != self.annual_source_count:
             raise ValueError(
@@ -1934,7 +1958,7 @@ class GroupGridder(BaseGridder):
         )
 
         self.emi_check_df.to_csv(
-            self.qc_dir / f"{self.group_name}_v3_emi_check.csv", index=False
+            self.qc_dir / f"{self.group_name}_ch4_v3_emi_qc.csv", index=False
         )
 
         if not all(self.emi_check_df["qc_pass"]):
@@ -1978,7 +2002,7 @@ class GroupGridder(BaseGridder):
         ax2.set_ylabel("Relative Difference (%)")
 
         plt.savefig(
-            self.qc_dir / f"{self.group_name}_v3_emi_check.png",
+            self.qc_dir / f"{self.group_name}_ch4_v3_emi_qc.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -2018,7 +2042,7 @@ class GroupGridder(BaseGridder):
         )
 
         # Save the plots as PNG files to the figures directory
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_annual_flux.png")
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_annual_flux.png")
         # Show the plot for review
         plt.show()
         # close the plot
@@ -2033,12 +2057,12 @@ class GroupGridder(BaseGridder):
 
         # Get the first and last years of the data
         list_of_data_years = list(self.annual_flux_da.time.values)
-        first_year_data = self.annual_flux_da.sel(
-            time=np.min(self.annual_flux_da.time.values)
-        )
-        last_year_data = self.annual_flux_da.sel(
-            time=np.max(self.annual_flux_da.time.values)
-        )
+
+        first_year = np.min(list_of_data_years)
+        last_year = np.max(list_of_data_years)
+
+        first_year_data = self.annual_flux_da.sel(time=first_year)
+        last_year_data = self.annual_flux_da.sel(time=last_year)
 
         # Calculate the difference between the first and last years
         self.difference_raster = (last_year_data - first_year_data).where(
@@ -2069,13 +2093,16 @@ class GroupGridder(BaseGridder):
 
         # Add a title
         difference_plot_title = (
-            f"{self.group_name}: Difference between {list_of_data_years[0]} and\n"
-            f"{list_of_data_years[-1]} methane emissions"
+            f"{self.group_name}: Difference between {first_year} and\n"
+            f"{last_year} methane emissions"
         )
         fg.figure.suptitle(difference_plot_title, fontsize=14)
 
         # Save the plot as a PNG file
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_flux_difference.png")
+        plt.savefig(
+            self.qc_dir
+            / f"{self.group_name}_ch4_v3_flux_difference_{first_year}-{last_year}.png"
+        )
         # Show the plot for review
         plt.show()
         # close the plot
@@ -2236,11 +2263,11 @@ class GroupGridder(BaseGridder):
             self.mass_diff_da = (v3_mass_da - v2_mass_da).where(lambda x: x != 0)
             self.write_tif_output(
                 self.mass_diff_da,
-                self.qc_dir / f"{self.group_name}_v2_v3_mass_diff.tif",
+                self.qc_dir / f"{self.group_name}_ch4_v3_v2_mass_diff.tif",
             )
             self.write_tif_output(
                 self.flux_diff_da,
-                self.qc_dir / f"{self.group_name}_v2_v3_flux_diff.tif",
+                self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_diff.tif",
             )
 
             v2_mass_yearly_sums = np.nansum(v2_mass_da.values, axis=(1, 2))
@@ -2277,7 +2304,7 @@ class GroupGridder(BaseGridder):
         )
         g.figure.suptitle(f"{self.group_name} v2 v v3 percent difference")
         g.set_axis_labels("Year", "Percent difference")
-        g.savefig(self.qc_dir / f"{self.group_name}_v3_vs_v2_percent_difference.png")
+        g.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_percent_difference.png")
         plt.show()
         plt.close()
 
@@ -2321,7 +2348,7 @@ class GroupGridder(BaseGridder):
             1.01, 0.5, "v3 higher", va="center", ha="left", transform=cbar.ax.transAxes
         )
         plt.savefig(
-            self.qc_dir / f"{self.group_name}_ch4_flux_difference_maps_v2_to_v3.png"
+            self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_difference_maps.png"
         )
         plt.show()
         plt.close()
@@ -2382,7 +2409,7 @@ class GroupGridder(BaseGridder):
         for ax in axs.ravel()[-2:]:
             ax.set_visible(False)
         fig.suptitle(f"{self.group_name} v2/v3 Flux Comparison", fontsize=16)
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_flux_histogram.png")
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_histogram.png")
         plt.show()
         plt.close()
 

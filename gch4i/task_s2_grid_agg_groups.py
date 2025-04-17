@@ -31,7 +31,7 @@ for gch4i_name, gridding_group_data in tqdm(
     print()
 # %%
 # Example for running a single group
-gch4i_name = "1B1a_coal_mining_underground"
+gch4i_name = "3C_rice_cultivation"
 gridding_group_data = g_info.ready_groups_df.query(f"gch4i_name == '{gch4i_name}'")
 gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
 gg.run_gridding()

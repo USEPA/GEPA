@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 # %%
 
 import logging
@@ -73,8 +73,8 @@ logging.basicConfig(
     format="%(levelname)s %(message)s",
 )
 # %%
-g_info = GriddingInfo()
-g_info.display_group_status()
+g_info = GriddingInfo(update_mapping=True, save_file=True)
+g_info.display_pair_status()
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
@@ -98,7 +98,7 @@ SKIP_THESE = [
 ]
 
 # %%
-gch4i_name = "3B_manure_management"
+gch4i_name = "3C_rice_cultivation"
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}'"
 )
@@ -130,9 +130,9 @@ for row in tqdm(
 #     "elec_gas_proxy",
 # )
 gch4i_name, emi_id, proxy_id = (
-    "3B_manure_management",
-    "manure_management_turkeys_emi",
-    "livestock_turkeys_proxy",
+    "3C_rice_cultivation",
+    "rice_cult_emi",
+    "rice_area_proxy",
 )
 row = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"
