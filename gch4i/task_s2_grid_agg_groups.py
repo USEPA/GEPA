@@ -11,8 +11,14 @@ from gch4i.gridding_utils import GriddingInfo, GroupGridder
 # %%
 # get the emi/proxy data guide, status data, and v2/v3 crosswalk data
 g_info = GriddingInfo()
-g_info.display_group_status()
+g_info.display_all_group_statuses()
 # %%
+# gch4i_name = "3C_rice_cultivation"
+# gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+#     f"gch4i_name == '{gch4i_name}'"
+# )
+# gridding_rows
+
 # example for running all gridding groups
 # for each gridding group that is ready, perform final gridding
 for gch4i_name, gridding_group_data in tqdm(
@@ -35,4 +41,3 @@ gch4i_name = "3C_rice_cultivation"
 gridding_group_data = g_info.ready_groups_df.query(f"gch4i_name == '{gch4i_name}'")
 gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
 gg.run_gridding()
-# %%

@@ -175,7 +175,8 @@ for mine_type in mine_types:
     state_path,
     output_path_coal,
     output_path_coal_post,
-) = param_dict["Underground"].values()
+) = param_dict["Surface"].values()
+# ) = param_dict["Underground"].values()
 
 
 # %% Pytask Function
@@ -572,33 +573,6 @@ for _id, kwargs in param_dict.items():
             sns.despine()
             plt.show()
 
-        # %%
-        # # now we fill in any states that are missing from the EIA data with MSHA data
-        # # since MSHA do not provide any measure of relative emissions, we equally
-        # # allocate hours to all mines in the state.
-        # eia_supp_mines_list = []
-        # for year in years:
-        #     unique_states = eia_mines_gdf[eia_mines_gdf["year"] == year][
-        #         "state_code"
-        #     ].unique()
-        #     missing_states = state_gdf[~state_gdf["state_code"].isin(unique_states)][
-        #         "state_code"
-        #     ].unique()
-        #     # for state in missing_states:
-        #     if missing_states.any():
-        #         missing_mines = msha_gdf[
-        #             (msha_gdf["state_code"].isin(missing_states))
-        #             & (msha_gdf["CURRENT_MINE_STATUS"] == "Active")
-        #         ].assign(year=year, emi=1)
-        #         eia_supp_mines_list.append(missing_mines)
-        # post_supp_mines_gdf = pd.concat(eia_supp_mines_list).assign(source="msha")
-        # post_supp_mines_gdf["rel_emi"] = post_supp_mines_gdf.groupby(
-        #     ["year", "state_code"]
-        # )["emi"].transform(normalize)
-        # post_supp_mines_gdf
-        # post_proxy_gdf = pd.concat([eia_mines_gdf, post_supp_mines_gdf])[
-        #     ["state_code", "year", "rel_emi", "geometry", "source"]
-        # ]
         # %%
         post_proxy_gdf = eia_mines_gdf
 

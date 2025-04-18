@@ -129,17 +129,22 @@ for row in tqdm(
 #     "stat_comb_elec_gas_emi",
 #     "elec_gas_proxy",
 # )
+# gch4i_name, emi_id, proxy_id = (
+#     "3C_rice_cultivation",
+#     "rice_cult_emi",
+#     "rice_area_proxy",
+# )
 gch4i_name, emi_id, proxy_id = (
-    "3C_rice_cultivation",
-    "rice_cult_emi",
-    "rice_area_proxy",
+    "3F4_fbar",
+    "chickpeas_emi",
+    "fbar_other_proxy",
 )
 row = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"
 ).iloc[0]
 
 out_qc_dir = logging_dir / row.gch4i_name
-epg = EmiProxyGridder(row, out_qc_dir)
+epg = EmiProxyGridder(row)
 epg.run_gridding()
 epg.status
 # %%

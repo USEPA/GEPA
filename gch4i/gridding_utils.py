@@ -369,6 +369,9 @@ class GriddingInfo:
         #         ~self.pairs_ready_for_gridding_df["status"].isin(SKIP_THESE)
         #     ]
 
+    def display_group_emi_proxy_statuses(self):
+        pass
+
     def get_ready_groups(self):
         # get the status of each gridding group
         self.get_status_table(save=False)
@@ -387,7 +390,7 @@ class GriddingInfo:
             .astype({"v2_key": str})
         ).merge(self.mapping_df, on="gch4i_name", how="left")
 
-    def display_group_status(self):
+    def display_all_group_statuses(self):
         # display the progress of the gridding groups
         print("percent of gridding groups ready")
         display(
@@ -397,7 +400,7 @@ class GriddingInfo:
             .round(2)
         )
 
-    def display_pair_status(self):
+    def display_all_pair_statuses(self):
         # display the progress of the emi/proxy pairs
         print("percent of emi/proxy pairs by status")
         display(
@@ -470,14 +473,12 @@ class BaseGridder(object):
 
 class EmiProxyGridder(BaseGridder):
 
-    def __init__(self, emi_proxy_in_data, qc_dir):
+    def __init__(self, emi_proxy_in_data):
         BaseGridder.__init__(self)
-        self.qc_dir = qc_dir
-        self.db_path = status_db_path
+        self.gch4i_name = emi_proxy_in_data.gch4i_name
         self.file_type = emi_proxy_in_data.file_type
         self.emi_time_step = emi_proxy_in_data.emi_time_step
         self.emi_geo_level = emi_proxy_in_data.emi_geo_level
-        self.gch4i_name = emi_proxy_in_data.gch4i_name
         self.emi_id = emi_proxy_in_data.emi_id
         self.proxy_id = emi_proxy_in_data.proxy_id
         self.proxy_time_step = emi_proxy_in_data.proxy_time_step
@@ -488,6 +489,8 @@ class EmiProxyGridder(BaseGridder):
         self.proxy_has_rel_emi_col = emi_proxy_in_data.proxy_has_rel_emi_col
         self.proxy_rel_emi_col = emi_proxy_in_data.proxy_rel_emi_col
         self.proxy_geo_level = emi_proxy_in_data.proxy_geo_level
+        self.qc_dir = logging_dir / self.gch4i_name
+        self.db_path = status_db_path
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         self.get_status()
@@ -497,7 +500,7 @@ class EmiProxyGridder(BaseGridder):
         self.base_name = f"{self.gch4i_name}-{self.emi_id}-{self.proxy_id}"
         self.emi_input_path = list(emi_data_dir_path.glob(f"{self.emi_id}.csv"))[0]
         self.proxy_input_path = list(proxy_data_dir_path.glob(f"{self.proxy_id}.*"))[0]
-        self.annual_output_path = qc_dir / f"{self.base_name}.tif"
+        self.annual_output_path = self.qc_dir / f"{self.base_name}.tif"
         self.has_monthly = (
             self.emi_time_step == "monthly" or self.proxy_time_step == "monthly"
         )
@@ -791,7 +794,6 @@ class EmiProxyGridder(BaseGridder):
                 .drop(columns=["month_scale", "year"])
                 .set_index(self.match_cols)
             )
-            display(self.monthly_scaling)
 
         elif self.file_type == "netcdf":
             self.monthly_scaling = (
@@ -810,7 +812,7 @@ class EmiProxyGridder(BaseGridder):
                 .drop(columns=["month_scale", "year"])
                 .set_index(self.match_cols)
             )
-            display(self.monthly_scaling)
+        # display(self.monthly_scaling)
         check_scaling = (
             self.monthly_scaling.reset_index()
             .assign(year=lambda df: df["year_month"].str.split("-").str[0])
@@ -1068,7 +1070,7 @@ class EmiProxyGridder(BaseGridder):
             try:
                 # STEP X: GRID EMISSIONS
                 # turn the vector proxy into a grid
-                self.proxy_ds = self.grid_allocated_emissions(self.allocation_gdf)
+                self.grid_allocated_emissions()
             except Exception as e:
                 logging.critical(
                     f"{self.emi_id}, {self.proxy_id} gridding failed {e}\n"
@@ -1233,9 +1235,9 @@ class EmiProxyGridder(BaseGridder):
                     ~(ready_data.geometry.is_empty | ~ready_data.geometry.is_valid)
                 ]
 
-            print("compare pre and post processing sums:")
-            print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
-            print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
+            # print("compare pre and post processing sums:")
+            # print("pre data:  ", time_data[["allocated_ch4_kt"]].sum())
+            # print("post data: ", ready_data[["allocated_ch4_kt"]].sum())
 
             # now rasterize the emissions and sum within cells
             ch4_kt_raster = rasterize(
@@ -1285,7 +1287,7 @@ class EmiProxyGridder(BaseGridder):
             self.check_vector_proxy_time_geo(self.time_col)
         self.allocate_emissions_to_proxy()
         self.QC_proxy_allocation()
-        self.grid_allocated_emissions()
+        self.grid_vector_data()
 
     def make_emi_grid(self):
         """
@@ -1770,6 +1772,12 @@ class GroupGridder(BaseGridder):
         self.qc_dir = logging_dir / self.group_name
         self.annual_source_count = self.data_df.shape[0]
         self.get_monthly_source_count()
+        if self.monthly_source_count > 0:
+            self.has_monthly = True
+            self.time_col = "year_month"
+            self.monthly_scale_output_path = (
+                self.dst_dir / f"monthly_scaling/{self.group_name}_monthly_scaling.tif"
+            )
         self.v2_name = self.data_df["v2_key"].iloc[0]
         self.tif_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.tif"
         self.tif_kt_output_path = (
@@ -1811,10 +1819,15 @@ class GroupGridder(BaseGridder):
 
         qc_files = [x for x in qc_files if "monthly" not in x.name]
         if len(qc_files) != self.annual_source_count:
-            raise ValueError(
+            # raise ValueError(
+            #     f"{self.group_name} has {len(qc_files)} qc files, but should have "
+            #     f"{self.annual_source_count}."
+            # )
+            warnings.warn(
                 f"{self.group_name} has {len(qc_files)} qc files, but should have "
                 f"{self.annual_source_count}."
             )
+
         self.all_source_qc_df = pd.concat([pd.read_csv(x) for x in qc_files], axis=0)
 
         # NOTE: this is a minor hack to deal with a column name change in the QC files
@@ -2212,6 +2225,9 @@ class GroupGridder(BaseGridder):
         else:
             # Get v2 flux raster data
             v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
+            v2_data_paths = [
+                f for f in v2_data_paths if "Monthly_Scale_Factors" not in f.stem
+            ]
             v2_data_dict = {}
             # The v2 data are not projected, so we get warnings reading all these files
             # suppress the warnings about no georeference.
@@ -2283,8 +2299,7 @@ class GroupGridder(BaseGridder):
 
             self.flux_qc_df = pd.concat([flux_dif_df, mass_dif_df], axis=0).assign(
                 yearly_dif=lambda df: df["v3_sum"] - df["v2_sum"],
-                percent_dif=lambda df: 100
-                * (df["v3_sum"] - df["v2_sum"])
+                rel_diff=lambda df: np.abs(df["v3_sum"] - df["v2_sum"])
                 / ((df["v3_sum"] + df["v2_sum"]) / 2),
             )
             self.flux_qc_df
@@ -2298,12 +2313,12 @@ class GroupGridder(BaseGridder):
             kind="line",
             data=self.flux_qc_df,
             x="year",
-            y="percent_dif",
+            y="rel_diff",
             hue="metric",
             palette=sns.color_palette(["xkcd:violet", "xkcd:green"], 2),
         )
-        g.figure.suptitle(f"{self.group_name} v2 v v3 percent difference")
-        g.set_axis_labels("Year", "Percent difference")
+        g.figure.suptitle(f"{self.group_name} v2 v v3 Relative difference", fontsize=14)
+        g.set_axis_labels("Year", "relative difference")
         g.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_percent_difference.png")
         plt.show()
         plt.close()
@@ -2422,17 +2437,44 @@ class GroupGridder(BaseGridder):
 
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
-        if c_min < 0 and c_max > 0:
-            c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
-            c_map = "coolwarm"
-        elif c_min >= 0:
+        if c_min >= 0:
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
             c_map = "Reds"
         elif c_max <= 0:
             c_norm = colors.Normalize(vmin=c_min, vmax=0)
             c_map = "Blues"
+        else:
+            c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
+            c_map = "coolwarm"
 
         return c_map, c_norm
+
+    def calculate_monthly_scaling(self):
+        """read all the monthly data, calculate a 3d array of monthly emissions
+        and normalized it by year to sum to 12 for each year"""
+        monthly_raster_ds_list = []
+        for monthly_raster in self.monthly_raster_list:
+            monthly_raster_ds_list.append(xr.open_dataset(monthly_raster))
+
+        self.month_scale_ds = (
+            xr.concat(monthly_raster_ds_list, dim="source")
+            .sum(dim="source")
+            .assign_coords(year=("band", np.repeat(np.arange(2012, 2023), 12)))
+            .groupby(["year"])
+            .apply(lambda x: (x / x.sum(dim="band")) * 12)
+        )
+
+        self.month_scale_check = (
+            self.month_scale_ds.groupby("year")
+            .sum()
+            .where(lambda x: x > 0)
+            .to_dataframe()
+            .reset_index()
+            .dropna(subset="band_data")
+            .assign(sum_check=lambda df: np.isclose(df.band_data, 12, rtol=0.1))
+        )
+        self.month_scale_check["sum_check"].all()
+        self.write_tif_output(self.month_scale_ds["band_data"], self.monthly_scale_output_path)
 
     def run_gridding(self):
         self.get_source_QC_df()
@@ -2448,5 +2490,5 @@ class GroupGridder(BaseGridder):
         self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
         self.plot_annual_raster_data()
         self.plot_raster_data_difference()
-        # if self.monthly_source_count > 0:
-        #    self.monthly_flux_da =  self.calculate_flux("year_month", "mass2flux")
+        if self.monthly_source_count > 0:
+            self.calculate_monthly_scaling()
