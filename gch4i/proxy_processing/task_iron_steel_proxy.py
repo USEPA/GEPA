@@ -1,48 +1,36 @@
 """
 Name:                   task_iron_steel_proxy.py
-Date Last Modified:     2024-11-13
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-02-05
+Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
-Input Files:            - Subpart Q Iron and Steel Facilities (API call)
-                        - GHGI Iron and Steel Facilities [GHGRP_Facilities]
-Output Files:           - iron_steel_proxy.parquet
-Notes:                  - Several facilities have missing and/or multiple addresses in
-                        the api call data. Manual inputs used to correct missinginess.
+Input Files:            Subpart Q Iron API Call:
+                        - https://data.epa.gov/efservice/q_subpart_level_information/
+                            pub_dim_facility/ghg_name/=/Methane/CSV
+                        Inventory: {ghgi_data_dir_path}/
+                            2C1_iron_and_steel/State_Iron-Steel_1990-2022.xlsx
+                        State Geo: {global_data_dir_path}/tl_2020_us_state.zip
+Output Files:           - {proxy_data_dir_path}/iron_steel_proxy.parquet
 """
 ########################################################################################
 # %% STEP 0.1. Load Packages
 
 from pathlib import Path
-import os
+# import os
 from typing import Annotated
 from pytask import Product, mark, task
 
 import pandas as pd
-import numpy as np
+# import numpy as np
 
 import geopandas as gpd
 
 from gch4i.config import (
-    V3_DATA_PATH,
+    # V3_DATA_PATH,
+    emi_data_dir_path,
     proxy_data_dir_path,
     global_data_dir_path,
-    ghgi_data_dir_path,
-    max_year,
-    min_year
+    ghgi_data_dir_path
 )
-
-########################################################################################
-# %% STEP 0.2. Load Path Files
-
-state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-
-inventory_workbook_path: Path = ghgi_data_dir_path / "2C1_iron_and_steel/State_Iron-Steel_1990-2022.xlsx"
-
-GEPA_Iron_Steel_Path = V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Iron_Steel"
-
-EPA_GHGRP_facilities_path = GEPA_Iron_Steel_Path / "InputData/GHGRP/SubpartQ_Iron_Steel_Facilities.csv"
-
-EPA_GHGRP_facility_info_path = GEPA_Iron_Steel_Path / "InputData/GHGRP/Facility_Information.csv"
 
 ########################################################################################
 # %% Pytask
@@ -51,8 +39,12 @@ EPA_GHGRP_facility_info_path = GEPA_Iron_Steel_Path / "InputData/GHGRP/Facility_
 @mark.persist
 @task(id="iron_steel_proxy")
 def task_get_iron_steel_proxy_data(
-    inventory_workbook_path=inventory_workbook_path,
+    inventory_workbook_path: Path = (
+        ghgi_data_dir_path / "2C1_iron_and_steel/State_Iron-Steel_1990-2022.xlsx"
+    ),
+    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_q_path="https://data.epa.gov/efservice/q_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
+    emi_iron_steel_path: Path = emi_data_dir_path / "iron_steel_emi.csv",
     output_path: Annotated[Path, Product] = proxy_data_dir_path
     / "iron_steel_proxy.parquet"
 ):
@@ -84,10 +76,13 @@ def task_get_iron_steel_proxy_data(
         .rename(columns=lambda x: str(x).lower())
     )
 
+    # Clean GHGI facilities data
     ghgi_facilities_df = (
         ghgi_facilities_df.rename(columns={"state": "state_code",
                                            "years operated": "years_operated"})
-        .drop(columns=["address2", "latitude", "longitude", "facility_id", "city", "zip"])
+        .drop(
+            columns=["address2", "latitude", "longitude", "facility_id", "city", "zip"]
+            )
         .reset_index(drop=True)
     )
 
@@ -108,7 +103,8 @@ def task_get_iron_steel_proxy_data(
 
     # Merge GHGI facilities with subpart Q facilities to grab facility_id
     ghgi_facilities_df = (
-        pd.merge(ghgi_facilities_df[['facility_name', 'address1', 'state_code', 'years_operated']],
+        pd.merge(ghgi_facilities_df[['facility_name', 'address1',
+                                     'state_code', 'years_operated']],
                  subpart_Q[['facility_name', 'address1', 'facility_id']],
                  on=['facility_name', 'address1'],
                  how='left')
@@ -117,24 +113,33 @@ def task_get_iron_steel_proxy_data(
     # 6 missing facility_ids
     unmatched_df = ghgi_facilities_df[ghgi_facilities_df['facility_id'].isna()]
     # Merge on address alone to fill missing facility_ids
-    fill_missing = (unmatched_df[['facility_name', 'address1']].merge(subpart_Q[['address1', 'facility_id']].drop_duplicates(),
-                                                                      on='address1',
-                                                                      how='left'))
+    fill_missing = (
+        unmatched_df[['facility_name', 'address1']]
+        .merge(
+            subpart_Q[['address1', 'facility_id']].drop_duplicates(),
+            on='address1',
+            how='left')
+            )
 
     # Update df with missing facility_ids
-    ghgi_facilities_df = ghgi_facilities_df.merge(fill_missing,
-                                                  on='address1',
-                                                  how='left',
-                                                  suffixes=('_x', '_y'))
+    ghgi_facilities_df = ghgi_facilities_df.merge(
+        fill_missing,
+        on='address1',
+        how='left',
+        suffixes=('_x', '_y')
+        )
     ghgi_facilities_df = (
         ghgi_facilities_df.assign(
-            facility_id=(ghgi_facilities_df['facility_id_y'].fillna(ghgi_facilities_df['facility_id_x']))
+            facility_id=(
+                ghgi_facilities_df['facility_id_y']
+                .fillna(ghgi_facilities_df['facility_id_x'])
+                )
         )
         .drop(columns=['facility_id_x', 'facility_id_y', 'facility_name_y'])
         .rename(columns={'facility_name_x': 'facility_name'})
     )
 
-    # 2 missing
+    # 2 remaining missing facilities:
     # 99	Kentucky Electric Steel Company	2704 S BIG RUN RD 	KY	2012
     # 130	Steel Dynamics Southwest, LLC	7575 West Jefferson Blvd	IN	2022
 
@@ -169,10 +174,18 @@ def task_get_iron_steel_proxy_data(
                 years.append(int(part))
         return years
 
-    ghgi_facilities_df['years_operated'] = ghgi_facilities_df['years_operated'].apply(extract_years)
-
-    ghgi_facilities_df['year'] = ghgi_facilities_df['years_operated'].apply(expand_years)
-    ghgi_facilities_df = ghgi_facilities_df.explode('year').drop(columns=['years_operated']).reset_index(drop=True)
+    ghgi_facilities_df['years_operated'] = (
+        ghgi_facilities_df['years_operated'].apply(extract_years)
+    )
+    ghgi_facilities_df['year'] = (
+        ghgi_facilities_df['years_operated'].apply(expand_years)
+    )
+    ghgi_facilities_df = (
+        ghgi_facilities_df
+        .explode('year')
+        .drop(columns=['years_operated'])
+        .reset_index(drop=True)
+    )
 
     # Subset subpart Q data to unique facility_id and year
     subpart_Q_red = (
@@ -181,10 +194,11 @@ def task_get_iron_steel_proxy_data(
 
     # Merge ghgi facility data with reduced subpart Q data to get ghg_quantity, lat, lon
     proxy_df = (
-        pd.merge(ghgi_facilities_df[['facility_name', 'facility_id', 'year', 'state_code']],
-                 subpart_Q_red[['facility_id', 'year', 'ghg_quantity', 'latitude', 'longitude']],
-                 on=['facility_id', 'year'],
-                 how='left')
+        pd.merge(
+            ghgi_facilities_df[['facility_name', 'facility_id', 'year', 'state_code']],
+            subpart_Q_red[['facility_id', 'year', 'ghg_quantity', 'latitude', 'longitude']],
+            on=['facility_id', 'year'],
+            how='left')
     )
 
     # ID: 1001699; Name: Liberty Steel Georgetown Holdings LLC; has no 2018 data. Input 0 for ghg_quantity
@@ -200,7 +214,9 @@ def task_get_iron_steel_proxy_data(
     proxy_df = proxy_df[proxy_df['ghg_quantity'] > 0]
 
     # Step 1: Calculate the sum of emissions for each state-year group
-    proxy_df['total_emissions'] = proxy_df.groupby(['state_code', 'year'])['ghg_quantity'].transform('sum')
+    proxy_df['total_emissions'] = (
+        proxy_df.groupby(['state_code', 'year'])['ghg_quantity'].transform('sum')
+    )
 
     # Step 2: Normalize the emissions for each facility
     proxy_df['rel_emi'] = proxy_df['ghg_quantity'] / proxy_df['total_emissions']
@@ -208,7 +224,7 @@ def task_get_iron_steel_proxy_data(
     # Step 3: Drop the total_emissions column
     proxy_df = proxy_df.drop(columns=['total_emissions'])
 
-    ########################################################################################
+    ####################################################################################
     # %% Geopandas conversion
 
     proxy_gdf = (
@@ -225,6 +241,63 @@ def task_get_iron_steel_proxy_data(
         .sort_values(by=["facility_id", "year"])
         .reset_index(drop=True)
     )
+
+    ####################################################################################
+    # %% Alternative Proxy Data
+
+    """
+    Missing proxy data for the following states:
+    CA: 2020
+    MN: 2012-2022
+    TX: 2016-2022
+    """
+
+    # Read in Emissions Data
+    emi_df = (
+        pd.read_csv(emi_iron_steel_path)
+        .query("ghgi_ch4_kt != 0")
+    )
+
+    # Read in State Geo Data
+    state_gdf = (
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
+    )
+
+    # Get unique state code-year pairs without proxy data
+    emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(proxy_gdf[['state_code', 'year']].itertuples(index=False, name=None))
+
+    missing_states = emi_states.difference(proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    if missing_states:
+        # Create alternative proxy from missing states
+        alt_proxy = (
+            pd.DataFrame(missing_states, columns=['state_code', 'year'])
+            # Assign facility_id and _name to NA, and make rel_emi = 1
+            .assign(
+                facility_id=pd.NA,
+                facility_name=pd.NA,
+                rel_emi=1
+            )
+            # Merge state polygon geometry
+            .merge(
+                state_gdf[['state_code', 'geometry']],
+                on='state_code',
+                how='left'
+            )
+        )
+        # Convert to GeoDataFrame
+        alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
+        # Append to grouped_proxy
+        proxy_gdf = pd.concat([proxy_gdf, alt_proxy], ignore_index=True)
 
     proxy_gdf.to_parquet(output_path)
     return None

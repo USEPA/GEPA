@@ -28,6 +28,7 @@ from gch4i.config import (
 
 import geopandas as gpd
 from shapely.geometry import MultiLineString, LineString, GeometryCollection
+from shapely.validation import make_valid
 
 
 ########################################################################################
@@ -122,8 +123,7 @@ def process_roads(railroad_data, states_gdf):
 @task(id="railroads_proxy")
 def task_get_railroads_proxy(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_proxy_output: Annotated[Path, Product] = proxy_data_dir_path
-    / "railroads_proxy.parquet"
+    reporting_proxy_output: Annotated[Path, Product] = proxy_data_dir_path / "railroads_proxy.parquet"
 ):
     """
     Process railroad geometries by state. Multilinestring geometries are exploded into
@@ -177,11 +177,28 @@ def task_get_railroads_proxy(
     railroads_filtered = pd.concat(rail_list)
 
     # Dissolve
-    railroad_proxy = railroads_filtered.dissolve(by=['STUSPS', 'year']).reset_index()
+    railroad_proxy = railroads_filtered #.reset_index(drop=True)
+    #railroad_proxy = railroads_filtered.dissolve(by=['STUSPS', 'year']).reset_index()
     # Change column names
     railroad_proxy = railroad_proxy.rename(columns={'STUSPS': 'state_code'})
     # Set geometry: 4326
     railroad_proxy = railroad_proxy.set_geometry('geometry').to_crs("EPSG:4326")
+
+    # Make valid geometries
+    railroad_proxy['geometry'] = railroad_proxy['geometry'].apply(make_valid)
+
+    # Drop non-LineString geometries
+    railroad_proxy = railroad_proxy[railroad_proxy['geometry'].apply(
+        lambda geom: isinstance(geom, (LineString, MultiLineString)))]
+
+    # Testing lengths <5m
+    railroad_proxy = railroad_proxy.to_crs("ESRI:102003")
+    railroad_proxy['length_m'] = railroad_proxy.geometry.length
+    railroad_proxy = railroad_proxy[railroad_proxy['length_m'] >= 5]
+    railroad_proxy = railroad_proxy.to_crs("EPSG:4326")
+
+    # Reset index
+    railroad_proxy = railroad_proxy.reset_index(drop=True)
 
     # Save output
     railroad_proxy.to_parquet(reporting_proxy_output)
