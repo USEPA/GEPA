@@ -95,6 +95,7 @@ def task_roads_proxy() -> None:
     print(f'RUNNING OVERLAY')
     print(f"NOTE: OVERLAY WILL TAKE ~2 HOURS PER YEAR TO RUN")
     for year in year_range:
+        read_reduce_data(year)
         run_overlay_for_year(year, out_dir)
 
 
@@ -119,6 +120,10 @@ def task_roads_proxy() -> None:
         cells['region'] = cells['region'].map(urban_map)
 
         print(f'Reading roads')
+        # first, check for reduced roads and run that if needed
+        
+
+
         roads = read_roads(year, crs=epsg, raw=False)
 
         print(f"Starting processing for {year} at {datetime.now()}")

@@ -1046,6 +1046,87 @@ def benchmark_load(func):
         return result
     return wrapper
 
+def read_reduce_data(year):
+    """
+    Read in All Roads data. Deduplicate and reduce data early.
+    """
+    # check if file already exists
+    out_path = task_outputs_path / f"reduced_roads_{year}.parquet"
+    if out_path.exists():
+        print(f'Found reduced roads file at path {out_path}.')
+        print()
+        return out_path
+    # Order road types
+    road_type_order = ['Primary', 'Secondary', 'Other']
+
+    df = (gpd.read_parquet(f"{raw_road_file}{year}_us_allroads.parquet",
+                           columns=['MTFCC', 'geometry'])
+          .assign(year=year))
+
+    road_data = (
+        df.to_crs("ESRI:102003")
+        .assign(
+            geometry=lambda df: df.normalize(),
+            road_type=lambda df: pd.Categorical(
+                np.select(
+                    [
+                        df['MTFCC'] == 'S1100',
+                        df['MTFCC'] == 'S1200',
+                        df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
+                    ],
+                    [
+                        'Primary',
+                        'Secondary',
+                        'Other'
+                    ],
+                    default=None
+                ),
+                categories=road_type_order,  # Define the categories
+                ordered=True  # Ensure the categories are ordered
+            )
+        )
+    )
+    # Sort
+    road_data = road_data.sort_values('road_type').reset_index(drop=True)
+    # Explode to make LineStrings
+    road_data = road_data.explode(index_parts=True).reset_index(drop=True)
+    # Remove duplicates of geometries
+    road_data = road_data.drop_duplicates(subset='geometry', keep='first')
+
+    # Separate out Road Types
+    prim_year = road_data[road_data['road_type'] == 'Primary']
+    sec_year = road_data[road_data['road_type'] == 'Secondary']
+    oth_year = road_data[road_data['road_type'] == 'Other']
+
+    buffer_distance = 3  # meters
+
+    # Set buffers
+    prim_buffer = prim_year.buffer(buffer_distance)
+    prim_buffer = gpd.GeoDataFrame(geometry=prim_buffer, crs=road_data.crs)
+
+    prisec_buffer = pd.concat([prim_year, sec_year], ignore_index=True)
+    prisec_buffer = prisec_buffer.buffer(buffer_distance)
+    prisec_buffer = gpd.GeoDataFrame(geometry=prisec_buffer, crs=road_data.crs)
+
+    # Overlay
+    sec_red = gpd.overlay(sec_year, prim_buffer, how='difference')
+    other_red = gpd.overlay(oth_year, prisec_buffer, how='difference')
+
+    # Combine
+    road_data = pd.concat([prim_year, sec_red, other_red], ignore_index=True)
+
+    road_data = road_data[['year', 'road_type', 'geometry']]
+
+    # Write to parquet
+    road_data.to_parquet()
+
+    del road_data, prim_year, sec_year, oth_year, prim_buffer, prisec_buffer, sec_red, other_red
+
+    gc.collect()
+
+    return out_path
+
+
 def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads", raw=True):
     '''
     If raw is True, it returns the parquet files of the original roads data at at path:
