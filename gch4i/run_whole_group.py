@@ -41,7 +41,8 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 # display the overall status of emi/proxy pairs
 g_info.display_all_pair_statuses()
 # %%
-gch4i_name = "1A_stationary_combustion"
+# gch4i_name = "3A_enteric_fermentation"
+gch4i_name = "3B_manure_management"
 
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}'"
@@ -63,6 +64,4 @@ if g_info.group_ready_status.loc[gch4i_name].iloc[0]:
     gg.run_gridding()
 else:
     print("one or more emi/proxy pairs are not ready for gridding.")
-# %%
-gg.month_scale_ds
 # %%
