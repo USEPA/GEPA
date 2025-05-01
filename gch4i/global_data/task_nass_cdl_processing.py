@@ -37,7 +37,7 @@ nass_cdl_path = sector_data_dir_path / "nass_cdl"
 # the list of all "crop" classification values in CDL. Any value in this list will be
 # marked as 1 in the binary layer, and the percentage layer will be the percentage of
 # 1 cells in the percentage layer during warping.
-cdl_crop_vals = np.concat([np.arange(1, 61), np.arange(66, 81), np.arange(195, 256)])
+cdl_crop_vals = np.concat([np.arange(1, 60), np.arange(66, 77), np.arange(204, 254)]) #EEM Question - what happens here if the code is looking for crop id #7, but there is no category code #7 in the dataset?
 rice_crop_vals = np.array([3])
 # cdl_other_vals = np.concatenate([np.arange(61, 66), np.arange(81, 195)])
 
