@@ -16,7 +16,7 @@ Input Files:            - {ghgi_data_dir_path} / "1B1a_coal_mining_underground/
                         - {sector_data_dir_path} / "abandoned_mines/Mines.zip"
                         - {global_data_dir_path} / "tl_2020_us_state.zip"
                         - {EIA_dir_path} / "coalpublic{year}.xls"
-Output Files:           - {proxy_data_dir_path} / 
+Output Files:           - {proxy_data_dir_path} /
                             "coal_{mine_type.lower()}_proxy.parquet"
                         - {proxy_data_dir_path} /
                             "coal_post_{mine_type.lower()}_proxy.parquet"
@@ -43,6 +43,7 @@ import pandas as pd
 import seaborn as sns
 from IPython.display import display
 from pytask import Product, mark, task
+from tqdm.auto import tqdm
 
 from gch4i.config import (
     ghgi_data_dir_path,
@@ -51,21 +52,41 @@ from gch4i.config import (
     sector_data_dir_path,
     years,
 )
-from gch4i.utils import download_url
+from gch4i.utils import download_url, normalize
 
 
 # %% Set Constants & Paths
 pd.set_option("future.no_silent_downcasting", True)
 pd.set_option("float_format", "{:f}".format)
 
-eia_cols = [
-    "MSHA ID",
-    "Mine Type",
-    "Mine State",
-    "Mine Status",
-    "Production (short tons)",
-]
-status_filter = ["Active", "Active, men working, not producing"]
+eia_col_dict = {
+    "Year": "year",
+    "MSHA ID": "MINE_ID",
+    "Production (short tons)": "production",
+    "Mine State": "mine_state",
+    "Mine County": "county_name",
+    "Mine Type": "mine_type",
+    "Mine Status": "mine_status",
+}
+status_filter = ["Active"]
+# status_filter = ["Active", "Active, men working, not producing"]
+
+# I get these manually from the list of mines by year in the inventory workbook
+# These are used to filter the mines list to only the mines that are in the inventory
+# workbook since there are other tables in those sheets below the mines list.
+inv_ug_mine_count_by_year = {
+    2012: 117,
+    2013: 205,
+    2014: 178,
+    2015: 220,
+    2016: 163,
+    2017: 162,
+    2018: 164,
+    2019: 167,
+    2020: 231,
+    2021: 203,
+    2022: 209,
+}
 
 
 # Million cubic ft (mmcf) to Tg conversion factor - Source: EPA spreadsheet,
@@ -73,6 +94,17 @@ status_filter = ["Active", "Active, men working, not producing"]
 mmcf_to_Gg = 51921
 
 EIA_dir_path = sector_data_dir_path / "coal/EIA"
+
+mine_list_filter_cols = [
+    "MSHA Mine ID",
+    "District No.",
+    "Mine Name",
+    "State",
+    # "County",
+    # "Company Name",
+    # "Basin",
+]
+
 
 for year in years:
     eia_name = f"coalpublic{year}.xls"
@@ -103,6 +135,9 @@ for year in years:
     eia_input_paths.append(eia_file_path)
 
 # %%
+
+CNTY_GEO_PATH: Path = global_data_dir_path / "tl_2020_us_county.zip"
+
 
 mine_types = ["Underground", "Surface"]
 param_dict = {}
@@ -141,6 +176,7 @@ for mine_type in mine_types:
     output_path_coal,
     output_path_coal_post,
 ) = param_dict["Surface"].values()
+# ) = param_dict["Underground"].values()
 
 
 # %% Pytask Function
@@ -170,204 +206,304 @@ for _id, kwargs in param_dict.items():
             .to_crs(4326)
         )
 
+        county_gdf = (
+            gpd.read_file(CNTY_GEO_PATH)
+            .loc[:, ["NAME", "STATEFP", "COUNTYFP", "geometry", "GEOID"]]
+            .rename(columns=str.lower)
+            .rename(columns={"name": "county_name"})
+            .astype({"statefp": int, "countyfp": int})
+            .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+            .assign(
+                fips=lambda df: df["geoid"].astype(str).str.zfill(5),
+            )
+            .to_crs(4326)
+            .merge(
+                state_gdf[["state_name", "statefp", "state_code"]],
+                on="statefp",
+                how="left",
+            )
+            # .assign(rep_point=lambda df: df.representative_point())
+            # .set_geometry("rep_point")
+            # .sjoin(state_gdf, how="left")
+            # .set_geometry("geometry")
+            # .drop(columns=["rep_point"])
+            .assign(
+                county_name=lambda df: df["county_name"].str.casefold(),
+                state_name=lambda df: df["state_name"].str.casefold(),
+            )
+        )
+
         # %%
         # load the MSHA mine data
         with ZipFile(msha_path) as z:
             with z.open("Mines.txt") as f:
-                msha_df = pd.read_table(
-                    f,
-                    sep="|",
-                    encoding="ISO-8859-1",
-                    usecols=["MINE_ID", "LATITUDE", "LONGITUDE"],
-                ).set_index("MINE_ID")
-        # %%
-        # for each year, we get the coal mines list from the inventory, read the
-        # production data from that year from the production source, and and then join
-        # the production and MSHA data to the yearly mine list. This is then saved to a
-        # list and concatted together into the full mine list. We check that the lenth
-        # of the inventory mine list is correct before and after the join. We outer join
-        # with the production data so that we end up with a list of mines beyond what
-        # the inventory provides when there are mines from the production data not in
-        # the mine list. These mines are given 0 emissions.
-        inv_mines_list = []
-        for year in years:
+                msha_df = (
+                    pd.read_table(
+                        f,
+                        sep="|",
+                        encoding="ISO-8859-1",
+                        usecols=[
+                            "MINE_ID",
+                            "LATITUDE",
+                            "LONGITUDE",
+                            "CURRENT_MINE_TYPE",
+                            "CURRENT_MINE_STATUS",
+                            "FIPS_CNTY_CD",
+                            "BOM_STATE_CD",
+                        ],
+                    )
+                    .astype({"MINE_ID": int})
+                    .set_index("MINE_ID")
+                    .query("CURRENT_MINE_TYPE == @mine_type")
+                    .assign(
+                        fips=lambda df: df["BOM_STATE_CD"].astype(str).str.zfill(2)
+                        + df["FIPS_CNTY_CD"].astype(str).str.zfill(3)
+                    )
+                )
 
+        # this is used to get location data onto inventory mines and EIA mines via
+        # MINE ID
+        msha_gdf = (
+            gpd.GeoDataFrame(
+                msha_df,
+                geometry=gpd.points_from_xy(msha_df.LONGITUDE, msha_df.LATITUDE),
+                crs=4326,
+            )
+            .sjoin(
+                county_gdf.set_index("state_code")[
+                    ["state_name", "county_name", "fips", "geometry"]
+                ],
+                how="inner",
+            )
+            .assign(state_name=lambda df: df.state_name.str.strip().str.casefold())
+        )
+
+        msha_gdf = msha_gdf[(msha_gdf.is_valid) & (~msha_gdf.is_empty)].copy()
+        msha_no_geo_df = msha_df[~msha_df.index.isin(msha_gdf.index)]
+        msha_w_cnty_gdf = (
+            county_gdf[["fips", "geometry"]]
+            .merge(msha_no_geo_df.reset_index(), on="fips")
+            .set_index("MINE_ID")
+        )
+        msha_w_cnty_gdf = msha_w_cnty_gdf[
+            (msha_w_cnty_gdf.is_valid) & (~msha_w_cnty_gdf.is_empty)
+        ].copy()
+        msha_no_geo_df = msha_no_geo_df[
+            ~msha_no_geo_df.index.isin(msha_w_cnty_gdf.index)
+        ]
+        msha_w_geo_gdf = pd.concat([msha_gdf, msha_w_cnty_gdf])
+
+        _, ax = plt.subplots(dpi=300, figsize=(10, 10))
+        msha_gdf.plot(color="xkcd:lavender", markersize=1, ax=ax)
+        msha_w_cnty_gdf.plot(
+            color="xkcd:orange", markersize=1, ax=ax, zorder=-1, alpha=0.5
+        )
+        state_gdf.boundary.plot(ax=ax, lw=1, color="xkcd:slate")
+        plt.show()
+
+        # Check the sums of all the geodataframes equals the original msha_df
+        total_msha_count = msha_df.shape[0]
+        msha_w_geo_count = msha_w_geo_gdf.shape[0]
+        msha_no_geo_count = msha_no_geo_df.shape[0]
+
+        print(f"MSHA mines w/ point geo:    {msha_gdf.index.nunique():,}")
+        print(f"MSHA mines w/ county:       {msha_w_cnty_gdf.index.nunique():,}")
+        print("-" * 50)
+        print(f"MSHA mines w/ comb geo:     {msha_w_geo_gdf.index.nunique():,}")
+        print()
+        print(f"MSHA mines w/ comb geo:     {msha_w_geo_gdf.index.nunique():,}")
+        print(f"MSHA mines w/o geo:         {msha_no_geo_df.index.nunique():,}")
+        print("-" * 50)
+        print(f"total MSHA mines:           {msha_df.shape[0]:,}")
+
+        if not total_msha_count == (msha_w_geo_count + msha_no_geo_count):
+            print(
+                f"Sum of geodataframes does not match original MSHA dataframe: "
+                f"{msha_w_geo_count} != {msha_no_geo_count} + {msha_w_geo_count}"
+            )
+        else:
+            print("Sum of all geodataframes equals the original MSHA dataframe.")
+
+        # %% GET EIA DATA
+
+        # this EIA based proxy primarily relies on EIA data and normalizes around a
+        # basin weighted production. EIA does not account for all the states in the
+        # inventory that have emissions, so we fill in missing states with MSHA data.
+
+        # For surface, this EIA-based proxy serves both the mining and post mining
+        # for underground, we use the inventory mines lists for mining and the EIA data
+        # for post
+        eia_mines_list = []
+        for year in years:
             eia_file_path = [x for x in eia_paths if str(year) in x.name][0]
-            e_df = pd.read_excel(eia_file_path, skiprows=3, usecols=eia_cols)
 
             # rename some columns for easier use, get only the correct mine type
             e_df = (
-                e_df.rename(
-                    columns={
-                        "MSHA ID": "MINE_ID",
-                        "Production (short tons)": "production",
-                        "Mine Type": "mine_type",
-                        "Mine Status": "mine_status",
-                    }
-                )
-                .set_index("MINE_ID")
-                .query(
-                    "(mine_type == @mine_type) & " "(mine_status.isin(@status_filter))"
-                )
+                pd.read_excel(
+                    eia_file_path, skiprows=3, usecols=eia_col_dict.keys()
+                ).rename(columns=eia_col_dict)
+                # .query("(mine_type == @mine_type)")
+                .query("(mine_type == @mine_type) & (production > 0)")
+                # .query("(mine_type == @mine_type) & (mine_status.isin(@status_filter))")
             )
-
-            # read the mines list from the inventory
-            sheet_name = f"UG-{year}"
-            if year == 2012:
-                skip_rows = 2
-            else:
-                skip_rows = 3
-            year_mine_df = pd.read_excel(
-                inventory_workbook_path,
-                sheet_name=sheet_name,
-                skiprows=skip_rows,
+            # print(f"are there duplicated mines: {e_df.MINE_ID.duplicated().any()}")
+            eia_mines_list.append(e_df)
+        eia_mines_df = (
+            pd.concat(eia_mines_list)
+            .rename(columns=eia_col_dict)
+            .set_index("MINE_ID")
+            .assign(
+                source="eia",
+                state_name=lambda df: df.mine_state.str.split("(")
+                .str[0]
+                .str.strip()
+                .str.casefold(),
+                county_name=lambda df: df.county_name.str.casefold(),
             )
-
-            # find the first row with all NaN values and drop everything after that
-            # based on the structure of the inventory sheets, this will return the mines
-            # list
-            end_row = year_mine_df.index[year_mine_df.isna().all(axis=1)].min()
-            if not np.isnan(end_row):
-                year_mine_df = year_mine_df.iloc[:end_row, :]
-                # print(inv_mine_df["MSHA Mine ID"].isna().sum())
-            print(
-                f"{year} found {year_mine_df['MSHA Mine ID'].nunique()} "
-                "mines in inventory"
-            )
-            print(
-                f"{year} missing MINE ID: {year_mine_df['MSHA Mine ID'].isna().sum()}"
-            )
-
-            year_mine_df = (
-                year_mine_df.rename(columns={"MSHA Mine ID": "MINE_ID"})
-                .dropna(subset=["MINE_ID"])
-                # MINE_ID, state, basin, total vent emis (mmcf/yr)
-                .iloc[:, [0, 3, 6, 9]]
-                .astype({"MINE_ID": int})
-                .set_index("MINE_ID")
-                .join(e_df, how="left")
-                .join(msha_df, how="left")
-                # .dropna(subset=["LATITUDE", "LONGITUDE"])
-                .assign(year=year)
-                .rename(mapper=lambda x: x.replace(str(f" {year}"), ""), axis=1)
-            )
-            print(f"{year} found {year_mine_df.shape[0]} mines with prod and loc")
-            eia_matching_count = e_df.index.isin(year_mine_df.index).sum()
-            print(f"{year} EIA mines in inventory: {eia_matching_count}")
-            print(
-                (
-                    f"{year} EIA mines not in inventory: "
-                    f"{e_df.shape[0] - eia_matching_count}"
-                )
-            )
-            print()
-
-            inv_mines_list.append(year_mine_df)
-            # %%
-            # underground counts by year:
-            # 2012: 117
-            # 2013: 205
-            # 2014: 178
-            # 2015: 220
-            # 2016: 163
-            # 2017: 162
-            # 2018: 164
-            # 2019: 167
-            # 2020: 231
-            # 2021: 203
-            # 2022: 209
-
-        # %%
-        # concat the yearly mines list together, calculate the net emi in tgs, rename
-        # the columns so they are easier to work with, then fill any missing values with
-        # 0. get mines that have production or emissions values (we won't use mines that
-        # have 0 for both).
-        inv_mines_df = (
-            pd.concat(inv_mines_list)
-            .reset_index()
-            .set_index(["MINE_ID", "year"])
-            .assign(net_emi_tg=lambda df: df["Total Vent Emis (mmcf/yr)"] / mmcf_to_Gg)
-            .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
-            # .fillna({"production": 0, "net_emi_tg": 0})
-            # .query("(production > 0) | (net_emi_tg > 0)")
+            .query("state_name != 'alaska'")
         )
-        inv_mines_df
-        # %%
-        # create points from the lat/lons, spatial join with the states
-        inv_mines_gdf = gpd.GeoDataFrame(
-            inv_mines_df.drop(columns=["latitude", "longitude"]),
-            geometry=gpd.points_from_xy(inv_mines_df.longitude, inv_mines_df.latitude),
-            crs=4326,
-        ).sjoin(state_gdf.set_index("state_code")[["geometry"]], how="inner")
-        print(f"Total mines: {inv_mines_gdf.index.nunique()}")
-        print("mine count by year:")
-        display(inv_mines_gdf.groupby("year").size())
-        # %%
-        # how many mines have production data but no emissions?
-        inv_mines_gdf.query(
-            "(production > 0) & (`total_vent_emis_(mmcf/yr)` <= 0)"
-        ).groupby("year").size()
-        # %%
-        # how many mines have emissions data but no production?
-        inv_mines_gdf.query(
-            "(`total_vent_emis_(mmcf/yr)` > 0) & (production.isna())"
-        ).groupby("year").size()
-        # %%
-        inv_mines_gdf.groupby("year").apply(lambda x: x["production"].isna().sum())
+        eia_mines_df
 
         # %%
-        # these totals should match the values listed in the EPA inventory workbook
-        # sheet 'CM Emissions Summary', row 10 "Adj. Vent (VentUnadj/VentAdj %)"
-        inv_mines_gdf.groupby("year")["total_vent_emis_(mmcf/yr)"].sum()
-        # They do!
-        # %%
-        # XXX: where do I find in the inventory workbook the total production for the
-        # year to validate these values?
-        inv_mines_gdf.groupby("year")["net_emi_tg"].sum()
 
-        # %%
-        # get a dataframe of just unique mines (no timeseries repeats)
-        unique_mines_gdf = (
-            inv_mines_gdf.reset_index()
-            .drop_duplicates(subset=["MINE_ID"], keep="first")
-            .set_index("MINE_ID")[
-                ["geometry", "state_code", "basin", "mine_state", "mine_type"]
-            ]
+        unique_eia_mines = (
+            eia_mines_df.reset_index()[["MINE_ID", "state_name", "county_name"]]
+            .drop_duplicates()
+            .sort_values("MINE_ID")
+            .set_index("MINE_ID")
         )
-        print(f"Unique mines: {unique_mines_gdf.index.nunique()}")
+        unique_eia_mines
+        # %%
+        duplicate_mine_ids = unique_eia_mines[
+            unique_eia_mines.index.duplicated(keep=False)
+        ]
+        duplicate_mine_ids
 
         # %%
-        display(unique_mines_gdf["mine_state"].value_counts())
-        display(unique_mines_gdf["mine_type"].value_counts())
-        # reference plot of the mines
-        _, ax = plt.subplots(dpi=300, figsize=(10, 10))
-        state_gdf.boundary.plot(lw=0.5, color="xkcd:slate", ax=ax)
-        unique_mines_gdf.plot(
-            "mine_state",
-            categorical=True,
-            cmap="tab20",
-            ax=ax,
+
+        print(f"total EIA mines: {eia_mines_df.shape[0]:,}")
+        count_not_in_msha = eia_mines_df[
+            ~eia_mines_df.index.isin(msha_gdf.index)
+        ].shape[0]
+        print(f"EIA mines not in MSHA: {count_not_in_msha:,}")
+
+        eia_mines_msha_geo_gdf = msha_gdf[
+            ["state_name", "state_code", "geometry"]
+        ].join(
+            eia_mines_df[
+                [
+                    "mine_state",
+                    "state_name",
+                    "county_name",
+                    "mine_status",
+                    "production",
+                    "year",
+                ]
+            ],
+            how="right",
+            rsuffix="_eia",
+            # lsuffix="_msha",
+        )
+        print(f"EIA mines w/ MSHA points: {eia_mines_msha_geo_gdf.shape[0]:,}")
+
+        invalid_points_mask = (~eia_mines_msha_geo_gdf.is_valid) & (
+            eia_mines_msha_geo_gdf.is_empty
+        )
+        mismatched_mine_mask = (
+            eia_mines_msha_geo_gdf["state_name_eia"]
+            != eia_mines_msha_geo_gdf["state_name"]
+        )
+
+        # Get mines where eia_state_name does not equal msha_state_name
+        mismatched_state_mines = eia_mines_msha_geo_gdf[mismatched_mine_mask]
+        # removed the mismatched state mines from the eia_mines_msha_geo_gdf
+        eia_mines_msha_geo_gdf = eia_mines_msha_geo_gdf[
+            (~invalid_points_mask) & (~mismatched_mine_mask)
+        ].copy()
+        eia_mines_left_df = eia_mines_df[
+            (invalid_points_mask) | (mismatched_mine_mask)
+        ].copy()
+        # print(f"eia mines w/ invalid points: {invalid_points.shape[0]:,}")
+        print("eia mines with mismatched states : ", mismatched_state_mines.shape[0])
+        print(f"eia mines with msha points: {eia_mines_msha_geo_gdf.shape[0]:,}")
+
+        print(f"eia mines left: {eia_mines_left_df.shape[0]:,}")
+        # %%
+
+        # get the set of mines that still have no geo.
+        # eia_mines_no_geo = pd.concat([mismatched_state_mines, eia_mines_left_df]).reset_index()
+        # print(f"eia mines with no geo: {eia_mines_no_geo.shape[0]:,}")
+
+        # try to get geom from the counties
+        eia_mines_w_cnty_gdf = (
+            county_gdf[["county_name", "state_name", "geometry", "state_code"]]
+            .merge(
+                eia_mines_left_df.reset_index(),
+                on=["county_name", "state_name"],
+                how="inner",
+            )
+            .set_index("MINE_ID")
+        )
+
+        eia_mines_left_df = eia_mines_left_df[
+            ~eia_mines_left_df.index.isin(eia_mines_w_cnty_gdf.index)
+        ]
+
+        print(f"total EIA mines w/ county: {eia_mines_w_cnty_gdf.shape[0]:,}")
+        print(f"total EIA mines w/ no geo: {eia_mines_left_df.shape[0]:,}")
+
+        # this is used to get location data onto inventory mines and EIA mines via
+        # the county it is listed in from EIA
+        # %%
+        eia_mines_gdf = pd.concat([eia_mines_msha_geo_gdf, eia_mines_w_cnty_gdf]).loc[
+            :,
+            [
+                "mine_state",
+                "state_name",
+                "state_code",
+                "county_name",
+                "production",
+                "geometry",
+                "year",
+                "mine_status",
+            ],
+        ]
+
+        count_check = eia_mines_gdf.shape[0] == eia_mines_df.shape[0]
+        if not count_check:
+            raise ValueError(f"we are mssing mines!")
+        print("\nnumber of NAs")
+        display(eia_mines_gdf.isna().sum())
+        print("\nare all geoms valid:")
+        display(eia_mines_gdf.is_valid.all())
+        eia_mines_gdf
+        # %%
+
+        print("how many mines are listed as active but have 0 production?")
+        eia_mines_gdf.query(
+            "mine_status == 'Active' & (production == 0)"
+        ).mine_status.value_counts()
+
+        print("how many mines are listed as NOT active but have production?")
+        eia_mines_gdf.query(
+            "mine_status != 'Active' & (production > 0)"
+        ).mine_status.value_counts()
+
+        sns.relplot(
+            data=eia_mines_gdf,
+            x="year",
+            y="production",
+            kind="line",
+            hue="state_code",
             legend=True,
-            legend_kwds={"fontsize": 8},
         )
-        leg = ax.get_legend()
-        ax.set(title="Underground Coal Mines by State")
-        sns.despine()
-        leg.set_bbox_to_anchor((1.1, 0.75, 0.2, 0.2))
+
         # %%
-        # TODO: if EPA approves, split the mines into post and regular here. then
-        # proceed with the weighted production calculation and normalization for each
-        # of them.
-        post_proxy_gdf = inv_mines_gdf.query("production > 0").copy()
-
-        # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)" are
-        # listed in the original code, they are not calculated differently from "other".
-        # It is not clear why they are listed separately.
-        # HOWEVER, we're getting vastly different values than v2, so something is wrong.
-
         def calc_prod_emi(data):
+            # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)"
+            # are listed in the original code, they are not calculated differently from
+            # "other". It is not clear why they are listed separately.
             mine_state = data.name
-            print(mine_state)
             prod_coef_dict = {
                 "Kentucky (East)": 61.4,
                 "Kentucky (West)": 64.3,
@@ -376,23 +512,70 @@ for _id, kwargs in param_dict.items():
             }
 
             if mine_state in list(prod_coef_dict.keys()):
-                res = data["production"] * prod_coef_dict[mine_state]
+                res = data * prod_coef_dict[mine_state]
             else:
-                res = data["production"]
+                res = data
             return res
 
-        post_proxy_gdf["weighted_prod"] = (
-            post_proxy_gdf.groupby(["mine_state"])
-            .apply(calc_prod_emi, include_groups=False)
+        eia_mines_gdf["weighted_prod"] = (
+            eia_mines_gdf.groupby("mine_state")["production"]
+            .transform(calc_prod_emi)
             .rename("weighted_production")
-            .droplevel([0])
         )
-
-        post_proxy_gdf["rel_emi"] = post_proxy_gdf.groupby(["year", "state_code"])[
+        eia_mines_gdf["rel_emi"] = eia_mines_gdf.groupby(["year", "state_code"])[
             "weighted_prod"
-        ].transform(
-            lambda x: x / x.sum() if x.sum() > 0 else 0
-        )  # normalize to sum to 1
+        ].transform(normalize)
+
+        # this checks to make sure the only data altered are only ones listed in the
+        # fuction.
+        display(
+            eia_mines_gdf.query("production != weighted_prod")[
+                "mine_state"
+            ].value_counts()
+        )
+        # %%
+        unique_eia_mines = (
+            eia_mines_gdf.reset_index()[["MINE_ID", "state_name"]]
+            .drop_duplicates()
+            .sort_values("MINE_ID")
+            .set_index("MINE_ID")
+        )
+        unique_eia_mines
+        # %%
+        duplicate_mine_ids = unique_eia_mines[
+            unique_eia_mines.index.duplicated(keep=False)
+        ]
+        print(
+            "print number of unique mines in multiple states: "
+            f"{duplicate_mine_ids.index.value_counts().sort_values()}"
+        )
+        duplicate_mine_ids
+        # %%
+        # test_mine_id = 4609535
+        if mine_type == "Surface":
+            test_mine_id = 3609183
+            test_mine_gdf = eia_mines_gdf[
+                eia_mines_gdf.index == test_mine_id
+            ].sort_values("year")
+            display(test_mine_gdf)
+            print(test_mine_gdf.year.nunique())
+            ax = test_mine_gdf.plot(color="xkcd:lavender")
+            msha_gdf[msha_gdf.index == test_mine_id].plot(
+                ax=ax, color="xkcd:teal", markersize=50, zorder=10
+            )
+            ax.set_title(f"mine_id {test_mine_id}")
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            state_gdf.boundary.plot(ax=ax, lw=1, color="xkcd:slate")
+            county_gdf.boundary.plot(ax=ax, lw=0.25, color="xkcd:slate")
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+            sns.despine()
+            plt.show()
+
+        # %%
+        post_proxy_gdf = eia_mines_gdf
+
         print("post mine count by year")
         display(post_proxy_gdf.reset_index().groupby("year")["MINE_ID"].nunique())
         post_all_close_1 = (
@@ -403,47 +586,233 @@ for _id, kwargs in param_dict.items():
         if not post_all_close_1.all():
             print("post mines do not sum to 1")
             display(post_all_close_1[~post_all_close_1])
+        # %%
+
+        # if we are doing the underground mines, we need to get the mines from the
+        # inventory workbook. We will join the inventory list of mines with MSHA to get
+        # the geometry.
+
+        ug_emi_col = "total liberated (mmcf)"
+
+        inv_cols_list = [
+            "state",
+            "county",
+            "basin",
+        ] + [ug_emi_col]
+        # if we are doing surface mines, we use the same EIA based proxy dataset for
+        # both mining and post.
+        if mine_type == "Underground":
+            ug_inv_mines_list = []
+            for year in tqdm(years, desc="getting underground inventory mines"):
+
+                # read the mines list from the inventory
+                sheet_name = f"UG-{year}"
+                if year == 2012:
+                    skip_rows = 2
+                else:
+                    skip_rows = 3
+                ug_mine_df = (
+                    pd.read_excel(
+                        inventory_workbook_path,
+                        sheet_name=sheet_name,
+                        skiprows=skip_rows,
+                    )
+                    .iloc[: inv_ug_mine_count_by_year[year], :]
+                    .rename(columns={"MSHA Mine ID": "MINE_ID"})
+                    .astype({"MINE_ID": int})
+                    .set_index("MINE_ID")
+                    .rename(mapper=lambda x: x.lower().replace(str(f" {year}"), ""), axis=1)
+                    .loc[:, inv_cols_list]
+                    .rename(columns={ug_emi_col: "net_emi_tg"})
+                    .assign(year=year)
+                )
+                ug_inv_mines_list.append(ug_mine_df)
+
+            inv_mines_df = (
+                pd.concat(ug_inv_mines_list)
+                .query("net_emi_tg > 0")
+                .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
+            )
+
+            # This mine ID is not in MSHA and the county looks to me mislabeled.
+            # It is in Somerset County, PA
+            # https://en.wikipedia.org/wiki/Garrett,_Pennsylvania
+            inv_mines_df.loc[
+                (inv_mines_df["county"] == "Garret") & (inv_mines_df["state"] == "PA"),
+                "county",
+            ] = "Somerset"
+
+            inv_mines_df = inv_mines_df.assign(
+                county_name=lambda df: df["county"].str.casefold(),
+            )
+
+            inv_mines_msha_geo_gdf = msha_gdf[
+                ["state_code", "geometry", "CURRENT_MINE_STATUS"]
+            ].join(inv_mines_df, how="right")
+
+            valid_geo_mask = inv_mines_msha_geo_gdf.is_valid & (
+                ~inv_mines_msha_geo_gdf.is_empty
+            )
+
+            inv_no_geo_df = inv_mines_df[~valid_geo_mask]
+            inv_mines_msha_geo_gdf = inv_mines_msha_geo_gdf[valid_geo_mask].copy()
+
+            inv_no_geo_df = inv_no_geo_df.assign(
+                state_code=lambda df: df["state"].str.strip().str.upper()
+            )
+            inv_w_cnty_gdf = (
+                county_gdf[["county_name", "state_code", "geometry"]]
+                .merge(
+                    inv_no_geo_df.reset_index(),
+                    on=["county_name", "state_code"],
+                    how="right",
+                )
+                .set_index("MINE_ID")
+            )
+            inv_cnty_geo_mask = inv_w_cnty_gdf.is_valid & (~inv_w_cnty_gdf.is_empty)
+            inv_w_cnty_gdf = inv_w_cnty_gdf[inv_cnty_geo_mask].copy()
+            inv_no_geo_df = inv_w_cnty_gdf[~inv_cnty_geo_mask].copy()
+
+            print(f"total unique mines:        {inv_mines_df.index.nunique():,}")
+            print(f"mines w/ county geo:       {inv_w_cnty_gdf.index.nunique():,}")
+            print(
+                f"mines w/ geo:              {inv_mines_msha_geo_gdf.index.nunique():,}"
+            )
+            print(f"mines w/o geo:             {inv_no_geo_df.index.nunique():,}")
+            inv_mines_gdf = pd.concat([inv_mines_msha_geo_gdf, inv_w_cnty_gdf])
+
+            count_check = inv_mines_gdf.shape[0] == inv_mines_df.shape[0]
+            if not count_check:
+                raise ValueError(f"we are mssing mines!")
+
+            inv_mines_gdf["rel_emi"] = inv_mines_gdf.groupby(["year", "state_code"])[
+                "net_emi_tg"
+            ].transform(normalize)
+
+            # these totals should match the values listed in the EPA inventory workbook
+            # sheet 'CM Emissions Summary', row 10 "Adj. Vent (VentUnadj/VentAdj %)"
+            inv_mines_gdf.groupby("year")["net_emi_tg"].sum()
+            inv_mines_gdf.groupby("year").size()
+            coal_proxy_gdf = inv_mines_gdf
+        else:
+            coal_proxy_gdf = post_proxy_gdf
 
         # %%
-        coal_proxy_gdf = inv_mines_gdf.query("net_emi_tg > 0").copy()
-
-        coal_proxy_gdf["rel_emi"] = coal_proxy_gdf.groupby(["year", "state_code"])[
-            "net_emi_tg"
-        ].transform(
-            lambda x: x / x.sum() if x.sum() > 0 else 0
-        )  # normalize to sum to 1
-        print(f"{mine_type} mine count by year")
-        display(coal_proxy_gdf.reset_index().groupby("year")["MINE_ID"].nunique())
-        under_all_close_1 = (
-            coal_proxy_gdf.groupby(["year", "state_code"])["rel_emi"]
-            .sum()
-            .apply(lambda x: np.isclose(x, 1))
+        unique_mines_gdf = (
+            post_proxy_gdf.reset_index()
+            .drop_duplicates(subset="MINE_ID")
+            .set_index("MINE_ID")
         )
-        if not under_all_close_1.all():
-            print("post mines do not sum to 1")
-            display(under_all_close_1[~under_all_close_1])
 
-        # %%
-        fig, ax = plt.subplots(dpi=300, figsize=(10, 10))
+        # reference plot of the mines
+        _, ax = plt.subplots(dpi=300, figsize=(10, 10))
         state_gdf.boundary.plot(lw=0.5, color="xkcd:slate", ax=ax)
-        post_proxy_gdf.query("year == 2022").plot(
-            "rel_emi",
-            cmap="Spectral",
+        unique_mines_gdf.plot(
+            color="xkcd:teal",
+            # "source",
+            # categorical=True,
+            # cmap="Set2",
             ax=ax,
-            legend=True,
-            legend_kwds={"shrink": 0.3},
+            # legend=True,
+            # legend_kwds={"fontsize": 8},
         )
-        coal_proxy_gdf.query("year == 2022").plot("rel_emi", cmap="Spectral", ax=ax)
-        ax.set(title=f"{mine_type} Coal Mine Relative Emissions by State for 2022")
+        # leg = ax.get_legend()
+        # leg.set_bbox_to_anchor((1.1, 0.75, 0.2, 0.2))
+        ax.set(title=f"{mine_type} Coal Mines by State")
         sns.despine()
         plt.show()
 
+        # %%
         coal_proxy_gdf.to_parquet(output_path_coal)
         post_proxy_gdf.to_parquet(output_path_coal_post)
 
         # %%
 
 
+emi_dir_path = Path(
+    "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/"
+    "Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/emis/"
+)
+
+
+emi_file_list = [
+    "coal_under_emi.csv",
+    "coal_surf_emi.csv",
+    "coal_post_under_emi.csv",
+    "coal_post_surf_emi.csv",
+]
+
+for emi_file in emi_file_list:
+    emi_path = emi_dir_path / emi_file
+    missing_data = (
+        pd.read_csv(emi_path, usecols=["state_code", "year", "ghgi_ch4_kt"])
+        .query("ghgi_ch4_kt > 0")
+        .query("state_code != 'AK'")
+        .set_index(["state_code", "year"])
+        .join(
+            coal_proxy_gdf.groupby(["state_code", "year"]).size().rename("proxy_count")
+        )
+        .fillna(0)
+        .query("proxy_count > 0")
+        .all()["proxy_count"]
+    )
+    print(f"{missing_data} state/year pass QC: {emi_path.stem}")
+
+emi_path = emi_dir_path / "coal_under_emi.csv"
+emi_path = emi_dir_path / "coal_surf_emi.csv"
+emi_path = emi_dir_path / "coal_post_under_emi.csv"
+emi_path = emi_dir_path / "coal_post_surf_emi.csv"
+
+emi_df = pd.read_csv(emi_path).query("ghgi_ch4_kt > 0").query("state_code != 'AK'")
+
+# %%
+fig, axs = plt.subplots(3, 4, figsize=(15, 15), dpi=300)
+for ax, (year, mine_df) in zip(axs.ravel(), eia_mines_gdf.groupby("year")):
+    # for ax, (year, mine_df) in zip(axs.ravel(), inv_mines_gdf.groupby("year")):
+    year_emi_df = emi_df.query("year == @year").set_index("state_code")[["ghgi_ch4_kt"]]
+    emi_states = year_emi_df.index.sort_values()
+    year_emi_gdf = state_gdf.set_index("state_code").join(year_emi_df, how="right")
+    proxy_states = mine_df["state_code"].drop_duplicates().sort_values()
+
+    missing_states = emi_states[~emi_states.isin(proxy_states)]
+    good_states = emi_states[emi_states.isin(proxy_states)]
+
+    state_gdf.boundary.plot(color="xkcd:slate", lw=0.5, ax=ax)
+    if not missing_states.empty:
+        try:
+            state_gdf[state_gdf.state_code.isin(missing_states)].plot(
+                hatch="///",
+                edgecolor="xkcd:scarlet",
+                facecolor="none",
+                ax=ax,
+                zorder=10,
+            )
+        except:
+            print("no")
+    if not good_states.empty:
+        state_gdf[state_gdf.state_code.isin(good_states)].plot(color="xkcd:teal", ax=ax)
+
+    missing_emi_total = round(
+        year_emi_df[year_emi_df.index.isin(missing_states)].sum().values[0], 2
+    )
+    print(f"there are {len(emi_states)} emi states")
+    print(f"there are {len(proxy_states)} proxy states")
+    print(f"number of mines {len(mine_df)}")
+    display(missing_states)
+    print()
+    ax.set_axis_off()
+    ax.set_title(f"{year} surface mines\n" f"missing {missing_emi_total} kt")
+fig.tight_layout()
+plt.show()
+# %%
+ax = eia_mines_gdf.query("mine_state == 'Kansas'").plot()
+xlim = ax.get_xlim()
+ylim = ax.get_ylim()
+state_gdf.boundary.plot(ax=ax, lw=0.5, color="xkcd:slate")
+ax.set_xlim(xlim)
+ax.set_ylim(ylim)
+plt.show()
+# %%
 # Below I was trying to troubleshoot some of the production data differences between the
 # v2 and v3 data. I was trying to compare the production data for underground mines.
 
@@ -522,7 +891,7 @@ for _id, kwargs in param_dict.items():
 
 # # %%
 # state_prod_v3 = (
-#     inv_mines_gdf.groupby(["mine_state", "year"])["production"]
+#     coal_proxy_gdf.groupby(["mine_state", "year"])["production"]
 #     .sum()
 #     .rename("v3_prod")
 #     .to_frame()
@@ -583,4 +952,30 @@ for _id, kwargs in param_dict.items():
 
 # # %%
 # compare_mine_prod.query("(production != 0) and (prod_diff != 0)")
-# # %%
+# %%
+# active_underground_mines_df = msha_df.query(
+#     "(CURRENT_MINE_TYPE == 'Underground') & CURRENT_MINE_STATUS == 'Active'"
+# )
+# active_underground_mines_gdf = gpd.GeoDataFrame(
+#     active_underground_mines_df,
+#     geometry=gpd.points_from_xy(
+#         active_underground_mines_df.LONGITUDE, active_underground_mines_df.LATITUDE
+#     ),
+#     crs=4326,
+# )
+
+# all_emi_states = emi_df.state_code.drop_duplicates().sort_values()
+# all_emi_states_gdf = state_gdf.set_index("state_code").loc[all_emi_states]
+
+# active_underground_mines_gdf = active_underground_mines_gdf.sjoin(
+#     state_gdf.set_index("state_code")[["geometry"]], how="left"
+# )
+# active_mine_states = active_underground_mines_gdf.groupby("state_code").size()
+# active_mine_states_gdf = state_gdf.set_index("state_code").join(
+#     active_mine_states.rename("mine_count")
+# )
+# ax = active_underground_mines_gdf.plot()
+# active_mine_states_gdf.plot("mine_count", ax=ax, legend=True)
+# all_emi_states_gdf.plot(ax=ax, color="xkcd:slate", zorder=-1)
+# state_gdf.boundary.plot(ax=ax, zorder=-2)
+# %%

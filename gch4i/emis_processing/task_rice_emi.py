@@ -52,6 +52,9 @@ for emi_name, data in proxy_data.groupby("emi_id"):
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
+input_path, source_list, output_path = emi_parameters_dict["rice_cult_emi"].values()
+
+
 # %% Create Pytask Function and Loop
 for _id, _kwargs in emi_parameters_dict.items():
 
@@ -126,6 +129,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             .fillna({"ghgi_ch4_kt": 0})
             # get only the years we need
             .query("year.between(@min_year, @max_year)")
+            .query("ghgi_ch4_kt > 0")
             # calculate a single value for each state/year
             # NOTE: applies when more than 1 source are being combined together.
             # otherwise has no effect.

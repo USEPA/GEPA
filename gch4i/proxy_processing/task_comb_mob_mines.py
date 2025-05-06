@@ -32,7 +32,7 @@ from gch4i.config import (
 )
 from gch4i.utils import normalize
 
-
+# %%
 @mark.persist
 @task(id="mines_proxy")
 def task_mob_comb_mines(
@@ -66,20 +66,27 @@ def task_mob_comb_mines(
         .to_crs(4326)
     )
 
+    dc_geo_gdf = state_gdf.query("state_code == 'DC'").assign(emis_kt=1)
+
     msha_gdf = (
         gpd.GeoDataFrame(
             msha_df.drop(columns=["LATITUDE", "LONGITUDE"]),
             geometry=gpd.points_from_xy(msha_df["LONGITUDE"], msha_df["LATITUDE"]),
             crs=4326,
         )
-        .sjoin(state_gdf, how="inner")
+        .sjoin(state_gdf, how="inner").drop(columns=["index_right"])
         .assign(emis_kt=1)
     )
-    msha_gdf["rel_emi"] = msha_gdf.groupby("state_code")["emis_kt"].transform(normalize)
-    print("Active mines with location: ", len(msha_gdf))
+
+    proxy_gdf = pd.concat([msha_gdf, dc_geo_gdf])
+
+    proxy_gdf["rel_emi"] = proxy_gdf.groupby("state_code")["emis_kt"].transform(normalize)
+    print("Active mines with location: ", len(proxy_gdf))
+
+    proxy_gdf = proxy_gdf.drop(columns=["emis_kt", "CURRENT_MINE_STATUS"])
 
     all_eq_df = (
-        msha_gdf.groupby("state_code")["rel_emi"]
+        proxy_gdf.groupby("state_code")["rel_emi"]
         .sum()
         .rename("sum_check")
         .to_frame()
@@ -91,6 +98,6 @@ def task_mob_comb_mines(
         raise ValueError("not all values are normed correctly!")
     _, ax = plt.subplots(figsize=(20, 20), dpi=150)
     state_gdf.boundary.plot(color="xkcd:slate", ax=ax)
-    msha_gdf.plot(ax=ax, color="xkcd:goldenrod", markersize=1)
+    proxy_gdf.plot(ax=ax, color="xkcd:goldenrod", markersize=1)
 
-    msha_gdf.to_parquet(output_path)
+    proxy_gdf.to_parquet(output_path)

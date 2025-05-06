@@ -118,12 +118,17 @@ output_paths: Annotated[list[Path], Product] = dst_paths
 
 # %%
 high_res_profile = GEPA_spatial_profile(0.01)
+out_prop = high_res_profile.profile.copy()
+out_prop.update(count=1)
 
 # create xarray dataset with the area array and county geoids
 area_xr = rioxarray.open_rasterio(area_input_path)
+area_xr
+# %%
 
 # get the high res area array
 with rasterio.open(high_res_area_input_path) as src:
+    area_profile = src.profile
     area_arr = src.read(1)
     area_arr = np.where(area_arr == src.nodata, 0, area_arr)
 
@@ -141,57 +146,47 @@ cnty_grid = make_geocube(
 cnty_grid
 
 # %%
-# # get the layers in the zipfile
-# # used to search the zipfile for the lower48 shapfiles
-# shp_pat = re.compile(r"luus.*\.shp")
-
-# with ZipFile(luc_input_path, "r") as zip_ref:
-#     all_layers_list = [x for x in zip_ref.namelist() if shp_pat.match(x)]
-# all_layers_list
+var_to_grid = "recode_rank"
 
 # %%
-var_to_grid = "recode_rank"
-out_prop = high_res_profile.profile.copy()
-out_prop.update(count=1)
-
 paths_to_warp = []
 for usda_name in tqdm(usda_layer_name_list, desc="reading in layers"):
 
     intermediate_path_1 = livestock_dir_path / f"{usda_name.split('.')[0]}.tif"
     paths_to_warp.append(intermediate_path_1)
-    if not intermediate_path_1.exists():
-        # read in the area rank vector data
-        gdf = (
-            gpd.read_file(
-                f"{luc_input_path}!{usda_name}",
-                columns=["RANK", "Stcopoly", "atlas_stco", "geometry"],
-            )
-            .rename(columns=str.lower)
-            .astype({"stcopoly": int})
-            .assign(
-                area=lambda df: df.area,
-                # as in v2, we calculate the recoded rank by replacing the dot rank with
-                # the given probabilities.
-                recode_rank=lambda df: df["rank"].replace(recode_rank_dict),
-            )
-            .rename(columns={"stcopoly": "poly_id"})
-            .set_index("poly_id")
-        ).to_crs(4326)
-
-        # turn the vector data into rasters
-        animal_arr = rasterize(
-            shapes=[
-                (shape, value) for shape, value in gdf[["geometry", var_to_grid]].values
-            ],
-            out_shape=high_res_profile.arr_shape,
-            transform=high_res_profile.profile["transform"],
-            dtype=np.float64,
+    # if not intermediate_path_1.exists():
+    # read in the area rank vector data
+    gdf = (
+        gpd.read_file(
+            f"{luc_input_path}!{usda_name}",
+            columns=["RANK", "Stcopoly", "atlas_stco", "geometry"],
         )
-        # multiply the rank prob by the area to get the animal proxy values
-        arr = animal_arr * area_arr
-        # save these files to disk
-        with rasterio.open(intermediate_path_1, "w", **out_prop) as dst:
-            dst.write(arr, 1)
+        .rename(columns=str.lower)
+        .astype({"stcopoly": int})
+        .assign(
+            area=lambda df: df.area,
+            # as in v2, we calculate the recoded rank by replacing the dot rank with
+            # the given probabilities.
+            recode_rank=lambda df: df["rank"].replace(recode_rank_dict),
+        )
+        .rename(columns={"stcopoly": "poly_id"})
+        .set_index("poly_id")
+    ).to_crs(4326)
+
+    # turn the vector data into rasters
+    animal_arr = rasterize(
+        shapes=[
+            (shape, value) for shape, value in gdf[["geometry", var_to_grid]].values
+        ],
+        out_shape=high_res_profile.arr_shape,
+        transform=high_res_profile.profile["transform"],
+        dtype=np.float64,
+    )
+    # multiply the rank prob by the area to get the animal proxy values
+    arr = animal_arr * area_arr
+    # save these files to disk
+    with rasterio.open(intermediate_path_1, "w", **out_prop) as dst:
+        dst.write(arr, 1)
 
 
 # %%
@@ -201,15 +196,16 @@ gepa_paths = []
 for warp_path in tqdm(paths_to_warp, desc="warping to gepa grid"):
     out_path = warp_path.with_name(warp_path.stem + "_gepa.tif")
     gepa_paths.append(out_path)
-    if not out_path.exists():
-        warp_to_gepa_grid(warp_path, out_path, num_threads=NUM_WORKERS)
+    warp_to_gepa_grid(
+        input_path=warp_path, output_path=out_path, num_threads=NUM_WORKERS
+    )
 
 
 # %%
 # for each of the raster files, normalize the data by the county level, expand the dims
 # to include the years, and save the data to disk by proxy mapping
 for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
-    # gepa_path = gepa_paths[0]
+    gepa_path
     arr_xr = rioxarray.open_rasterio(gepa_path).squeeze("band").drop_vars("band")
     arr_xr["geoid"] = (cnty_grid.dims, cnty_grid["geoid"].values)
     out_ds = (
@@ -217,9 +213,10 @@ for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
         .apply(normalize)
         .sortby(["y", "x"])
         .to_dataset(name="rel_emi")
-        .expand_dims(year=years)
+        .expand_dims(year=years, axis=0)
     )
     out_ds["rel_emi"].shape
+    out_ds["rel_emi"].sel(year=2020).plot()
 
     all_eq_df = (
         out_ds["rel_emi"]
@@ -230,13 +227,14 @@ for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
         .drop(columns="spatial_ref")
     )
     vals_are_one = np.isclose(all_eq_df["sum_check"], 1).all()
-    print(f"are all county/year norm sums equal to 1? {vals_are_one}")
     if not vals_are_one:
         raise ValueError("not all values are normed correctly!")
 
+    # print(f"are all county/year norm sums equal to 1? {vals_are_one}")
     for proxy_name, usda_name in proxy_usda_dict.items():
         if usda_name.split(".")[0] in gepa_path.stem:
             out_path = proxy_data_dir_path / f"livestock_{proxy_name}_proxy.nc"
             out_ds.rio.write_crs(high_res_profile.profile["crs"]).to_netcdf(out_path)
 
 # %%
+# county_gdf[~county_gdf.geoid.isin(np.unique(out_ds["geoid"]))]
