@@ -480,6 +480,10 @@ def task_get_abd_coal_proxy_data(
         calc_date = datetime.datetime(year=year, month=12, day=31)
 
       #EEM: is the code below legacy from v2? If so, please delete
+      #The logic here was that this date would be representative of the mean emission rate for that year (since we are dealing with exponential decay rates)
+     # the same logic was behind why we divided the number of closed days by 2. 
+      # I think that if we treat all mines in the same way, it should still be ok to use the entire year
+      
         # calculate the number of days closed relative to 07/02 of this year?
         # XXX: why not calculate the entire year?
         # if the mine closed this year, give it special treatment where the
