@@ -32,16 +32,15 @@ from tqdm.auto import tqdm
 
 from gch4i.config import (
     V3_DATA_PATH,
+    # RoadProxyGlobals,
     figures_data_dir_path,
     global_data_dir_path,
+    load_road_globals,
+    load_state_ansi,
+    max_year,
+    min_year,
     years,
 )
-
-# import warnings
-
-from gch4i.config import global_data_dir_path, figures_data_dir_path, V3_DATA_PATH, max_year, min_year, load_state_ansi, load_road_globals
-from gch4i.gridding import GEPA_spatial_profile
-from gch4i.config import RoadProxyGlobals
 
 Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
@@ -653,48 +652,113 @@ def create_final_proxy_df(proxy_df):
 
     return proxy_gdf
 
+
 def convert_FIPS_to_two_letter_code(df, state_column):
-        """
-        Convert numeric FIPS state values in a DataFrame column to two-letter state codes.
+    """
+    Convert numeric FIPS state values in a DataFrame column to two-letter state codes.
 
-        Parameters:
-        df (pd.DataFrame): The DataFrame containing the state names.
-        state_column (str): The name of the column containing the FIPS numeric names.
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the state names.
+    state_column (str): The name of the column containing the FIPS numeric names.
 
-        Returns:
-        pd.DataFrame: DataFrame with the state column changed to two-letter state codes.
-        """
-        
-        # Dictionary mapping full state names to their two-letter codes
-        fips_state_abbr = {
-        "1": "AL", "2": "AK", "4": "AZ", "5": "AR", "6": "CA",
-        "8": "CO", "9": "CT", "10": "DE", "11": "DC", "12": "FL", 
-        "13": "GA", "15": "HI", "16": "ID", "17": "IL", "18": "IN",
-        "19": "IA", "20": "KS", "21": "KY", "22": "LA", "23": "ME", 
-        "24": "MD", "25": "MA", "26": "MI", "27": "MN", "28": "MS",
-        "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH",
-        "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND",
-        "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI", 
-        "45": "SC", "46": "SD", "47": "TN", "48": "TX", "49": "UT",
-        "50": "VT", "51": "VA", "53": "WA", "54": "WV", "55": "WI",
-        "56": "WY"
-        }
+    Returns:
+    pd.DataFrame: DataFrame with the state column changed to two-letter state codes.
+    """
 
-        # Map the full state names to their two-letter codes using the dictionary
-        df['state_code'] = df[state_column].astype(int).astype(str).map(fips_state_abbr)
-        
-        return df
+    # Dictionary mapping full state names to their two-letter codes
+    fips_state_abbr = {
+        "1": "AL",
+        "2": "AK",
+        "4": "AZ",
+        "5": "AR",
+        "6": "CA",
+        "8": "CO",
+        "9": "CT",
+        "10": "DE",
+        "11": "DC",
+        "12": "FL",
+        "13": "GA",
+        "15": "HI",
+        "16": "ID",
+        "17": "IL",
+        "18": "IN",
+        "19": "IA",
+        "20": "KS",
+        "21": "KY",
+        "22": "LA",
+        "23": "ME",
+        "24": "MD",
+        "25": "MA",
+        "26": "MI",
+        "27": "MN",
+        "28": "MS",
+        "29": "MO",
+        "30": "MT",
+        "31": "NE",
+        "32": "NV",
+        "33": "NH",
+        "34": "NJ",
+        "35": "NM",
+        "36": "NY",
+        "37": "NC",
+        "38": "ND",
+        "39": "OH",
+        "40": "OK",
+        "41": "OR",
+        "42": "PA",
+        "44": "RI",
+        "45": "SC",
+        "46": "SD",
+        "47": "TN",
+        "48": "TX",
+        "49": "UT",
+        "50": "VT",
+        "51": "VA",
+        "53": "WA",
+        "54": "WV",
+        "55": "WI",
+        "56": "WY",
+    }
+
+    # Map the full state names to their two-letter codes using the dictionary
+    df["state_code"] = df[state_column].astype(int).astype(str).map(fips_state_abbr)
+
+    return df
 
 
 # ROAD PROXY FUNCTIONS
 ########################################################################################
 
 # %% STEP 0.2 Load Path Files
-raw_path, raw_roads_path, road_file, raw_road_file, task_outputs_path, global_path, gdf_state_files, global_input_path, state_ansi_path, GEPA_Comb_Mob_path, State_vmt_file,  State_vdf_file, State_ANSI, name_dict, state_mapping, start_year, end_year, year_range, year_range_str, num_years = load_road_globals()
+(
+    raw_path,
+    raw_roads_path,
+    road_file,
+    raw_road_file,
+    task_outputs_path,
+    global_path,
+    gdf_state_files,
+    global_input_path,
+    state_ansi_path,
+    GEPA_Comb_Mob_path,
+    State_vmt_file,
+    State_vdf_file,
+    State_ANSI,
+    name_dict,
+    state_mapping,
+    start_year,
+    end_year,
+    year_range,
+    year_range_str,
+    num_years,
+) = load_road_globals()
 
-def get_overlay_dir(year, 
-                    out_dir: Path=task_outputs_path / 'overlay_cell_state_region'):
-    return out_dir / f'cell_state_region_{year}.parquet'
+
+def get_overlay_dir(
+    year, out_dir: Path = task_outputs_path / "overlay_cell_state_region"
+):
+    return out_dir / f"cell_state_region_{year}.parquet"
+
 
 def get_overlay_gdf(year, crs="EPSG:4326"):
     crs_obj = CRS(crs)
@@ -707,6 +771,7 @@ def get_overlay_gdf(year, crs="EPSG:4326"):
 
     return gdf
 
+
 # Read in State Spatial Data
 def get_states_gdf(crs="EPSG:4326"):
     """
@@ -716,17 +781,17 @@ def get_states_gdf(crs="EPSG:4326"):
 
     gdf_states = gpd.read_file(gdf_state_files)
 
-
-    gdf_states = gdf_states[~gdf_states['STUSPS'].isin(
-        ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI']
-        )]
-    gdf_states = gdf_states[['STUSPS', 'NAME', 'geometry']]
+    gdf_states = gdf_states[
+        ~gdf_states["STUSPS"].isin(["VI", "MP", "GU", "AS", "PR", "AK", "HI"])
+    ]
+    gdf_states = gdf_states[["STUSPS", "NAME", "geometry"]]
 
     if gdf_states.crs != crs_obj:
         print(f"Converting states to crs {crs_obj.to_epsg()}")
         gdf_states.to_crs(crs, inplace=True)
 
     return gdf_states
+
 
 # Read in Region Spatial Data
 def get_region_gdf(year, crs=4326):
@@ -735,12 +800,13 @@ def get_region_gdf(year, crs=4326):
     """
     crs = CRS(crs)
     road_loc = (
-        gpd.read_parquet(f"{road_file}{year}_us_uac.parquet", columns=['geometry'])
+        gpd.read_parquet(f"{road_file}{year}_us_uac.parquet", columns=["geometry"])
         .assign(year=year)
         .to_crs(crs)
         .assign(urban=1)
     )
     return road_loc
+
 
 def benchmark_load(func):
     def wrapper(*args, **kwargs):
@@ -748,7 +814,9 @@ def benchmark_load(func):
         result = func(*args, **kwargs)
         print(f"{func.__name__} took {datetime.now() - start}")
         return result
+
     return wrapper
+
 
 def read_reduce_data(year):
     """
@@ -757,50 +825,43 @@ def read_reduce_data(year):
     # check if file already exists
     out_path = task_outputs_path / f"reduced_roads_{year}.parquet"
     if out_path.exists():
-        print(f'Found reduced roads file at path {out_path}.')
+        print(f"Found reduced roads file at path {out_path}.")
         print()
         return out_path
     # Order road types
-    road_type_order = ['Primary', 'Secondary', 'Other']
+    road_type_order = ["Primary", "Secondary", "Other"]
 
-    df = (gpd.read_parquet(f"{raw_road_file}{year}_us_allroads.parquet",
-                           columns=['MTFCC', 'geometry'])
-          .assign(year=year))
+    df = gpd.read_parquet(
+        f"{raw_road_file}{year}_us_allroads.parquet", columns=["MTFCC", "geometry"]
+    ).assign(year=year)
 
-    road_data = (
-        df.to_crs("ESRI:102003")
-        .assign(
-            geometry=lambda df: df.normalize(),
-            road_type=lambda df: pd.Categorical(
-                np.select(
-                    [
-                        df['MTFCC'] == 'S1100',
-                        df['MTFCC'] == 'S1200',
-                        df['MTFCC'].isin(['S1400', 'S1630', 'S1640'])
-                    ],
-                    [
-                        'Primary',
-                        'Secondary',
-                        'Other'
-                    ],
-                    default=None
-                ),
-                categories=road_type_order,  # Define the categories
-                ordered=True  # Ensure the categories are ordered
-            )
-        )
+    road_data = df.to_crs("ESRI:102003").assign(
+        geometry=lambda df: df.normalize(),
+        road_type=lambda df: pd.Categorical(
+            np.select(
+                [
+                    df["MTFCC"] == "S1100",
+                    df["MTFCC"] == "S1200",
+                    df["MTFCC"].isin(["S1400", "S1630", "S1640"]),
+                ],
+                ["Primary", "Secondary", "Other"],
+                default=None,
+            ),
+            categories=road_type_order,  # Define the categories
+            ordered=True,  # Ensure the categories are ordered
+        ),
     )
     # Sort
-    road_data = road_data.sort_values('road_type').reset_index(drop=True)
+    road_data = road_data.sort_values("road_type").reset_index(drop=True)
     # Explode to make LineStrings
     road_data = road_data.explode(index_parts=True).reset_index(drop=True)
     # Remove duplicates of geometries
-    road_data = road_data.drop_duplicates(subset='geometry', keep='first')
+    road_data = road_data.drop_duplicates(subset="geometry", keep="first")
 
     # Separate out Road Types
-    prim_year = road_data[road_data['road_type'] == 'Primary']
-    sec_year = road_data[road_data['road_type'] == 'Secondary']
-    oth_year = road_data[road_data['road_type'] == 'Other']
+    prim_year = road_data[road_data["road_type"] == "Primary"]
+    sec_year = road_data[road_data["road_type"] == "Secondary"]
+    oth_year = road_data[road_data["road_type"] == "Other"]
 
     buffer_distance = 3  # meters
 
@@ -813,32 +874,43 @@ def read_reduce_data(year):
     prisec_buffer = gpd.GeoDataFrame(geometry=prisec_buffer, crs=road_data.crs)
 
     # Overlay
-    sec_red = gpd.overlay(sec_year, prim_buffer, how='difference')
-    other_red = gpd.overlay(oth_year, prisec_buffer, how='difference')
+    sec_red = gpd.overlay(sec_year, prim_buffer, how="difference")
+    other_red = gpd.overlay(oth_year, prisec_buffer, how="difference")
 
     # Combine
     road_data = pd.concat([prim_year, sec_red, other_red], ignore_index=True)
 
-    road_data = road_data[['year', 'road_type', 'geometry']]
+    road_data = road_data[["year", "road_type", "geometry"]]
 
     # Write to parquet
     road_data.to_parquet()
 
-    del road_data, prim_year, sec_year, oth_year, prim_buffer, prisec_buffer, sec_red, other_red
+    del (
+        road_data,
+        prim_year,
+        sec_year,
+        oth_year,
+        prim_buffer,
+        prisec_buffer,
+        sec_red,
+        other_red,
+    )
 
     gc.collect()
 
     return out_path
 
 
-def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads", raw=True):
-    '''
+def get_roads_path(
+    year, raw_roads_path: Path = V3_DATA_PATH / "global/raw_roads", raw=True
+):
+    """
     If raw is True, it returns the parquet files of the original roads data at at path:
         C:/Users/<USER>/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/global/raw_roads/tl_{year}_us_allroads.parquet
-    If raw is False, it returns the parquet files of the reduced roads data (as generated in Andrew's original task_roads_proxy.py script `reduce_roads()`): 
+    If raw is False, it returns the parquet files of the reduced roads data (as generated in Andrew's original task_roads_proxy.py script `reduce_roads()`):
         C:/Users/<USER>/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - RTI 2024 Task Order/Task 2/ghgi_v3_working/v3_data/global/raw_roads/task_outputs/reduced_roads_{year}.parquet
-    
-    '''
+
+    """
     if raw:
         return Path(raw_roads_path) / f"tl_{year}_us_allroads.parquet"
     else:
@@ -846,7 +918,7 @@ def get_roads_path(year, raw_roads_path: Path=V3_DATA_PATH / "global/raw_roads",
 
 
 @benchmark_load
-def read_roads(year, raw=True, crs='EPSG:4326'):
+def read_roads(year, raw=True, crs="EPSG:4326"):
     crs_obj = CRS(crs)
     gdf = gpd.read_parquet(get_roads_path(year, raw=raw))
     if gdf.crs != crs_obj:
@@ -854,26 +926,27 @@ def read_roads(year, raw=True, crs='EPSG:4326'):
         return gdf.to_crs(crs)
     else:
         return gdf
-    
+
+
 def intersect_sindex(cell, roads):
-    '''
+    """
     Based of fthis geoff boeing blog post:
     https://geoffboeing.com/2016/10/r-tree-spatial-index-python/
-    '''
+    """
     # first, add rtree spatial index to roads
 
-    
     spatial_index = roads.sindex
     possible_matches_index = list(spatial_index.intersection(cell.bounds))
     possible_matches = roads.iloc[possible_matches_index]
     precise_matches = possible_matches[possible_matches.intersects(cell)]
     return precise_matches
 
+
 # @benchmark_load
 def intersect_and_clip(roads, state_geom, state_abbrev=None, simplify=None, dask=False):
-    '''
+    """
     The simplify parameer is used to simplify the geometry of the roads before clipping to the state boundary
-    '''
+    """
     state_box = box(*state_geom.bounds)
     # Get the roads that intersect with the state bounding box
     state_roads = intersect_sindex(state_box, roads)
@@ -881,7 +954,6 @@ def intersect_and_clip(roads, state_geom, state_abbrev=None, simplify=None, dask
     if not state_roads.empty:
         if simplify:
             state_geom = state_geom.simplify(simplify)
-        
 
         # clip roads to state boundary
         result = state_roads.clip(state_geom)
@@ -898,56 +970,95 @@ def get_vm2_arrays(num_years):
     total = np.zeros(num_years)
     total2 = np.zeros(num_years)
 
-    headers = ['STATE', 'RURAL - INTERSTATE', 'RURAL - FREEWAYS', 'RURAL - PRINCIPAL',
-               'RURAL - MINOR', 'RURAL - MAJOR COLLECTOR', 'RURAL - MINOR COLLECTOR',
-               'RURAL - LOCAL', 'RURAL - TOTAL', 'URBAN - INTERSTATE',
-               'URBAN - FREEWAYS', 'URBAN - PRINCIPAL', 'URBAN - MINOR',
-               'URBAN - MAJOR COLLECTOR', 'URBAN - MINOR COLLECTOR', 'URBAN - LOCAL',
-               'URBAN - TOTAL', 'TOTAL']
+    headers = [
+        "STATE",
+        "RURAL - INTERSTATE",
+        "RURAL - FREEWAYS",
+        "RURAL - PRINCIPAL",
+        "RURAL - MINOR",
+        "RURAL - MAJOR COLLECTOR",
+        "RURAL - MINOR COLLECTOR",
+        "RURAL - LOCAL",
+        "RURAL - TOTAL",
+        "URBAN - INTERSTATE",
+        "URBAN - FREEWAYS",
+        "URBAN - PRINCIPAL",
+        "URBAN - MINOR",
+        "URBAN - MAJOR COLLECTOR",
+        "URBAN - MINOR COLLECTOR",
+        "URBAN - LOCAL",
+        "URBAN - TOTAL",
+        "TOTAL",
+    ]
 
     for iyear in np.arange(num_years):
-        VMT_road = pd.read_excel(State_vmt_file + year_range_str[iyear] + '.xls',
-                                 sheet_name='A',
-                                 skiprows=13,
-                                 nrows=51)
+        VMT_road = pd.read_excel(
+            State_vmt_file + year_range_str[iyear] + ".xls",
+            sheet_name="A",
+            skiprows=13,
+            nrows=51,
+        )
         VMT_road.columns = headers
 
-        VMT_road = (VMT_road
-                    .assign(STATE=lambda x: x['STATE'].str.replace("(2)", ""))
-                    .assign(STATE=lambda x: x['STATE'].str.replace("Dist. of Columbia",
-                                                                   "District of Columbia" ""))
-                    )
+        VMT_road = VMT_road.assign(
+            STATE=lambda x: x["STATE"].str.replace("(2)", "")
+        ).assign(
+            STATE=lambda x: x["STATE"].str.replace(
+                "Dist. of Columbia", "District of Columbia" ""
+            )
+        )
 
         for idx in np.arange(len(VMT_road)):
-            VMT_road.loc[idx, 'ANSI'] = name_dict[VMT_road.loc[idx, 'STATE'].strip()]
-            istate = np.where(VMT_road.loc[idx, 'ANSI'] == State_ANSI['ansi'])
-            Miles_road_primary[0, istate, iyear] = VMT_road.loc[idx, 'URBAN - INTERSTATE']
-            Miles_road_primary[1, istate, iyear] = VMT_road.loc[idx, 'RURAL - INTERSTATE']
-            Miles_road_secondary[0, istate, iyear] = VMT_road.loc[idx, 'URBAN - FREEWAYS'] + \
-                VMT_road.loc[idx, 'URBAN - PRINCIPAL'] + \
-                VMT_road.loc[idx, 'URBAN - MINOR']
-            Miles_road_secondary[1, istate, iyear] = VMT_road.loc[idx, 'RURAL - FREEWAYS'] + \
-                VMT_road.loc[idx, 'RURAL - PRINCIPAL'] + \
-                VMT_road.loc[idx, 'RURAL - MINOR']
-            Miles_road_other[0, istate, iyear] = VMT_road.loc[idx, 'URBAN - MAJOR COLLECTOR'] + \
-                VMT_road.loc[idx, 'URBAN - MINOR COLLECTOR'] + \
-                VMT_road.loc[idx, 'URBAN - LOCAL']
-            Miles_road_other[1, istate, iyear] = VMT_road.loc[idx, 'RURAL - MAJOR COLLECTOR'] + \
-                VMT_road.loc[idx, 'RURAL - MINOR COLLECTOR'] + \
-                VMT_road.loc[idx, 'RURAL - LOCAL']
-            total[iyear] += np.sum(Miles_road_primary[:, istate, iyear]) + \
-                np.sum(Miles_road_secondary[:, istate, iyear]) + \
-                np.sum(Miles_road_other[:, istate, iyear])
-            total2[iyear] += VMT_road.loc[idx, 'TOTAL']
+            VMT_road.loc[idx, "ANSI"] = name_dict[VMT_road.loc[idx, "STATE"].strip()]
+            istate = np.where(VMT_road.loc[idx, "ANSI"] == State_ANSI["ansi"])
+            Miles_road_primary[0, istate, iyear] = VMT_road.loc[
+                idx, "URBAN - INTERSTATE"
+            ]
+            Miles_road_primary[1, istate, iyear] = VMT_road.loc[
+                idx, "RURAL - INTERSTATE"
+            ]
+            Miles_road_secondary[0, istate, iyear] = (
+                VMT_road.loc[idx, "URBAN - FREEWAYS"]
+                + VMT_road.loc[idx, "URBAN - PRINCIPAL"]
+                + VMT_road.loc[idx, "URBAN - MINOR"]
+            )
+            Miles_road_secondary[1, istate, iyear] = (
+                VMT_road.loc[idx, "RURAL - FREEWAYS"]
+                + VMT_road.loc[idx, "RURAL - PRINCIPAL"]
+                + VMT_road.loc[idx, "RURAL - MINOR"]
+            )
+            Miles_road_other[0, istate, iyear] = (
+                VMT_road.loc[idx, "URBAN - MAJOR COLLECTOR"]
+                + VMT_road.loc[idx, "URBAN - MINOR COLLECTOR"]
+                + VMT_road.loc[idx, "URBAN - LOCAL"]
+            )
+            Miles_road_other[1, istate, iyear] = (
+                VMT_road.loc[idx, "RURAL - MAJOR COLLECTOR"]
+                + VMT_road.loc[idx, "RURAL - MINOR COLLECTOR"]
+                + VMT_road.loc[idx, "RURAL - LOCAL"]
+            )
+            total[iyear] += (
+                np.sum(Miles_road_primary[:, istate, iyear])
+                + np.sum(Miles_road_secondary[:, istate, iyear])
+                + np.sum(Miles_road_other[:, istate, iyear])
+            )
+            total2[iyear] += VMT_road.loc[idx, "TOTAL"]
 
-        abs_diff = abs(total[iyear] - total2[iyear])/((total[iyear]+total2[iyear])/2)
+        abs_diff = abs(total[iyear] - total2[iyear]) / (
+            (total[iyear] + total2[iyear]) / 2
+        )
 
         if abs(abs_diff) < 0.0001:
-            print('Year ' + year_range_str[iyear] + ': Difference < 0.01%: PASS')
+            print("Year " + year_range_str[iyear] + ": Difference < 0.01%: PASS")
             print(total[iyear])
             print(total2[iyear])
         else:
-            print('Year ' + year_range_str[iyear] + ': Difference > 0.01%: FAIL, diff: ' + str(abs_diff))
+            print(
+                "Year "
+                + year_range_str[iyear]
+                + ": Difference > 0.01%: FAIL, diff: "
+                + str(abs_diff)
+            )
             print(total[iyear])
             print(total2[iyear])
 
@@ -973,172 +1084,277 @@ def get_vm4_arrays(num_years):
             continue  # deal with missing data at the end
         else:
             # Read in Rural Sheet
-            names = pd.read_excel(State_vdf_file + year_range_str[iyear]+'.xls',
-                                  sheet_name='A', skiprows=12, header=0, nrows=1)
+            names = pd.read_excel(
+                State_vdf_file + year_range_str[iyear] + ".xls",
+                sheet_name="A",
+                skiprows=12,
+                header=0,
+                nrows=1,
+            )
             colnames = names.columns.values
-            VMT_type_R = pd.read_excel(State_vdf_file + year_range_str[iyear]+'.xls',
-                                       na_values=['-'], sheet_name='A', names=colnames,
-                                       skiprows=13, nrows=51)
+            VMT_type_R = pd.read_excel(
+                State_vdf_file + year_range_str[iyear] + ".xls",
+                na_values=["-"],
+                sheet_name="A",
+                names=colnames,
+                skiprows=13,
+                nrows=51,
+            )
 
-            VMT_type_R.rename(columns={'MOTOR-': 'INTERSTATE - MOTORCYCLES',
-                                       'PASSENGER': 'INTERSTATE - PASSENGER CARS',
-                                       'LIGHT': 'INTERSTATE - LIGHT TRUCKS',
-                                       'Unnamed: 4': 'INTERSTATE - BUSES',
-                                       'SINGLE-UNIT': 'INTERSTATE - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION': 'INTERSTATE - COMBINATION TRUCKS',
-                                       'Unnamed: 7': 'INTERSTATE - TOTAL',
-                                       'MOTOR-.1': 'ARTERIALS - MOTORCYCLES',
-                                       'PASSENGER.1': 'ARTERIALS - PASSENGER CARS',
-                                       'LIGHT.1': 'ARTERIALS - LIGHT TRUCKS',
-                                       'Unnamed: 11': 'ARTERIALS - BUSES',
-                                       'SINGLE-UNIT.1': 'ARTERIALS - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION.1': 'ARTERIALS - COMBINATION TRUCKS',
-                                       'Unnamed: 14': 'ARTERIALS - TOTAL',
-                                       'MOTOR-.2': 'OTHER - MOTORCYCLES',
-                                       'PASSENGER.2': 'OTHER - PASSENGER CARS',
-                                       'LIGHT.2': 'OTHER - LIGHT TRUCKS',
-                                       'Unnamed: 18': 'OTHER - BUSES',
-                                       'SINGLE-UNIT.2': 'OTHER - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION.2': 'OTHER - COMBINATION TRUCKS',
-                                       'Unnamed: 21': 'OTHER - TOTAL'}, inplace=True)
+            VMT_type_R.rename(
+                columns={
+                    "MOTOR-": "INTERSTATE - MOTORCYCLES",
+                    "PASSENGER": "INTERSTATE - PASSENGER CARS",
+                    "LIGHT": "INTERSTATE - LIGHT TRUCKS",
+                    "Unnamed: 4": "INTERSTATE - BUSES",
+                    "SINGLE-UNIT": "INTERSTATE - SINGLE-UNIT TRUCKS",
+                    "COMBINATION": "INTERSTATE - COMBINATION TRUCKS",
+                    "Unnamed: 7": "INTERSTATE - TOTAL",
+                    "MOTOR-.1": "ARTERIALS - MOTORCYCLES",
+                    "PASSENGER.1": "ARTERIALS - PASSENGER CARS",
+                    "LIGHT.1": "ARTERIALS - LIGHT TRUCKS",
+                    "Unnamed: 11": "ARTERIALS - BUSES",
+                    "SINGLE-UNIT.1": "ARTERIALS - SINGLE-UNIT TRUCKS",
+                    "COMBINATION.1": "ARTERIALS - COMBINATION TRUCKS",
+                    "Unnamed: 14": "ARTERIALS - TOTAL",
+                    "MOTOR-.2": "OTHER - MOTORCYCLES",
+                    "PASSENGER.2": "OTHER - PASSENGER CARS",
+                    "LIGHT.2": "OTHER - LIGHT TRUCKS",
+                    "Unnamed: 18": "OTHER - BUSES",
+                    "SINGLE-UNIT.2": "OTHER - SINGLE-UNIT TRUCKS",
+                    "COMBINATION.2": "OTHER - COMBINATION TRUCKS",
+                    "Unnamed: 21": "OTHER - TOTAL",
+                },
+                inplace=True,
+            )
 
             VMT_type_R = (
-                VMT_type_R
-                .assign(STATE=lambda x: x['STATE'].str.replace("(2)", ""))
-                .assign(STATE=lambda x: x['STATE'].str.replace("Dist. of Columbia",
-                                                               "District of Columbia"))
+                VMT_type_R.assign(STATE=lambda x: x["STATE"].str.replace("(2)", ""))
+                .assign(
+                    STATE=lambda x: x["STATE"].str.replace(
+                        "Dist. of Columbia", "District of Columbia"
+                    )
+                )
                 .assign(ANSI=0)
                 .fillna(0)
-                )
+            )
 
             # Read in Urban Sheet
-            names = pd.read_excel(State_vdf_file + year_range_str[iyear] + '.xls',
-                                  sheet_name='B', skiprows=12, header=0, nrows=1)
+            names = pd.read_excel(
+                State_vdf_file + year_range_str[iyear] + ".xls",
+                sheet_name="B",
+                skiprows=12,
+                header=0,
+                nrows=1,
+            )
             colnames = names.columns.values
-            VMT_type_U = pd.read_excel(State_vdf_file + year_range_str[iyear] + '.xls',
-                                       na_values=['-'], sheet_name='B', names=colnames,
-                                       skiprows=13, nrows=51)
+            VMT_type_U = pd.read_excel(
+                State_vdf_file + year_range_str[iyear] + ".xls",
+                na_values=["-"],
+                sheet_name="B",
+                names=colnames,
+                skiprows=13,
+                nrows=51,
+            )
 
-            VMT_type_U.rename(columns={'MOTOR-': 'INTERSTATE - MOTORCYCLES',
-                                       'PASSENGER': 'INTERSTATE - PASSENGER CARS',
-                                       'LIGHT': 'INTERSTATE - LIGHT TRUCKS',
-                                       'Unnamed: 4': 'INTERSTATE - BUSES',
-                                       'SINGLE-UNIT': 'INTERSTATE - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION': 'INTERSTATE - COMBINATION TRUCKS',
-                                       'Unnamed: 7': 'INTERSTATE - TOTAL',
-                                       'MOTOR-.1': 'ARTERIALS - MOTORCYCLES',
-                                       'PASSENGER.1': 'ARTERIALS - PASSENGER CARS',
-                                       'LIGHT.1': 'ARTERIALS - LIGHT TRUCKS',
-                                       'Unnamed: 11': 'ARTERIALS - BUSES',
-                                       'SINGLE-UNIT.1': 'ARTERIALS - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION.1': 'ARTERIALS - COMBINATION TRUCKS',
-                                       'Unnamed: 14': 'ARTERIALS - TOTAL',
-                                       'MOTOR-.2': 'OTHER - MOTORCYCLES',
-                                       'PASSENGER.2': 'OTHER - PASSENGER CARS',
-                                       'LIGHT.2': 'OTHER - LIGHT TRUCKS',
-                                       'Unnamed: 18': 'OTHER - BUSES',
-                                       'SINGLE-UNIT.2': 'OTHER - SINGLE-UNIT TRUCKS',
-                                       'COMBINATION.2': 'OTHER - COMBINATION TRUCKS',
-                                       'Unnamed: 21': 'OTHER - TOTAL'}, inplace=True)
+            VMT_type_U.rename(
+                columns={
+                    "MOTOR-": "INTERSTATE - MOTORCYCLES",
+                    "PASSENGER": "INTERSTATE - PASSENGER CARS",
+                    "LIGHT": "INTERSTATE - LIGHT TRUCKS",
+                    "Unnamed: 4": "INTERSTATE - BUSES",
+                    "SINGLE-UNIT": "INTERSTATE - SINGLE-UNIT TRUCKS",
+                    "COMBINATION": "INTERSTATE - COMBINATION TRUCKS",
+                    "Unnamed: 7": "INTERSTATE - TOTAL",
+                    "MOTOR-.1": "ARTERIALS - MOTORCYCLES",
+                    "PASSENGER.1": "ARTERIALS - PASSENGER CARS",
+                    "LIGHT.1": "ARTERIALS - LIGHT TRUCKS",
+                    "Unnamed: 11": "ARTERIALS - BUSES",
+                    "SINGLE-UNIT.1": "ARTERIALS - SINGLE-UNIT TRUCKS",
+                    "COMBINATION.1": "ARTERIALS - COMBINATION TRUCKS",
+                    "Unnamed: 14": "ARTERIALS - TOTAL",
+                    "MOTOR-.2": "OTHER - MOTORCYCLES",
+                    "PASSENGER.2": "OTHER - PASSENGER CARS",
+                    "LIGHT.2": "OTHER - LIGHT TRUCKS",
+                    "Unnamed: 18": "OTHER - BUSES",
+                    "SINGLE-UNIT.2": "OTHER - SINGLE-UNIT TRUCKS",
+                    "COMBINATION.2": "OTHER - COMBINATION TRUCKS",
+                    "Unnamed: 21": "OTHER - TOTAL",
+                },
+                inplace=True,
+            )
 
             VMT_type_U = (
-                VMT_type_U
-                .assign(STATE=lambda x: x['STATE'].str.replace("(2)", ""))
-                .assign(STATE=lambda x: x['STATE'].str.replace("Dist. of Columbia",
-                                                               "District of Columbia"))
+                VMT_type_U.assign(STATE=lambda x: x["STATE"].str.replace("(2)", ""))
+                .assign(
+                    STATE=lambda x: x["STATE"].str.replace(
+                        "Dist. of Columbia", "District of Columbia"
+                    )
+                )
                 .assign(ANSI=0)
                 .fillna(0)
-                )
+            )
 
             # Distribute to 4 output types: passenger, light, heavy, motorcycle
             for idx in np.arange(len(VMT_type_R)):
-                VMT_type_R.loc[idx, 'ANSI'] = name_dict[VMT_type_R.loc[idx, 'STATE']
-                                                        .strip()]
-                istate_R = np.where(VMT_type_R.loc[idx, 'ANSI'] == State_ANSI['ansi'])
-                Per_vmt_mot[1, 0, istate_R, iyear] = VMT_type_R.loc[idx, 'INTERSTATE - MOTORCYCLES']
-                Per_vmt_mot[1, 1, istate_R, iyear] = VMT_type_R.loc[idx, 'ARTERIALS - MOTORCYCLES']
-                Per_vmt_mot[1, 2, istate_R, iyear] = VMT_type_R.loc[idx, 'OTHER - MOTORCYCLES']
-                Per_vmt_pas[1, 0, istate_R, iyear] = VMT_type_R.loc[idx, 'INTERSTATE - PASSENGER CARS']
-                Per_vmt_pas[1, 1, istate_R, iyear] = VMT_type_R.loc[idx, 'ARTERIALS - PASSENGER CARS']
-                Per_vmt_pas[1, 2, istate_R, iyear] = VMT_type_R.loc[idx, 'OTHER - PASSENGER CARS']
-                Per_vmt_lig[1, 0, istate_R, iyear] = VMT_type_R.loc[idx, 'INTERSTATE - LIGHT TRUCKS']
-                Per_vmt_lig[1, 1, istate_R, iyear] = VMT_type_R.loc[idx, 'ARTERIALS - LIGHT TRUCKS']
-                Per_vmt_lig[1, 2, istate_R, iyear] = VMT_type_R.loc[idx, 'OTHER - LIGHT TRUCKS']
-                Per_vmt_hea[1, 0, istate_R, iyear] = VMT_type_R.loc[idx, 'INTERSTATE - BUSES'] + \
-                    VMT_type_R.loc[idx, 'INTERSTATE - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_R.loc[idx, 'INTERSTATE - COMBINATION TRUCKS']
-                Per_vmt_hea[1, 1, istate_R, iyear] = VMT_type_R.loc[idx, 'ARTERIALS - BUSES'] + \
-                    VMT_type_R.loc[idx, 'ARTERIALS - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_R.loc[idx, 'ARTERIALS - COMBINATION TRUCKS']
-                Per_vmt_hea[1, 2, istate_R, iyear] = VMT_type_R.loc[idx, 'OTHER - BUSES'] + \
-                    VMT_type_R.loc[idx, 'OTHER - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_R.loc[idx, 'OTHER - COMBINATION TRUCKS']
-                total_R[iyear] += np.sum(Per_vmt_mot[1, :, istate_R, iyear]) + \
-                    np.sum(Per_vmt_pas[1, :, istate_R, iyear]) + \
-                    np.sum(Per_vmt_lig[1, :, istate_R, iyear]) + \
-                    np.sum(Per_vmt_hea[1, :, istate_R, iyear])
-                total2_R[iyear] += VMT_type_R.loc[idx, 'INTERSTATE - TOTAL'] + \
-                    VMT_type_R.loc[idx, 'ARTERIALS - TOTAL'] + \
-                    VMT_type_R.loc[idx, 'OTHER - TOTAL']
+                VMT_type_R.loc[idx, "ANSI"] = name_dict[
+                    VMT_type_R.loc[idx, "STATE"].strip()
+                ]
+                istate_R = np.where(VMT_type_R.loc[idx, "ANSI"] == State_ANSI["ansi"])
+                Per_vmt_mot[1, 0, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "INTERSTATE - MOTORCYCLES"
+                ]
+                Per_vmt_mot[1, 1, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "ARTERIALS - MOTORCYCLES"
+                ]
+                Per_vmt_mot[1, 2, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "OTHER - MOTORCYCLES"
+                ]
+                Per_vmt_pas[1, 0, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "INTERSTATE - PASSENGER CARS"
+                ]
+                Per_vmt_pas[1, 1, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "ARTERIALS - PASSENGER CARS"
+                ]
+                Per_vmt_pas[1, 2, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "OTHER - PASSENGER CARS"
+                ]
+                Per_vmt_lig[1, 0, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "INTERSTATE - LIGHT TRUCKS"
+                ]
+                Per_vmt_lig[1, 1, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "ARTERIALS - LIGHT TRUCKS"
+                ]
+                Per_vmt_lig[1, 2, istate_R, iyear] = VMT_type_R.loc[
+                    idx, "OTHER - LIGHT TRUCKS"
+                ]
+                Per_vmt_hea[1, 0, istate_R, iyear] = (
+                    VMT_type_R.loc[idx, "INTERSTATE - BUSES"]
+                    + VMT_type_R.loc[idx, "INTERSTATE - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_R.loc[idx, "INTERSTATE - COMBINATION TRUCKS"]
+                )
+                Per_vmt_hea[1, 1, istate_R, iyear] = (
+                    VMT_type_R.loc[idx, "ARTERIALS - BUSES"]
+                    + VMT_type_R.loc[idx, "ARTERIALS - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_R.loc[idx, "ARTERIALS - COMBINATION TRUCKS"]
+                )
+                Per_vmt_hea[1, 2, istate_R, iyear] = (
+                    VMT_type_R.loc[idx, "OTHER - BUSES"]
+                    + VMT_type_R.loc[idx, "OTHER - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_R.loc[idx, "OTHER - COMBINATION TRUCKS"]
+                )
+                total_R[iyear] += (
+                    np.sum(Per_vmt_mot[1, :, istate_R, iyear])
+                    + np.sum(Per_vmt_pas[1, :, istate_R, iyear])
+                    + np.sum(Per_vmt_lig[1, :, istate_R, iyear])
+                    + np.sum(Per_vmt_hea[1, :, istate_R, iyear])
+                )
+                total2_R[iyear] += (
+                    VMT_type_R.loc[idx, "INTERSTATE - TOTAL"]
+                    + VMT_type_R.loc[idx, "ARTERIALS - TOTAL"]
+                    + VMT_type_R.loc[idx, "OTHER - TOTAL"]
+                )
 
             for idx in np.arange(len(VMT_type_U)):
-                VMT_type_U.loc[idx, 'ANSI'] = name_dict[VMT_type_U.loc[idx, 'STATE']
-                                                        .strip()]
-                istate_U = np.where(VMT_type_U.loc[idx, 'ANSI'] == State_ANSI['ansi'])
-                Per_vmt_mot[0, 0, istate_U, iyear] = VMT_type_U.loc[idx, 'INTERSTATE - MOTORCYCLES']
-                Per_vmt_mot[0, 1, istate_U, iyear] = VMT_type_U.loc[idx, 'ARTERIALS - MOTORCYCLES']
-                Per_vmt_mot[0, 2, istate_U, iyear] = VMT_type_U.loc[idx, 'OTHER - MOTORCYCLES']
-                Per_vmt_pas[0, 0, istate_U, iyear] = VMT_type_U.loc[idx, 'INTERSTATE - PASSENGER CARS']
-                Per_vmt_pas[0, 1, istate_U, iyear] = VMT_type_U.loc[idx, 'ARTERIALS - PASSENGER CARS']
-                Per_vmt_pas[0, 2, istate_U, iyear] = VMT_type_U.loc[idx, 'OTHER - PASSENGER CARS']
-                Per_vmt_lig[0, 0, istate_U, iyear] = VMT_type_U.loc[idx, 'INTERSTATE - LIGHT TRUCKS']
-                Per_vmt_lig[0, 1, istate_U, iyear] = VMT_type_U.loc[idx, 'ARTERIALS - LIGHT TRUCKS']
-                Per_vmt_lig[0, 2, istate_U, iyear] = VMT_type_U.loc[idx, 'OTHER - LIGHT TRUCKS']
-                Per_vmt_hea[0, 0, istate_U, iyear] = VMT_type_U.loc[idx, 'INTERSTATE - BUSES'] + \
-                    VMT_type_U.loc[idx, 'INTERSTATE - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_U.loc[idx, 'INTERSTATE - COMBINATION TRUCKS']
-                Per_vmt_hea[0, 1, istate_U, iyear] = VMT_type_U.loc[idx, 'ARTERIALS - BUSES'] + \
-                    VMT_type_U.loc[idx, 'ARTERIALS - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_U.loc[idx, 'ARTERIALS - COMBINATION TRUCKS']
-                Per_vmt_hea[0, 2, istate_U, iyear] = VMT_type_U.loc[idx, 'OTHER - BUSES'] + \
-                    VMT_type_U.loc[idx, 'OTHER - SINGLE-UNIT TRUCKS'] + \
-                    VMT_type_U.loc[idx, 'OTHER - COMBINATION TRUCKS']
-                total_U[iyear] += np.sum(Per_vmt_mot[0, :, istate_U, iyear]) + \
-                    np.sum(Per_vmt_pas[0, :, istate_U, iyear]) + \
-                    np.sum(Per_vmt_lig[0, :, istate_U, iyear]) + \
-                    np.sum(Per_vmt_hea[0, :, istate_U, iyear])
-                total2_U[iyear] += VMT_type_U.loc[idx, 'INTERSTATE - TOTAL'] + \
-                    VMT_type_U.loc[idx, 'ARTERIALS - TOTAL'] + \
-                    VMT_type_U.loc[idx, 'OTHER - TOTAL']
+                VMT_type_U.loc[idx, "ANSI"] = name_dict[
+                    VMT_type_U.loc[idx, "STATE"].strip()
+                ]
+                istate_U = np.where(VMT_type_U.loc[idx, "ANSI"] == State_ANSI["ansi"])
+                Per_vmt_mot[0, 0, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "INTERSTATE - MOTORCYCLES"
+                ]
+                Per_vmt_mot[0, 1, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "ARTERIALS - MOTORCYCLES"
+                ]
+                Per_vmt_mot[0, 2, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "OTHER - MOTORCYCLES"
+                ]
+                Per_vmt_pas[0, 0, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "INTERSTATE - PASSENGER CARS"
+                ]
+                Per_vmt_pas[0, 1, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "ARTERIALS - PASSENGER CARS"
+                ]
+                Per_vmt_pas[0, 2, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "OTHER - PASSENGER CARS"
+                ]
+                Per_vmt_lig[0, 0, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "INTERSTATE - LIGHT TRUCKS"
+                ]
+                Per_vmt_lig[0, 1, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "ARTERIALS - LIGHT TRUCKS"
+                ]
+                Per_vmt_lig[0, 2, istate_U, iyear] = VMT_type_U.loc[
+                    idx, "OTHER - LIGHT TRUCKS"
+                ]
+                Per_vmt_hea[0, 0, istate_U, iyear] = (
+                    VMT_type_U.loc[idx, "INTERSTATE - BUSES"]
+                    + VMT_type_U.loc[idx, "INTERSTATE - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_U.loc[idx, "INTERSTATE - COMBINATION TRUCKS"]
+                )
+                Per_vmt_hea[0, 1, istate_U, iyear] = (
+                    VMT_type_U.loc[idx, "ARTERIALS - BUSES"]
+                    + VMT_type_U.loc[idx, "ARTERIALS - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_U.loc[idx, "ARTERIALS - COMBINATION TRUCKS"]
+                )
+                Per_vmt_hea[0, 2, istate_U, iyear] = (
+                    VMT_type_U.loc[idx, "OTHER - BUSES"]
+                    + VMT_type_U.loc[idx, "OTHER - SINGLE-UNIT TRUCKS"]
+                    + VMT_type_U.loc[idx, "OTHER - COMBINATION TRUCKS"]
+                )
+                total_U[iyear] += (
+                    np.sum(Per_vmt_mot[0, :, istate_U, iyear])
+                    + np.sum(Per_vmt_pas[0, :, istate_U, iyear])
+                    + np.sum(Per_vmt_lig[0, :, istate_U, iyear])
+                    + np.sum(Per_vmt_hea[0, :, istate_U, iyear])
+                )
+                total2_U[iyear] += (
+                    VMT_type_U.loc[idx, "INTERSTATE - TOTAL"]
+                    + VMT_type_U.loc[idx, "ARTERIALS - TOTAL"]
+                    + VMT_type_U.loc[idx, "OTHER - TOTAL"]
+                )
 
             # Check for differences
             total[iyear] = total_U[iyear] + total_R[iyear]
             total2[iyear] = total2_R[iyear] + total2_U[iyear]
-            abs_diff1 = abs(total[iyear] - total2[iyear]) / ((total[iyear] + total2[iyear]) / 2)
+            abs_diff1 = abs(total[iyear] - total2[iyear]) / (
+                (total[iyear] + total2[iyear]) / 2
+            )
 
             if abs(abs_diff1) < 0.0001:
-                print('Year ' + year_range_str[iyear] + ': Urban Difference < 0.01%: PASS')
+                print(
+                    "Year " + year_range_str[iyear] + ": Urban Difference < 0.01%: PASS"
+                )
             else:
-                print('Year ' + year_range_str[iyear] + ': Urban Difference > 0.01%: FAIL, diff: ' + str(abs_diff1))
+                print(
+                    "Year "
+                    + year_range_str[iyear]
+                    + ": Urban Difference > 0.01%: FAIL, diff: "
+                    + str(abs_diff1)
+                )
                 print(total[iyear])
                 print(total2[iyear])
 
     # Correct Years (assign 2012 to 2013), assign 2016 as average of 2015 and 2017
-    idx_2012 = (2012-start_year)
-    idx_2016 = (2016-start_year)
+    idx_2012 = 2012 - start_year
+    idx_2016 = 2016 - start_year
     Per_vmt_mot[:, :, :, idx_2012] = Per_vmt_mot[:, :, :, idx_2012 + 1]
     Per_vmt_pas[:, :, :, idx_2012] = Per_vmt_pas[:, :, :, idx_2012 + 1]
     Per_vmt_lig[:, :, :, idx_2012] = Per_vmt_lig[:, :, :, idx_2012 + 1]
     Per_vmt_hea[:, :, :, idx_2012] = Per_vmt_hea[:, :, :, idx_2012 + 1]
 
-    Per_vmt_mot[:, :, :, idx_2016] = 0.5 * (Per_vmt_mot[:, :, :, idx_2016 - 1] +
-                                            Per_vmt_mot[:, :, :, idx_2016 + 1])
-    Per_vmt_pas[:, :, :, idx_2016] = 0.5 * (Per_vmt_pas[:, :, :, idx_2016 - 1] +
-                                            Per_vmt_pas[:, :, :, idx_2016 + 1])
-    Per_vmt_lig[:, :, :, idx_2016] = 0.5 * (Per_vmt_lig[:, :, :, idx_2016 - 1] +
-                                            Per_vmt_lig[:, :, :, idx_2016 + 1])
-    Per_vmt_hea[:, :, :, idx_2016] = 0.5 * (Per_vmt_hea[:, :, :, idx_2016 - 1] +
-                                            Per_vmt_hea[:, :, :, idx_2016 + 1])
+    Per_vmt_mot[:, :, :, idx_2016] = 0.5 * (
+        Per_vmt_mot[:, :, :, idx_2016 - 1] + Per_vmt_mot[:, :, :, idx_2016 + 1]
+    )
+    Per_vmt_pas[:, :, :, idx_2016] = 0.5 * (
+        Per_vmt_pas[:, :, :, idx_2016 - 1] + Per_vmt_pas[:, :, :, idx_2016 + 1]
+    )
+    Per_vmt_lig[:, :, :, idx_2016] = 0.5 * (
+        Per_vmt_lig[:, :, :, idx_2016 - 1] + Per_vmt_lig[:, :, :, idx_2016 + 1]
+    )
+    Per_vmt_hea[:, :, :, idx_2016] = 0.5 * (
+        Per_vmt_hea[:, :, :, idx_2016 - 1] + Per_vmt_hea[:, :, :, idx_2016 + 1]
+    )
 
     # Optional: Combine Per_vmt_mot and Per_vmt_pas as Per_vmt_pas
     # Consult with EPA to determine whether to keep change
@@ -1155,13 +1371,15 @@ def get_vm4_arrays(num_years):
 
 
 # Calculate State Level Proxies
-def calculate_state_proxies(num_years,
-                            Miles_road_primary,
-                            Miles_road_secondary,
-                            Miles_road_other,
-                            Per_vmt_pas,
-                            Per_vmt_lig,
-                            Per_vmt_hea):
+def calculate_state_proxies(
+    num_years,
+    Miles_road_primary,
+    Miles_road_secondary,
+    Miles_road_other,
+    Per_vmt_pas,
+    Per_vmt_lig,
+    Per_vmt_hea,
+):
     """
     array dimensions:
     region(urban/rural), road type(primary, secondary, other), state, year
@@ -1183,30 +1401,41 @@ def calculate_state_proxies(num_years,
     # road mile variable dimensions (urban/rural, state, year)
 
     for iyear in np.arange(0, num_years):
-        vmt_pas[:, 0, :, iyear] = Miles_road_primary[:, :, iyear] * \
-            Per_vmt_pas[:, 0, :, iyear]
-        vmt_pas[:, 1, :, iyear] = Miles_road_secondary[:, :, iyear] * \
-            Per_vmt_pas[:, 1, :, iyear]
-        vmt_pas[:, 2, :, iyear] = Miles_road_other[:, :, iyear] * \
-            Per_vmt_pas[:, 2, :, iyear]
+        vmt_pas[:, 0, :, iyear] = (
+            Miles_road_primary[:, :, iyear] * Per_vmt_pas[:, 0, :, iyear]
+        )
+        vmt_pas[:, 1, :, iyear] = (
+            Miles_road_secondary[:, :, iyear] * Per_vmt_pas[:, 1, :, iyear]
+        )
+        vmt_pas[:, 2, :, iyear] = (
+            Miles_road_other[:, :, iyear] * Per_vmt_pas[:, 2, :, iyear]
+        )
 
-        vmt_lig[:, 0, :, iyear] = Miles_road_primary[:, :, iyear] * \
-            Per_vmt_lig[:, 0, :, iyear]
-        vmt_lig[:, 1, :, iyear] = Miles_road_secondary[:, :, iyear] * \
-            Per_vmt_lig[:, 1, :, iyear]
-        vmt_lig[:, 2, :, iyear] = Miles_road_other[:, :, iyear] * \
-            Per_vmt_lig[:, 2, :, iyear]
+        vmt_lig[:, 0, :, iyear] = (
+            Miles_road_primary[:, :, iyear] * Per_vmt_lig[:, 0, :, iyear]
+        )
+        vmt_lig[:, 1, :, iyear] = (
+            Miles_road_secondary[:, :, iyear] * Per_vmt_lig[:, 1, :, iyear]
+        )
+        vmt_lig[:, 2, :, iyear] = (
+            Miles_road_other[:, :, iyear] * Per_vmt_lig[:, 2, :, iyear]
+        )
 
-        vmt_hea[:, 0, :, iyear] = Miles_road_primary[:, :, iyear] * \
-            Per_vmt_hea[:, 0, :, iyear]
-        vmt_hea[:, 1, :, iyear] = Miles_road_secondary[:, :, iyear] * \
-            Per_vmt_hea[:, 1, :, iyear]
-        vmt_hea[:, 2, :, iyear] = Miles_road_other[:, :, iyear] * \
-            Per_vmt_hea[:, 2, :, iyear]
+        vmt_hea[:, 0, :, iyear] = (
+            Miles_road_primary[:, :, iyear] * Per_vmt_hea[:, 0, :, iyear]
+        )
+        vmt_hea[:, 1, :, iyear] = (
+            Miles_road_secondary[:, :, iyear] * Per_vmt_hea[:, 1, :, iyear]
+        )
+        vmt_hea[:, 2, :, iyear] = (
+            Miles_road_other[:, :, iyear] * Per_vmt_hea[:, 2, :, iyear]
+        )
 
-        vmt_tot[:, :, iyear] += Miles_road_primary[:, :, iyear] + \
-            Miles_road_secondary[:, :, iyear] + \
-            Miles_road_other[:, :, iyear]
+        vmt_tot[:, :, iyear] += (
+            Miles_road_primary[:, :, iyear]
+            + Miles_road_secondary[:, :, iyear]
+            + Miles_road_other[:, :, iyear]
+        )
 
     # Initialize denominators
     tot_pas = np.zeros([len(State_ANSI), num_years])
@@ -1230,27 +1459,31 @@ def calculate_state_proxies(num_years,
 
 
 # Unpack State Proxy Arrays
-def unpack_state_proxy(state_proxy_array, proxy_name='Emission Allocation'):
+def unpack_state_proxy(state_proxy_array, proxy_name="Emission Allocation"):
     reshaped_state_proxy = state_proxy_array.reshape(-1)
 
-    row_index = np.repeat(['urban', 'rural'], 3 * 57 * num_years)
-    col1_index = np.tile(np.repeat(['Primary', 'Secondary', 'Other'], 57 * num_years), 2)
+    row_index = np.repeat(["urban", "rural"], 3 * 57 * num_years)
+    col1_index = np.tile(
+        np.repeat(["Primary", "Secondary", "Other"], 57 * num_years), 2
+    )
     col2_index = np.tile(np.repeat(np.arange(1, 58), num_years), 2 * 3)
     col3_index = np.tile(np.arange(min_year, max_year + 1), 2 * 3 * 57)
 
-    df = pd.DataFrame({
-        'Region': row_index,
-        'Road Type': col1_index,
-        'State': col2_index,
-        'Year': col3_index,
-        proxy_name: reshaped_state_proxy
-    })
+    df = pd.DataFrame(
+        {
+            "Region": row_index,
+            "Road Type": col1_index,
+            "State": col2_index,
+            "Year": col3_index,
+            proxy_name: reshaped_state_proxy,
+        }
+    )
 
-    df['State_abbr'] = df['State'].map(state_mapping)
+    df["State_abbr"] = df["State"].map(state_mapping)
 
     cols = df.columns.tolist()
-    state_index = cols.index('State')
-    cols.insert(state_index + 1, cols.pop(cols.index('State_abbr')))
+    state_index = cols.index("State")
+    cols.insert(state_index + 1, cols.pop(cols.index("State_abbr")))
     df = df[cols]
 
     return df
@@ -1260,50 +1493,56 @@ def unpack_state_proxy(state_proxy_array, proxy_name='Emission Allocation'):
 def unpack_state_allroads_proxy(vmt_tot):
     reshaped_state_proxy = vmt_tot.reshape(-1)
 
-    row_index = np.repeat(['urban', 'rural'], 57 * num_years)
+    row_index = np.repeat(["urban", "rural"], 57 * num_years)
     col1_index = np.tile(np.repeat(np.arange(1, 58), num_years), 2)
     col2_index = np.tile(np.arange(min_year, max_year + 1), 2 * 57)
 
-    df = pd.DataFrame({
-        'Region': row_index,
-        'State': col1_index,
-        'Year': col2_index,
-        'Proxy': reshaped_state_proxy
-    })
+    df = pd.DataFrame(
+        {
+            "Region": row_index,
+            "State": col1_index,
+            "Year": col2_index,
+            "Proxy": reshaped_state_proxy,
+        }
+    )
 
-    df['State_abbr'] = df['State'].map(state_mapping)
+    df["State_abbr"] = df["State"].map(state_mapping)
 
     cols = df.columns.tolist()
-    state_index = cols.index('State')
-    cols.insert(state_index + 1, cols.pop(cols.index('State_abbr')))
+    state_index = cols.index("State")
+    cols.insert(state_index + 1, cols.pop(cols.index("State_abbr")))
     df = df[cols]
 
     return df
 
 
 # Generate Roads Proportions Data
-def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy, out_path, proxy_name='Emission Allocation'):
+def get_roads_proportion_data(
+    pas_proxy, lig_proxy, hea_proxy, out_path, proxy_name="Emission Allocation"
+):
     """
     Formats data for roads proxy emissions
     """
     proxy_name = proxy_name.lower()
     # Add Vehicle Type column
-    pas_proxy['Vehicle'] = 'Passenger'
-    lig_proxy['Vehicle'] = 'Light'
-    hea_proxy['Vehicle'] = 'Heavy'
+    pas_proxy["Vehicle"] = "Passenger"
+    lig_proxy["Vehicle"] = "Light"
+    hea_proxy["Vehicle"] = "Heavy"
 
     # Combine DataFrames
-    vmt_roads_proxy = pd.concat([pas_proxy,
-                                 lig_proxy,
-                                 hea_proxy], axis=0).reset_index(drop=True)
-    vmt_roads_proxy = (
-        vmt_roads_proxy.rename(columns={'State_abbr': 'state_code',
-                                        'Road Type': 'road_type'})
-                       .rename(columns=lambda x: str(x).lower())
-                       .query("state_code not in ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI', 'UM']")
+    vmt_roads_proxy = pd.concat([pas_proxy, lig_proxy, hea_proxy], axis=0).reset_index(
+        drop=True
     )
-    vmt_roads_proxy = vmt_roads_proxy[['state_code', 'year', 'vehicle', 'region',
-                                       'road_type', proxy_name]]
+    vmt_roads_proxy = (
+        vmt_roads_proxy.rename(
+            columns={"State_abbr": "state_code", "Road Type": "road_type"}
+        )
+        .rename(columns=lambda x: str(x).lower())
+        .query("state_code not in ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI', 'UM']")
+    )
+    vmt_roads_proxy = vmt_roads_proxy[
+        ["state_code", "year", "vehicle", "region", "road_type", proxy_name]
+    ]
 
     vmt_roads_proxy.to_csv(out_path, index=False)
 
@@ -1314,7 +1553,9 @@ def get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy, out_path, proxy_n
     return None
 
 
-def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_proportion_data.csv"):
+def get_road_proxy_data(
+    road_proxy_out_path: Path = task_outputs_path / "roads_proportion_data.csv",
+):
     if not road_proxy_out_path.exists():
         # Proportional Allocation of Roads Emissions
         # The "Proxy" column in the output data represents the proportion of VMT by vehicle type for each unique combination of urban/rural and road type
@@ -1326,23 +1567,27 @@ def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_pro
         # The road types from this  output are: Primary, Secondary, and Other
         # These align with TIGER roads classifications
 
-        # Ultimately, I join on two datasets on road type, along with state, year, and region. But this isn't usesful for the proxy value because it's a proportion of VMT across region/road type 
+        # Ultimately, I join on two datasets on road type, along with state, year, and region. But this isn't usesful for the proxy value because it's a proportion of VMT across region/road type
 
         #################
         # VM2 Outputs
-        Miles_road_primary, Miles_road_secondary, Miles_road_other, total, total2 = get_vm2_arrays(num_years)
+        Miles_road_primary, Miles_road_secondary, Miles_road_other, total, total2 = (
+            get_vm2_arrays(num_years)
+        )
 
         # VM4 Outputs
         Per_vmt_mot, Per_vmt_pas, Per_vmt_lig, Per_vmt_hea = get_vm4_arrays(num_years)
 
         # State Proxy Outputs
-        pas_proxy, lig_proxy, hea_proxy, vmt_tot = calculate_state_proxies(num_years,
-                                                                        Miles_road_primary,
-                                                                        Miles_road_secondary,
-                                                                        Miles_road_other,
-                                                                        Per_vmt_pas,
-                                                                        Per_vmt_lig,
-                                                                        Per_vmt_hea)
+        pas_proxy, lig_proxy, hea_proxy, vmt_tot = calculate_state_proxies(
+            num_years,
+            Miles_road_primary,
+            Miles_road_secondary,
+            Miles_road_other,
+            Per_vmt_pas,
+            Per_vmt_lig,
+            Per_vmt_hea,
+        )
 
         # Unpack State Proxy Outputs
         pas_proxy = unpack_state_proxy(pas_proxy, num_years)
@@ -1351,32 +1596,37 @@ def get_road_proxy_data(road_proxy_out_path: Path=task_outputs_path / "roads_pro
         # tot_proxy = unpack_state_allroads_proxy(vmt_tot)
 
         # Generate Roads Proportions Data
-        get_roads_proportion_data(pas_proxy, lig_proxy, hea_proxy, out_path=road_proxy_out_path)
+        get_roads_proportion_data(
+            pas_proxy, lig_proxy, hea_proxy, out_path=road_proxy_out_path
+        )
 
         return pas_proxy, lig_proxy, hea_proxy
-    
+
     return pd.read_csv(road_proxy_out_path)
 
 
 @benchmark_load
 def overlay_cell_state_region(cell_gdf, region_gdf, state_gdf):
-    '''
+    """
     This function overlays the cell grid with the state and region boundaries for each year of region data
-    '''    
+    """
     # Overlay the cell grid with the state and region boundaries
     print(f"Overlaying cell grid with state and region boundaries: {datetime.now()}")
-    cell_state_region_gdf = gpd.overlay(cell_gdf, state_gdf, how='union')
+    cell_state_region_gdf = gpd.overlay(cell_gdf, state_gdf, how="union")
     print(f"Overlayed cell grid with state boundaries: {datetime.now()}")
-    cell_state_region_gdf = gpd.overlay(cell_state_region_gdf, region_gdf, how='union')
-    
+    cell_state_region_gdf = gpd.overlay(cell_state_region_gdf, region_gdf, how="union")
+
     # where urban is NaN, set to 0 (since the "region" dataset is urban geometries) and drop variable for year (since it is redundant and in the file name)
-    cell_state_region_gdf['urban'] = cell_state_region_gdf['urban'].fillna(0).astype(int)
-    cell_state_region_gdf.drop(columns=['year'], inplace=True)
+    cell_state_region_gdf["urban"] = (
+        cell_state_region_gdf["urban"].fillna(0).astype(int)
+    )
+    cell_state_region_gdf.drop(columns=["year"], inplace=True)
 
     # drop rows with no cell_id, as this indicates that the geometry falls outside of the US and so doesn't need to be processed
-    cell_state_region_gdf.dropna(subset=['cell_id'], inplace=True)
+    cell_state_region_gdf.dropna(subset=["cell_id"], inplace=True)
 
     return cell_state_region_gdf
+
 
 @benchmark_load
 def run_overlay_for_year(year, out_dir):
@@ -1385,10 +1635,12 @@ def run_overlay_for_year(year, out_dir):
     if out_path.exists():
         print(f"File already exists for {year}: {out_path}")
         return None
-    
+
     # Load the region, cell and state data
     print(f"Reading datasets for {year}: {datetime.now()}")
-    cell_gdf = get_cell_gdf().to_crs(4326).reset_index().rename(columns={'index': 'cell_id'})
+    cell_gdf = (
+        get_cell_gdf().to_crs(4326).reset_index().rename(columns={"index": "cell_id"})
+    )
     region_gdf = get_region_gdf(year)
     state_gdf = get_states_gdf()
 
@@ -1397,4 +1649,6 @@ def run_overlay_for_year(year, out_dir):
 
     cell_state_region_gdf.to_parquet(out_path)
 
-    print(f"Saved overlaid geoparquet file for {year} to {out_dir / f'cell_state_region_{year}.parquet'}")
+    print(
+        f"Saved overlaid geoparquet file for {year} to {out_dir / f'cell_state_region_{year}.parquet'}"
+    )

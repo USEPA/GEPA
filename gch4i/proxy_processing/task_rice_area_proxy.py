@@ -168,7 +168,8 @@ def task_rice_proxy(
             geoid=lambda df: df["State ANSI"].astype(str).str.zfill(2)
             + df["County ANSI"].astype(int).astype(str).str.zfill(3),
             value_num=lambda df: pd.to_numeric(
-                df["Value"].str.replace(",", ""), errors="coerce"
+                df["Value"].str.replace("(D)", "1").str.replace(",", ""),
+                errors="coerce",
             ),
         )
         .loc[:, ["Year", "geoid", "value_num", "County"]]
@@ -241,6 +242,16 @@ def task_rice_proxy(
     cnty_to_grid[~cnty_to_grid.geoid.isin(np.unique(cnty_grid["geoid"].values))]
     # %%
     rice_gdf.index.map(lambda x: str(x)[-3:])
+    # %%
+
+    print(
+        "checking that all counties that the census reports as having rice are "
+        "accounted for in the county grid"
+    )
+    grid_geoids = np.unique(cnty_grid["geoid"].values)
+
+    for the_year, rice_gdf in data_dict.items():
+        print(the_year, rice_gdf.index.isin(grid_geoids).all())
 
     # %%
     res_dict = {}
@@ -277,23 +288,26 @@ def task_rice_proxy(
             ],
             out_shape=GEPA_PROFILE.arr_shape,
             transform=GEPA_PROFILE.profile["transform"],
-            fill=1,
+            fill=0,
             dtype="float32",
         )
 
         cnty_rice_prod = xr.DataArray(
-            cnty_rice_prod,
+            np.flip(cnty_rice_prod, 0),
             dims=["y", "x"],
             coords={
-                "y": rice_xr.y,
-                "x": rice_xr.x,
+                "y": cnty_rice_normed_xr.y,
+                "x": cnty_rice_normed_xr.x,
             },
         )
-        cnty_rice_prod["geoid"] = cnty_grid["geoid"]
 
         rice_out_xr = cnty_rice_normed_xr * cnty_rice_prod
+        _, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 5), dpi=300)
+        cnty_rice_prod.where(lambda x: x > 0).plot(ax=ax1)
+        cnty_rice_normed_xr.where(lambda x: x > 0).plot(ax=ax2)
+        rice_out_xr.where(lambda x: x > 0).plot(ax=ax3)
+        plt.show()
 
-        rice_out_xr.where(lambda x: x > 0).plot()
         sum_check = (
             rice_out_xr.groupby("geoid")
             .sum()
@@ -325,45 +339,56 @@ def task_rice_proxy(
         # )
         # rice_xr.plot()
         # plt.show()
-        res_dict[the_year] = rice_xr
+        res_dict[the_year] = rice_out_xr
     # %%
 
     rice_stack_xr = (
         xr.concat(list(res_dict.values()), dim="year")
         .drop_vars("geoid")
-        .assign_coords(year=list(res_dict.keys()))
+        .fillna(0)
+        .assign_coords(
+            {
+                "year": list(res_dict.keys()),
+                "y": np.flip(rice_xr.y),
+                "x": rice_xr.x,
+            }
+        )
+        .to_dataset(name="emi")
         # .assign_coords(year=pd.to_datetime(list(res_dict.keys()), format="%Y"))
     )
-    rice_stack_xr
-
-    # make the state grid
-    state_grid = make_geocube(
-        vector_data=state_gdf, measurements=["statefp"], like=rice_stack_xr, fill=99
+    rice_stack_xr["emi"].where(lambda x: x > 0).plot.imshow(
+        col="year", col_wrap=4, cmap="Spectral"
     )
-    # assign the state grid as a new variable in the dataset
-    rice_stack_xr["statefp"] = state_grid["statefp"]
-    # plot the data to check
-    rice_stack_xr["statefp"].plot()
-    # %%
-    rice_stack_xr.sel(year=2017).plot()
-    # %%
     # NOTE: the inventory reports emissions in MN. However neither the CDL nor the
     # census data have any data for MN. So we need to add a dummy value for MN.
     # Create a GeoDataFrame with just the state of Minnesota
     mn_gdf = state_gdf.query("state_name == 'Minnesota'").assign(emi=1)
-    mn_gdf
     # Create an xarray object from the Minnesota GeoDataFrame
-    mn_grid = make_geocube(
-        vector_data=mn_gdf,
-        measurements=["emi"],
-        like=rice_xr,
-        fill=0,
+    mn_grid = (
+        make_geocube(
+            vector_data=mn_gdf,
+            measurements=["emi"],
+            like=rice_xr,
+            fill=0,
+        )
+        .expand_dims(year=rice_stack_xr.year)
+        .assign_coords(
+            {
+                "year": list(res_dict.keys()),
+                "y": rice_xr.y,
+                "x": rice_xr.x,
+            }
+        )
     )
+    rice_stack_xr, mn_grid = xr.align(rice_stack_xr, mn_grid)
 
-    rice_stack_xr = rice_stack_xr + mn_grid["emi"]
-    rice_stack_xr.where(lambda x: x > 0).plot.imshow(
+    mn_grid["emi"].plot.imshow(col="year", col_wrap=4, cmap="Spectral")
+
+    rice_stack_xr = rice_stack_xr + mn_grid
+    rice_stack_xr["emi"].where(lambda x: x > 0).plot.imshow(
         col="year", col_wrap=4, cmap="Spectral"
     )
+
     # %%
     # Expand monthly_scaling.values into a 12, 350, 700 array
     # to apply the monthly scaling, we need to expand the monthly_scaling into the same
@@ -381,7 +406,8 @@ def task_rice_proxy(
     # we expand the yearly data, repeating the yearly value for each month
     # and then multiply the monthly scaling by the yearly data
     month_rice_stack_xr = (
-        rice_stack_xr.expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
+        rice_stack_xr["emi"]
+        .expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
         .stack({"year_month": ["year", "month"]}, create_index=False)
         .sortby(["year_month", "y", "x"])
         .transpose("year_month", "y", "x")
@@ -396,7 +422,15 @@ def task_rice_proxy(
         year_month=("year_month", year_months)
     )
     month_rice_stack_xr = month_rice_stack_xr * expanded_monthly_scaling
-    month_rice_stack_xr
+    # %%
+    # make the state grid
+    state_grid = make_geocube(
+        vector_data=state_gdf, measurements=["statefp"], like=rice_xr, fill=99
+    )
+    # assign the state grid as a new variable in the dataset
+    month_rice_stack_xr["statefp"] = state_grid["statefp"]
+    # plot the data to check
+    month_rice_stack_xr["statefp"].plot()
     # %%
 
     # apply the normalization function to the data
@@ -416,7 +450,6 @@ def task_rice_proxy(
         .apply(normalize_xr)
         .sortby(["year_month", "y", "x"])
     )
-    out_ds
     # %%
     # check that the normalization worked
     all_eq_df = (
