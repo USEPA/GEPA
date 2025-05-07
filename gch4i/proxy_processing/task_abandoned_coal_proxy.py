@@ -222,7 +222,7 @@ def task_get_abd_coal_proxy_data(
                     encoding="ISO-8859-1",
                     # usecols=["MINE_ID", "LATITUDE", "LONGITUDE"],
                 )
-                # XXX: what does this do? (from v2 notebook)
+                # EEM: this identifies whether the mine was a coal mine (C) or metal/non-metal mine
                 .query("COAL_METAL_IND == 'C'")
                 .dropna(subset=["LATITUDE", "LONGITUDE"])
                 .assign(
@@ -405,7 +405,7 @@ def task_get_abd_coal_proxy_data(
 
     # carrying over the guidance from v2, we will remove mines that are listed as active
     #       NOTES:
-    # 1)    Mines reopened in 2020 will not affect this notebook run for 2012-2018.
+    # 1)    Mines reopened in 2020 will not affect this notebook run for 2012-2018. #EEM: edit text
     # 2)    MSHA says mine 3600840 is active, but it is not in active mine GHGI
     #       workbook. It is in the abandoned mine workbook. abandoned in 1994.
     #       We keep it here.
@@ -426,7 +426,7 @@ def task_get_abd_coal_proxy_data(
 
     active_mines_df = all_mines_df.query(
         # "(operating_status == 'Active')"
-        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)"
+        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)" #EEM - why is the re-open date set to 2020 and not a different year? Check that this isn't a hold-over from v2
     ).sort_values("reopen_date")
     print(
         "mines that are in the abandoned workbook but "
@@ -479,6 +479,7 @@ def task_get_abd_coal_proxy_data(
         # We can calculate the actual fraction of emissions for a given year.
         calc_date = datetime.datetime(year=year, month=12, day=31)
 
+      #EEM: is the code below legacy from v2? If so, please delete
         # calculate the number of days closed relative to 07/02 of this year?
         # XXX: why not calculate the entire year?
         # if the mine closed this year, give it special treatment where the
@@ -568,10 +569,12 @@ def task_get_abd_coal_proxy_data(
         )
 
         # combine the abandoned and newly reopened mines for this year
+      # EEM: where is year_abandoned_mines_df defined? This doesn't seem to appear anywhere else in the file
         year_mines_df = pd.concat([year_abandoned_mines_df, year_active_mines_df])
 
         # we now calculate the emissions for each mine based on the status of the mine
         # and the basin it is in.
+
         data_list = []
         for (basin, status), data in year_mines_df.groupby(
             ["basin_nr", "simple status"]
