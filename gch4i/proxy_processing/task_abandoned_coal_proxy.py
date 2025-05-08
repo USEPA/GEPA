@@ -100,6 +100,11 @@ def task_get_abd_coal_proxy_data(
         "Western Basins": 4,
     }
 
+    # previously year days were recalculated for every year to calculate the fraction
+    # of years a mine way closed. I think a better approach would be to assign a
+    # constant that roughly equals the number of days in a year.
+    year_days = 365.25
+
     # https://www.epa.gov/sites/default/files/2016-03/documents/amm_final_report.pdf
     # basin coefficients pulled from v2
     # order: CA, IL, NA, BW, WS
@@ -424,67 +429,112 @@ def task_get_abd_coal_proxy_data(
     # So we filter the active mines that closed in 2020 or later to handle in the yearly
     # emissions calculations.
 
-
-
-    # questionable mines are those that have a reopen date after the date of
-    # abandonment, regardless of their status. There are 52 mines total that fall into
-    # this grey zone, include the 6 that are listed as active.
-    # questionable_mines = all_mines_df.query(
-    #     "reopen_date > date_abd"
-    # ).sort_values("MINE_ID")
-
-    # %%
     all_mines_df.sort_values("reopen_date", ascending=False)
     # %%
-    # previously year days were recalculated for every year to calculate the fraction
-    # of years a mine way closed. I think a better approach would be to assign a
-    # constant that roughly equals the number of days in a year.
-    year_days = 365.25
-
-    active_mines_df = all_mines_df.query(
-        # "(operating_status == 'Active')"
-        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)" #EEM - why is the re-open date set to 2020 and not a different year? Check that this isn't a hold-over from v2
-    ).sort_values("reopen_date")
-
-    print(
-        "mines that are in the abandoned workbook but "
-        f"listed as active in the mine db: {len(active_mines_df)}"
-    )
-    active_mines_df
-
-    # questionable mines are those that have a reopen date after the date of
-    # abandonment, regardless of their status. There are 52 mines total that fall into
-    # this grey zone, include the 6 that are listed as active.
-    # questionable_mines = all_mines_df.query(
-    #     "reopen_date > date_abd"
-    # ).sort_values("MINE_ID")
 
     # %%
-    all_mines_df.sort_values("reopen_date", ascending=False)
-    # %%
-    # previously year days were recalculated for every year to calculate the fraction
-    # of years a mine way closed. I think a better approach would be to assign a
-    # constant that roughly equals the number of days in a year.
-    year_days = 365.25
-
+    # actives mines are those that are listed as active and have a reopen date before
+    # the study period. We will remove these from the abandoned mines list.
     active_mines_df = all_mines_df.query(
         # "(operating_status == 'Active')"
-        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)" #EEM - why is the re-open date set to 2020 and not a different year? Check that this isn't a hold-over from v2
+        "(operating_status == 'Active') & (reopen_date.dt.year < 2012)"
+        # EEM - why is the re-open date set to 2020 and not a different year? Check
+        # that this isn't a hold-over from v2
+        # NFK: if we adjust this to 2012, then we assume the have reopened and are truly
+        # active during this time period.
     ).sort_values("reopen_date")
     print(
         "mines that are in the abandoned workbook but "
         f"listed as active in the mine db: {len(active_mines_df)}"
     )
     active_mines_df
+    # %%
 
     # remove the active mines from the abandoned mines
-    abandoned_mines_df = all_mines_df.drop(index=active_mines_df.index)
+    # %%
+    reference_mines_df = all_mines_df.drop(index=active_mines_df.index).reset_index(
+        drop=True
+    )
+    reference_mine_count = len(reference_mines_df)
 
+    # questionable mines are those that have a reopen date after the date of
+    # abandonment and were reopened prior to the study period.
+    # We are gong to assume these were are abandoned during the entire study period.
+    questionable_mines_df = reference_mines_df.query(
+        "(reopen_date >= date_abd)"
+        "& (date_abd.dt.year < @min_year)"
+        "& (reopen_date.dt.year < @min_year)"
+    ).sort_values("reopen_date")
+    reference_mines_df = reference_mines_df.drop(
+        index=questionable_mines_df.index
+    )
+    questionable_mines_df
+    # %%
 
+    # now closed minse are those that have a reopen date before the date of
+    # abandonment and closed prior to the study period.
+    now_closed_mines_df = reference_mines_df.query(
+        "(reopen_date <= date_abd)"
+        "& (date_abd.dt.year < @min_year)"
+        "& (reopen_date.dt.year < @min_year)"
+    ).sort_values("reopen_date")
+    reference_mines_df = reference_mines_df.drop(
+        index=now_closed_mines_df.index
+    )
+    now_closed_mines_df
+    # %%
+    # We also have mines that have an abandoned date but no reopen date, so we assume
+    # they are always abandoned.
+    never_reopened_mines_df = reference_mines_df.query(
+        "date_abd.dt.year < @min_year" "& (reopen_date.isna())"
+    )
+    reference_mines_df = reference_mines_df.drop(
+        index=never_reopened_mines_df.index
+    )
+    never_reopened_mines_df
+
+    # %%
+    # We have mines that were abandoned during the entire study period and have reopened
+    # after the study period. We will assume were abandoned
+    # during the study period.
+    abandoned_during_study_df = reference_mines_df.query(
+        "(date_abd.dt.year < @min_year) & (reopen_date.dt.year > @max_year)"
+    ).sort_values("date_abd")
+    reference_mines_df = reference_mines_df.drop(
+        index=abandoned_during_study_df.index
+    )
+    abandoned_during_study_df
+    # %%
+
+    always_abandoned_mines_df = pd.concat(
+        [questionable_mines_df, now_closed_mines_df, never_reopened_mines_df, abandoned_during_study_df]
+    )
+    always_abandoned_mines_df.sort_values("date_abd")
+
+    # %%
+    # we have mines whos status changes during the study period. These are the ones that
+    # have to be dealth with the most during the calculations.
+    has_status_change_df = reference_mines_df.query(
+        "date_abd.dt.year.between(@min_year, @max_year) | "
+        "reopen_date.dt.year.between(@min_year, @max_year)"
+    )
+    reference_mines_df = reference_mines_df.drop(
+        index=has_status_change_df.index
+    )
+    has_status_change_df.sort_values("date_abd")
+
+    # %%
+    count_check = (
+        len(always_abandoned_mines_df) + len(has_status_change_df)
+    ) == reference_mine_count
+    print(f"count check: {count_check}")
+
+    # %%
     result_list = []
     # for each year we have mine data, calculate emissions based on the basin, mine
     # status, and the number of years closed.
     reopened_mine_list = []
+    aban_mine_list = []
     for year in range(min_year, max_year + 1):
 
         # get the normalized ratios of mine status by year
@@ -498,70 +548,41 @@ def task_get_abd_coal_proxy_data(
         ):
             raise ValueError("Ratios do not sum to 1")
 
-        # # get the number of days in the year
-        # month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-        # year_days = np.sum(month_days)
+        # EEM: is the code below legacy from v2? If so, please delete
+        # The logic here was that this date would be representative of the mean emission rate for that year (since we are dealing with exponential decay rates)
+        # the same logic was behind why we divided the number of closed days by 2.
+        # I think that if we treat all mines in the same way, it should still be ok to use the entire year
 
         # this year date to calc relative emissions
         # NOTE: this is different from the v2 notebook where the date was 07/02
         # We can calculate the actual fraction of emissions for a given year.
         calc_date = datetime.datetime(year=year, month=12, day=31)
 
-      #EEM: is the code below legacy from v2? If so, please delete
-      #The logic here was that this date would be representative of the mean emission rate for that year (since we are dealing with exponential decay rates)
-     # the same logic was behind why we divided the number of closed days by 2. 
-      # I think that if we treat all mines in the same way, it should still be ok to use the entire year
-      
-        # calculate the number of days closed relative to 07/02 of this year?
-        # XXX: why not calculate the entire year?
-        # if the mine closed this year, give it special treatment where the
-        # number of days closed is 1/2 of the number of days closed relative to
-        # our date of 07/02 the logic here is: if the mine closed in this year,
-        # the number of days closed is equal to 1/2 the days closed relative to
-        # 07/02.
-        # calc_date = datetime.datetime(year=year, month=7, day=2)
-
-        # get the mines that are abandoned this year or earlier
-        year_aban_df = abandoned_mines_df.query(
-            "(date_abd.dt.year <= @calc_date.year)"
-            # "& (reopen_date.dt.year <= @calc_date.year)"
-        )
+        # get the mines that are abandoned this year or earlier of any date
+        year_aban_df = always_abandoned_mines_df
+        # remove the mines that have reopened prior to this year
         year_aban_df = year_aban_df[~year_aban_df.MINE_ID.isin(reopened_mine_list)]
 
         # FOR REFERENCE: mines that were abandoned this year
         aban_this_year_df = year_aban_df.query("date_abd.dt.year == @calc_date.year")
 
         # FOR REFERENCE: abandoned mines that were reopened this year
-        aban_reopen_this_year_df = year_aban_df.query(
+        reopen_this_year_df = abandoned_mines_df.query(
             "(reopen_date.dt.year == @calc_date.year)"
         )
 
-        reopened_mine_list.extend(aban_reopen_this_year_df.MINE_ID.to_list())
-        # these are mines that are listed as active, but were closed this year
-        # so we take these mines and calculate the days closed as the difference
-        # of days from when it when it was abandoned to the day it reopened this year.
-        # if the mine was opened this year, we subtract out the number of days it was
-        # operational from the days closed
-        active_but_closed_this_year_df = active_mines_df.query(
-            "(reopen_date >= @calc_date)"
-        )
+        reopened_mine_list.extend(reopen_this_year_df.MINE_ID.to_list())
+        aban_mine_list.extend(aban_this_year_df.MINE_ID.to_list())
 
         print(f"total mines abandoned {year}: {len(year_aban_df)}")
         print(f"mines abandoned in this year {year}: {len(aban_this_year_df)}")
         print(
-            f"mines abandoned reporting reopen this year {year}: {len(aban_reopen_this_year_df)}"
-        )
-        # print(aban_reopen_this_year_df.MINE_ID.to_list())
-        # print()
-
-        print(
-            f"num actives mines that closed this year: {len(active_but_closed_this_year_df)}"
+            f"mines abandoned reporting reopen this year {year}: "
+            f"{len(reopen_this_year_df)}"
         )
 
         # combine the abandoned and newly reopened mines for this year
-        year_mines_df = pd.concat(
-            [year_aban_df, active_but_closed_this_year_df]
-        ).assign(
+        year_mines_df = pd.concat([year_aban_df]).assign(
             # assign the current year for calculations
             year=year,
             days_closed=lambda df: (calc_date - df["date_abd"]),
@@ -598,7 +619,7 @@ def task_get_abd_coal_proxy_data(
         )
 
         # combine the abandoned and newly reopened mines for this year
-      # EEM: where is year_abandoned_mines_df defined? This doesn't seem to appear anywhere else in the file
+        # EEM: where is year_abandoned_mines_df defined? This doesn't seem to appear anywhere else in the file
         year_mines_df = pd.concat([year_mines_df, year_active_mines_df])
 
         # we now calculate the emissions for each mine based on the status of the mine
@@ -639,10 +660,25 @@ def task_get_abd_coal_proxy_data(
     ):
         raise ValueError("Recovering mines should have 0 emissions")
 
-    # result_df.head()
+    # %%
+    reopened_mines_df = all_mines_df[all_mines_df.MINE_ID.isin(reopened_mine_list)]
+    count_reopened_mines = len(reopened_mines_df)
+    print(
+        f"there are {count_reopened_mines} mines that were reopened during the "
+        "time period:"
+    )
+    reopened_mines_df.sort_values("reopen_date")
+    # %%
+    aban_mines_df = all_mines_df[all_mines_df.MINE_ID.isin(aban_mine_list)]
+    count_aban_mines = len(aban_mines_df)
+    print(
+        f"there are {count_aban_mines} mines that were abandoned during the "
+        "time period:"
+    )
+    aban_mines_df.sort_values("date_abd")
 
     # %%
-    all_mines_df[all_mines_df.MINE_ID.isin(reopened_mine_list)].sort_values("reopen_date")
+
     # %%
     # some visuals to check the data
     sns.relplot(data=result_df, y="mine_emi", x="year", hue="state_code", kind="line")
