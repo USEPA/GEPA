@@ -1,5 +1,5 @@
 """
-Name:                   task_rwc_proxy.py
+Name:                   task_septic_proxy.py
 Date Last Modified:     2025-03-11
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:
@@ -103,7 +103,7 @@ pop_proxy_ds
 
 # %%
 @mark.persist
-def task_rwc_proxy(
+def task_septic_proxy(
     pop_input_paths: Path = pop_input_paths,
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path / "septic_pop_proxy.nc",
