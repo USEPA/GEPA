@@ -79,6 +79,9 @@ EIA_923_plant_locs_path: Path = sector_data_dir_path / "eia/EIA-923/Power_Plants
 GHGRP_subC_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv" #subpart C facility IDs and emissions (locations not available)
 GHGRP_subD_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv" #subpart D facility IDs and emissions 
 GHGRP_subDfacility_loc_inputfile = GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv" #subpart D facility info (for all years, with ID & lat and lons)
+# EEM: I believe that the HGGRP facility info is not only subpart D facilities, but a master list of all emitting facilities. Therefore, we want to only include the 
+# facilities that report to subpart C (that are not also in subpart D). The logic here is that Subpart C is all stationary fuel combustion sources, where subpart D
+# for electricity generation. Since electricity is covered elsewhere, we are only interested in the Subpart C facilities that are not electricity generators (i.e., in subpart D). 
 
 ########################################################################################
 # %% elec_coal_proxy, elec_gas_proxy, elec_oil_proxy, elec_wood_proxy
@@ -488,6 +491,8 @@ def task_get_reporting_indu_proxy_data(
     )
 
     # Merge C_Only with Facility Info
+  # EEM: I can't quite find an issue in the code, but there weren't any industrial facilities offshore in the GULF in v2. Double check the facility list
+  # and this merge to make sure that only SubpartC facilities and their locations are being used as the proxy. 
     proxy_gdf = (
         GHGRP_C_Only.merge(
             GHGRP_Facilities,

@@ -26,7 +26,7 @@ from zipfile import ZipFile
 import numpy as np
 from pytask import Product, mark, task
 
-from gch4i.config import sector_data_dir_path, years
+from gch4i.config import sector_data_dir_path, years, intermediate_data_dir_path
 from gch4i.utils import download_url, make_raster_binary, warp_to_gepa_grid
 
 NUM_WORKERS = multiprocessing.cpu_count()

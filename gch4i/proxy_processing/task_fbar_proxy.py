@@ -22,24 +22,18 @@ from pathlib import Path
 from typing import Annotated
 from pytask import Product, mark, task
 
-# import pytask
-
 import pandas as pd
-import numpy as np
-
 import geopandas as gpd
-
-from shapely.geometry import Point
-
 from gch4i.config import (
     V3_DATA_PATH,
     proxy_data_dir_path,
     global_data_dir_path,
-    # ghgi_data_dir_path,
     emi_data_dir_path,
-    # max_year,
-    # min_year
+    years,
 )
+import numpy as np
+
+from gch4i.utils import normalize
 
 ########################################################################################
 # %% STEP 0.2. Load Path Files
@@ -47,351 +41,206 @@ from gch4i.config import (
 state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 
 GEPA_Field_Burning_Path = (
-    V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning"
+    V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Field_Burning" / "InputData/"
 )
 
-InputData_path = GEPA_Field_Burning_Path / "InputData/"
+input_data_paths = list(GEPA_Field_Burning_Path.rglob("*ResidueBurning_AllCrops.csv"))
+input_data_paths = [path for path in input_data_paths if path.is_file()]
+input_data_paths
 
-McCarty_years = np.arange(2003, 2008)
+# these are the columns used to read in the csv files
+fb_cols = [
+    "Crop_Type",
+    "Acres",
+    "EMCH4_Gg",
+    "Burn_Date",
+    "Latitude",
+    "Longitude",
+]
 
-########################################################################################
-# %% Proxy Functions
+# this is the crosswalk between the proxy name and the crop_type given in the field
+# burning datasets
+proxy_to_fbar_dict = {
+    "maize": ["corn"],
+    "cotton": ["cotton"],
+    "rice": ["rice"],
+    "soybeans": ["soybean"],
+    "sugarcane": ["sugarcane"],
+    "wheat": ["wheat"],
+    "other": ["other crop/fallow", "Kentucky bluegrass", "lentils"],
+}
+
+output_path_list = [
+    proxy_data_dir_path / f"fbar_{x}_proxy.parquet" for x in proxy_to_fbar_dict.keys()
+]
 
 
-def create_circle_geometry(row, radius_crs="EPSG:3857"):
-    """ "
-    Create a circular polygon centered on a lat/lon point using a radius derived from
-    the "Acres" columns.
-    """
-    # Convert Acres to radius in meters
-    area_m2 = row["Acres"] * 4046.86  # Convert acres to m^2
-    radius_m = np.sqrt(area_m2 / np.pi)
+# @mark.persist
+# @task(id="fbar_proxy")
+# def task_field_burning_proxy(
+#     state_path: Path = state_path,
+#     input_data_paths: list[Path] = input_data_paths,
+#     proxy_to_fbar_dict: dict = proxy_to_fbar_dict,
+#     output_path_list: Annotated[list[Path], Product] = output_path_list,
+# ):
 
-    # Create a point geometry
-    center = Point(row["geometry"])
+# Read in State data
+state_gdf = (
+    gpd.read_file(state_path)
+    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+    .rename(columns=str.lower)
+    .rename(columns={"stusps": "state_code", "name": "state_name"})
+    .astype({"statefp": int})
+    # get only lower 48 + DC
+    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+    .to_crs(4326)
+)
 
-    # Project teh cente rpoint to a metric CRS (EPSG:3857)
-    gdf_point = gpd.GeoDataFrame({"geometry": [center]}, crs="EPSG:4326")
-    gdf_point = gdf_point.to_crs(radius_crs)
+fb_df_list = [pd.read_csv(x, usecols=fb_cols) for x in input_data_paths]
+raw_df = pd.concat(fb_df_list, ignore_index=True)
 
-    # Buffer in metric CRS
-    buffered = gdf_point.geometry.buffer(radius_m)
+raw_count = raw_df.shape[0]
+print(f"Number of records: {raw_count:,}")
+raw_df.isna().sum()
 
-    # Reproject back to EPSG:4326
-    buffered = gpd.GeoDataFrame({"geometry": buffered}, crs=radius_crs).to_crs(
-        "EPSG:4326"
+empty_burn_date_count = raw_df[raw_df["Burn_Date"] == " "].shape[0]
+print(f"Number of empty Burn_Date entries: {empty_burn_date_count}")
+
+fb_df = (
+    raw_df.rename(columns=str.lower)
+    .dropna(subset=["latitude", "longitude"], how="any")
+    .assign(
+        month_str=lambda df: df["burn_date"].str.extract(r"([A-Za-z]{3})")[0],
     )
-
-    # Return the geometry
-    return buffered.iloc[0].geometry
-
-
-# Base proxy retrieval function. To be used with 7 pytask functions
-def get_fbar_proxy_data(
-    filter_condition, state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-):
-    """
-    This base proxy function will be used in concert with 7 pytask functions to retrieve
-    relevant state emissions data, fill in gaps in proxy data from McCarty, et al.
-    (2011), and calculate relative emissions per crop proxy.
-
-    Step 1: Build the base proxy data from McCarty, et al. (2011) data
-    Step 2: Check state emissions for emi data without proxy data
-    Step 3: Transform Lat/Lon and Acres to Geometry Polygons
-    Step 4: Append missing Maine (ME) Proxy data, if necessary
-    """
-
-    # STEP 1. Build base_proxy
-    base_proxy = pd.DataFrame()
-
-    for year in McCarty_years:
-        df = (
-            # Read in McCarty, et al. (2011) data
-            pd.read_csv(
-                f"{InputData_path}/{year}_ResidueBurning_AllCrops.csv",
-                usecols=[
-                    "Crop_Type",
-                    "Acres",
-                    "EMCH4_Gg",
-                    "Burn_Date",
-                    "Latitude",
-                    "Longitude",
-                ],
-            )
-            # Clean and assign month and crop
-            .assign(
-                month=lambda x: x["Burn_Date"].str.extract(r"([A-Za-z]{3})")[0],
-                crop=lambda x: np.select(
-                    condlist=[
-                        x["Crop_Type"] == "corn",
-                        x["Crop_Type"].isin(
-                            ["other crop/fallow", "Kentucky bluegrass", "lentils"]
-                        ),
-                    ],
-                    choicelist=["maize", "other"],
-                    default=x["Crop_Type"],
-                ),
-            )
-            # Remove unnecessary columns
-            .drop(columns=["Burn_Date", "Crop_Type"])
-        )
-
-        # Append to all_data DataFrame
-        base_proxy = pd.concat([base_proxy, df], ignore_index=True)
-
-    # Convert lat/lon to geometry points
-    base_proxy = gpd.GeoDataFrame(
-        base_proxy,
-        geometry=gpd.points_from_xy(base_proxy.Longitude, base_proxy.Latitude),
+    .dropna(subset="month_str")
+    .assign(
+        month=lambda df: pd.to_datetime(df["month_str"], format="%b")
+        .dt.strftime("%m")
+        .astype(int),
+    )
+)
+fb_gdf = (
+    gpd.GeoDataFrame(
+        fb_df,
+        geometry=gpd.points_from_xy(fb_df["longitude"], fb_df["latitude"]),
         crs="EPSG:4326",
-    ).drop(columns=["Latitude", "Longitude"])
-
-    # Read in State data
-    state_gdf = (
-        gpd.read_file(state_path)
-        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-        .rename(columns=str.lower)
-        .rename(columns={"stusps": "state_code", "name": "state_name"})
-        .astype({"statefp": int})
-        # get only lower 48 + DC
-        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-        .to_crs(4326)
     )
+    .drop(columns=["latitude", "longitude"])
+    .sjoin(state_gdf[["state_code", "geometry"]], how="left")
+)
+pre_state_na_count = fb_gdf.shape[0]
+print(f"Number of records: {pre_state_na_count:,}")
+print(f"number of records dropped: {raw_count - pre_state_na_count:,}")
 
-    # Assign Each row to a State
-    base_proxy = (
-        gpd.sjoin(base_proxy, state_gdf, how="left", predicate="within")
-        .drop(columns=["index_right", "state_name", "statefp"])
-        .loc[:, ["month", "crop", "state_code", "Acres", "EMCH4_Gg", "geometry"]]
+na_state_code_count = fb_gdf["state_code"].isna().sum()
+print(f"Number of records with NA state_code: {na_state_code_count}")
+ax = fb_gdf[fb_gdf["state_code"].isna()].plot(color="xkcd:scarlet")
+state_gdf.boundary.plot(ax=ax, color="xkcd:slate")
+fb_gdf = fb_gdf.dropna(subset=["state_code"], how="any")
+print(f"number of records dropped: {pre_state_na_count - fb_gdf.shape[0]:,}")
+# %%
+for (proxy_name, fbar_crop_list), out_path in zip(
+    proxy_to_fbar_dict.items(), output_path_list
+):
+    # out_path = proxy_data_dir_path / f"fbar_{proxy_name}_proxy.parquet"
+    print(proxy_name, out_path.exists())
+
+    crop_gdf = fb_gdf[fb_gdf["crop_type"].isin(fbar_crop_list)].copy()
+
+    crop_months = crop_gdf["month"].drop_duplicates().sort_values().to_list()
+    print(f"crop_months: {len(crop_months)}")
+    if len(crop_months) < 12:
+        print(crop_months)
+
+    crop_states = crop_gdf["state_code"].drop_duplicates()
+    missing_states = state_gdf[~state_gdf["state_code"].isin(crop_states)]
+
+    fill_in_data = fb_gdf[fb_gdf["state_code"].isin(missing_states.state_code)]
+    fill_in_data
+    print(f"filling in crop data: {fill_in_data.state_code.unique()}")
+    if not fill_in_data.empty:
+        crop_gdf = pd.concat([crop_gdf, fill_in_data], ignore_index=True)
+
+    crop_states = crop_gdf["state_code"].drop_duplicates()
+    missing_states = state_gdf[~state_gdf["state_code"].isin(crop_states)]
+
+    print(f"missing_states: {missing_states['state_code'].to_list()}")
+    missing_states = pd.concat(
+        [missing_states.assign(month=month) for month in range(1, 13)],
+        ignore_index=True,
     )
+    missing_states = missing_states.assign(emch4_gg=1)
 
-    ################################################################################
-    # STEP 2. Check crop for emi-proxy match
+    # This should now have a comprehensive list of all states and months
+    # represented in the data. If not, we need to fix something
+    year_gdf = pd.concat([crop_gdf, missing_states], ignore_index=True).loc[
+        :, ["state_code", "geometry", "month", "emch4_gg"]
+    ]
+    state_check = (
+        year_gdf["state_code"].drop_duplicates().isin(state_gdf["state_code"]).all()
+    )
+    print(f"are all states accounted for?: {state_check}")
 
-    # Build dictionary to map crop to crop emissions data
-    proxy_dict = {
-        "maize": "maize_emi",
-        "cotton": "cotton_emi",
-        "rice": "rice_emi",
-        "soybean": "soybeans_emi",
-        "sugarcane": "sugarcane_emi",
-        "wheat": "wheat_emi",
-        "other": [
-            "barley_emi",
-            "chickpeas_emi",
-            "drybeans_emi",
-            "lentils_emi",
-            "oats_emi",
-            "other_grains_emi",
-            "peanuts_emi",
-            "peas_emi",
-            "potatoes_emi",
-            "sorghum_emi",
-            "sugarbeets_emi",
-            "sunflower_emi",
-            "tobacco_emi",
-            "vegetables_emi",
-        ],
-    }
-
-    # Filter base_proxy for current_proxy
-    filtered_proxy = base_proxy.query("crop == @filter_condition")
-    # Create filtered dictionary
-    filtered_dict = {filter_condition: proxy_dict[filter_condition]}
-
-    # Check if proxy data exists for emissions data
-    for key, value in filtered_dict.items():
-        # If value is a list, concatenate all dataframes
-        if isinstance(value, list):
-            emi_df = pd.concat(
-                [pd.read_csv(f"{emi_data_dir_path}/{val}.csv") for val in value],
-                ignore_index=True,
-            ).query("ghgi_ch4_kt != 0")
-        # If value is a string, read in the single file
-        else:
-            emi_df = pd.read_csv(f"{emi_data_dir_path}/{value}.csv").query(
-                "ghgi_ch4_kt != 0"
-            )
-
-    # Retrieve unique state codes for emissions without proxy data
-    # This step is necessary, as not all emissions data excludes emission-less states
-    emi_states = set(emi_df["state_code"].unique())
-    proxy_states = set(filtered_proxy["state_code"].unique())
-
-    missing_states = emi_states.difference(proxy_states)
-
-    ################################################################################
-    # STEP 2A/2B. Append proxy_gdf with generalized proxy for missing states
-    proxy_gdf = (
-        base_proxy
-        # Sum emissions
-        .groupby(["month", "crop", "state_code", "Acres", "geometry"], as_index=False)
-        .agg({"EMCH4_Gg": "sum"})
-        # Calculate state relative emissions (emissions / state emissions)
+    # we now explode out the 1 year of data to all years of our study period
+    out_crop_gdf = (
+        year_gdf.assign(year=lambda df: [years for _ in range(df.shape[0])])
+        .explode("year")
         .assign(
-            state_crop_sum=lambda x: x.groupby(["state_code", "crop"])[
-                "EMCH4_Gg"
-            ].transform("sum"),
-            rel_emi=lambda x: x["EMCH4_Gg"] / x["state_crop_sum"],
+            year_month=lambda df: pd.to_datetime(
+                df[["year", "month"]].assign(DAY=1)
+            ).dt.strftime("%Y-%m"),
         )
-        # Filter for current crop
-        .query("crop == @filter_condition")
-        .drop(columns=["state_crop_sum", "EMCH4_Gg", "crop"])
-        # Set geometry and CRS
-        .set_geometry("geometry")
-        .set_crs("EPSG:4326")
     )
+    # we create the emissions data for the monthly scaling factor
+    out_crop_gdf["annual_rel_emi"] = out_crop_gdf.groupby(["state_code", "year"])[
+        "emch4_gg"
+    ].transform(normalize)
+    # we create the relative emissions for each month
+    out_crop_gdf["rel_emi"] = out_crop_gdf.groupby(["state_code", "year_month"])[
+        "emch4_gg"
+    ].transform(normalize)
 
-    # Check if missing_states is empty
-    if missing_states:
-        alt_proxy = (
-            base_proxy
-            # Create generalized state relative emissions (without respect to crop)
-            .assign(
-                state_sum=lambda x: x.groupby(["state_code"])["EMCH4_Gg"].transform(
-                    "sum"
-                ),
-                rel_emi=lambda x: x["EMCH4_Gg"] / x["state_sum"],
+    ax = out_crop_gdf.query("year == 2022").plot(color="xkcd:scarlet", markersize=1)
+    state_gdf.boundary.plot(color="xkcd:slate", ax=ax)
+    ax.set_title(f"{proxy_name} proxy")
+
+    all_years = out_crop_gdf.year.drop_duplicates().isin(years).all()
+    print(f"are all years accounted for?: {all_years}")
+
+    # we make sure the monthly scaling factors pass a quick check
+    annual_all_eq_df = (
+        out_crop_gdf.groupby(["state_code", "year"])["annual_rel_emi"]
+        .sum()
+        .rename("sum_check")
+        .to_frame()
+        .assign(
+            is_close=lambda df: (
+                np.isclose(df["sum_check"], 1, atol=0, rtol=0.00001)
             )
-            .drop(columns=["EMCH4_Gg", "state_sum", "crop"])
-            # Filter for missing states only
-            .query("state_code in @missing_states")
-            # Set geometry and CRS
-            .set_geometry("geometry")
-            .set_crs("EPSG:4326")
         )
-        # Append to proxy_gdf
-        proxy_gdf = pd.concat([proxy_gdf, alt_proxy], ignore_index=True)
-
-    ################################################################################
-    # STEP 3. Transform Lat/Lon and Acres to Geometry Polygons
-    proxy_gdf = (
-        proxy_gdf.assign(geometry=lambda x: x.apply(create_circle_geometry, axis=1))
-        .drop(columns=["Acres"])
-        .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
     )
+    annual_all_eq_df
 
-    ################################################################################
-    # Step 4. Append missing Maine (ME) Proxy data, if necessary
-
-    # state: ME
-    # month: Jan-Dec
-    # rel_emi: Proportional to generic
-    # geometry: Polygon of ME
-
-    # Maine (ME) is missing proxy data for 'other' crop
-    if filter_condition == "other":
-        # Create Maine (ME) geometry
-        ME_geom = state_gdf.query("state_code == 'ME'")["geometry"].values[0]
-
-        # Get the Proportional EMCH4_Gg per month
-        ME_gdf = (
-            base_proxy.groupby("month", as_index=False)
-            .agg({"EMCH4_Gg": "sum"})
-            .assign(
-                ch4_sum=lambda x: x["EMCH4_Gg"].sum(),
-                rel_emi=lambda x: x["EMCH4_Gg"] / x["ch4_sum"],
-                geometry=ME_geom,
-                state_code="ME",
+    # we make sure the relative emissions for year_month pass
+    if not annual_all_eq_df["is_close"].all():
+        raise ValueError("not all annual values are normed correctly!")
+    all_eq_df = (
+        out_crop_gdf.groupby(["state_code", "year_month"])["rel_emi"]
+        .sum()
+        .rename("sum_check")
+        .to_frame()
+        .assign(
+            is_close=lambda df: (
+                np.isclose(df["sum_check"], 1, atol=0, rtol=0.00001)
             )
-            .drop(columns=["EMCH4_Gg", "ch4_sum"])
-            .loc[:, ["state_code", "month", "rel_emi", "geometry"]]
         )
+    )
+    all_eq_df
 
-        # Add ME data to proxy_gdf
-        proxy_gdf = pd.concat([proxy_gdf, ME_gdf], ignore_index=True)
-        # Set geometry and CRS
-        proxy_gdf = gpd.GeoDataFrame(proxy_gdf, geometry="geometry", crs="EPSG:4326")
+    if not all_eq_df["is_close"].all():
+        raise ValueError("not all year_month values are normed correctly!")
 
-    # Return proxy data
-    return proxy_gdf
-
-
-########################################################################################
-########################################################################################
-# %% Pytask
+    out_crop_gdf.to_parquet(out_path, index=False)
 
 
-# Cotton Proxy
-@mark.persist
-@task(id="fbar_proxy")
-def task_get_fbar_cotton_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_cotton_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="cotton", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Maize Proxy
-@mark.persist
-def task_get_fbar_maize_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_maize_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="maize", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Rice Proxy
-@mark.persist
-def task_get_fbar_rice_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_rice_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="rice", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Soybean Proxy
-@mark.persist
-def task_get_fbar_soybeans_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_soybeans_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="soybean", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Sugarcane Proxy
-@mark.persist
-def task_get_fbar_sugarcane_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_sugarcane_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="sugarcane", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Wheat Proxy
-@mark.persist
-def task_get_fbar_wheat_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_wheat_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="wheat", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
-
-
-# Other Proxy
-@mark.persist
-def task_get_fbar_other_proxy_data(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / "fbar_other_proxy.parquet",
-):
-    proxy_gdf = get_fbar_proxy_data(filter_condition="other", state_path=state_path)
-    proxy_gdf.to_parquet(output_path)
-    return None
+# %%

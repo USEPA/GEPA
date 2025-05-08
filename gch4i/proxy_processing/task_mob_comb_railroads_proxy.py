@@ -15,191 +15,136 @@ Output Files:           - {proxy_data_dir_path}/railroads_proxy.parquet
 
 from pathlib import Path
 from typing import Annotated
-from pytask import Product, mark, task
-
-import pandas as pd
-
-from gch4i.config import (
-    proxy_data_dir_path,
-    global_data_dir_path,
-    max_year,
-    min_year
-)
 
 import geopandas as gpd
-from shapely.geometry import MultiLineString, LineString, GeometryCollection
-from shapely.validation import make_valid
+import numpy as np
+import pandas as pd
+from joblib import Parallel, delayed
+from pytask import Product, mark, task
+from tqdm.auto import tqdm
 
+from gch4i.config import global_data_dir_path, proxy_data_dir_path, years
+from gch4i.utils import normalize
+
+parallel = Parallel(n_jobs=-1, verbose=10)
 
 ########################################################################################
 # %% Define variable constants
-year_range = [*range(min_year, max_year+1, 1)]
-
+# year_range = [*range(min_year, max_year+1, 1)]
 
 ########################################################################################
 # %% Functions
+# @mark.persist
+# @task(id="railroads_proxy")
+# def task_get_railroads_proxy(
+raw_path = global_data_dir_path / "raw"
+
+rail_input_paths = []
+for year in years:
+    rail_input_paths.append(raw_path / f"tl_{year}_us_rails.parquet")
+
+# %%
+# ):
+"""
+Process railroad geometries by state. Multilinestring geometries are exploded into
+individual linestrings and clipped to state boundaries.
+
+`raw_path` is the path to raw railroad data; however, it is not included in the
+pytask function arguments because it is not a file, but a directory of files
+
+Args:
+    state_path: GeoDattaFrame containing state geometries.
+
+Returns:
+    reporting_proxy_output: GeoDataFrame containing processed railroad geometries.
+"""
 
 
-def read_states(state_path):
-    """
-    Read in State spatial data
-    """
-
-    states_gdf = gpd.read_file(state_path)
-
-    states_gdf = states_gdf[~states_gdf['STUSPS'].isin(
-        ['VI', 'MP', 'GU', 'AS', 'PR', 'AK', 'HI']
-        )]
-    states_gdf = states_gdf[['STUSPS', 'NAME', 'geometry']]
-    states_gdf = states_gdf.to_crs("ESRI:102003")
-
-    return states_gdf
+# Raw Railroad Data Path
+# %%
 
 
-# Extract Line geometries from Geometry Collections
-def extract_lines(geom):
-    if geom is None:
-        return None
-    if isinstance(geom, (LineString, MultiLineString)):
-        # Return the geometry
-        return geom
-    elif isinstance(geom, GeometryCollection):
-        # Filter the collection to include only LineString or MultiLineString
-        lines = [g for g in geom.geoms if isinstance(g, (LineString, MultiLineString))]
-        if len(lines) == 1:
-            return lines[0]
-        elif len(lines) > 1:
-            return MultiLineString(lines)
+def state_overlay(input_path, state_in_path):
+
+    the_year = input_path.name.split("_")[1]
+    out_path = raw_path / f"railroads_{the_year}_overlay.parquet"
+    if not out_path.exists():
+        state_gdf = (
+            gpd.read_file(state_in_path)
+            .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+            .rename(columns=str.lower)
+            .rename(columns={"stusps": "state_code", "name": "state_name"})
+            .astype({"statefp": int})
+            # get only lower 48 + DC
+            .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+            .to_crs(4326)
+        )
+        year_rail_gdf = gpd.read_parquet(
+            input_path, columns=["MTFCC", "geometry"]
+        ).to_crs(4326)
+        year_rail_gdf = gpd.overlay(year_rail_gdf, state_gdf, how="intersection")
+        year_rail_gdf.to_parquet(out_path, index=False)
     else:
-        return None
+        year_rail_gdf = gpd.read_parquet(out_path)
+
+    return year_rail_gdf
 
 
-# Process geometry column
-def process_geometry_column(gdf):
-    # Apply the extract_lines function
-    gdf['geometry'] = gdf['geometry'].apply(extract_lines)
-
-    # Remove rows where geometry is None
-    gdf = gdf.dropna(subset=['geometry'])
-
-    # Ensure the GeoDataFrame only contains LineString and MultiLineString
-    gdf = gdf[gdf['geometry'].apply(lambda geom: isinstance(geom, (LineString, MultiLineString)))]
-
-    # Explode MultiLineStrings into LineStrings
-    gdf = gdf.explode(index_parts=True).reset_index(drop=True)
-
-    return gdf
-
-
-def process_roads(railroad_data, states_gdf):
-    final_roads = []
-
-    # Process each state
-    for _, state in states_gdf.iterrows():
-        # Create single state GeoDataFrame
-        state_gdf = gpd.GeoDataFrame(geometry=[state.geometry], crs=states_gdf.crs)
-
-        # Clip roads to state boundary
-        state_roads = gpd.clip(railroad_data, state_gdf)
-
-        if not state_roads.empty:
-            # Add state identifier
-            state_roads['STUSPS'] = state.STUSPS
-
-        final_roads.append(state_roads)
-
-    # Combine all results & Deduplicate
-    final_result = pd.concat(final_roads)
-    final_result = process_geometry_column(final_result)
-    final_result = final_result.drop_duplicates(subset=['geometry'])
-
-    return final_result
-
-########################################################################################
-# %% Pytask Function
+# %%
 
 
 @mark.persist
 @task(id="railroads_proxy")
-def task_get_railroads_proxy(
+def task_railroad_proxy(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_proxy_output: Annotated[Path, Product] = proxy_data_dir_path / "railroads_proxy.parquet"
+    input_paths: list[Path] = rail_input_paths,
+    output_proxy_path: Annotated[Path, Product] = (
+        proxy_data_dir_path / "railroads_proxy.parquet"
+    ),
 ):
-    """
-    Process railroad geometries by state. Multilinestring geometries are exploded into
-    individual linestrings and clipped to state boundaries.
+    # %%
+    state_gdf = (
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
+    )
+    # %%
+    rail_list = parallel(
+        delayed(state_overlay)(input_path=x, state_in_path=state_path)
+        for x in input_paths
+    )
+    # %%
+    rail_list_w_years = []
+    for year, rail_gdf in zip(years, rail_list):
+        geom_mask = (~rail_gdf.is_empty) | (rail_gdf.is_valid)
+        print(f"Number of invalid geometries for {year}: {(~geom_mask).sum()}")
+        rail_list_w_years.append(
+            rail_gdf.assign(year=year).drop(columns="MTFCC").dissolve("state_code")
+        )
 
-    `raw_path` is the path to raw railroad data; however, it is not included in the
-    pytask function arguments because it is not a file, but a directory of files
+    # %%
+    rail_proxy_gdf = pd.concat(rail_list_w_years).reset_index().assign(rel_emi=1)
+    rail_proxy_gdf
+    # %%
 
-    Args:
-        state_path: GeoDattaFrame containing state geometries.
+    all_eq_df = (
+        rail_proxy_gdf.groupby(["state_code", "year"])["rel_emi"]
+        .sum()
+        .rename("sum_check")
+        .to_frame()
+        .assign(
+            is_close=lambda df: (np.isclose(df["sum_check"], 1, atol=0, rtol=0.00001))
+        )
+    )
 
-    Returns:
-        reporting_proxy_output: GeoDataFrame containing processed railroad geometries.
-    """
-
-    # Raw Railroad Data Path
-    raw_path = global_data_dir_path / "raw"
-
-    # Read in Railroad spatial data
-    # Initialize railroad list
-    rail_list = []
-    # Read in year by year
-    for year in year_range:
-        rail_loc = (gpd.read_parquet(f"{raw_path}/tl_{year}_us_rails.parquet",
-                                     columns=['MTFCC', 'geometry'])
-                    .assign(year=year)
-                    .drop(columns=['MTFCC']))
-        # Append data to railroad list
-        rail_list.append(rail_loc)
-    # Concatenate all years
-    railroads = pd.concat(rail_list)
-    # Convert to CRS 102003 for processing
-    railroads.to_crs("ESRI:102003", inplace=True)
-
-    # Read in State spatial data
-    states_gdf = read_states(state_path)
-
-    # Join Railroad and State spatial data
-    # Initialize railroad list
-    rail_list = []
-    # Read in year by year
-    for year in year_range:
-        # Filter by year
-        rail_year = railroads[railroads['year'] == year]
-        # Process roads (Join with state data, explode out multi-geometries, etc.)
-        filtered_railroads = process_roads(rail_year, states_gdf)
-
-        # Append data to railroad list
-        rail_list.append(filtered_railroads)
-    # Concatenate all years
-    railroads_filtered = pd.concat(rail_list)
-
-    # Dissolve
-    railroad_proxy = railroads_filtered #.reset_index(drop=True)
-    #railroad_proxy = railroads_filtered.dissolve(by=['STUSPS', 'year']).reset_index()
-    # Change column names
-    railroad_proxy = railroad_proxy.rename(columns={'STUSPS': 'state_code'})
-    # Set geometry: 4326
-    railroad_proxy = railroad_proxy.set_geometry('geometry').to_crs("EPSG:4326")
-
-    # Make valid geometries
-    railroad_proxy['geometry'] = railroad_proxy['geometry'].apply(make_valid)
-
-    # Drop non-LineString geometries
-    railroad_proxy = railroad_proxy[railroad_proxy['geometry'].apply(
-        lambda geom: isinstance(geom, (LineString, MultiLineString)))]
-
-    # Testing lengths <5m
-    railroad_proxy = railroad_proxy.to_crs("ESRI:102003")
-    railroad_proxy['length_m'] = railroad_proxy.geometry.length
-    railroad_proxy = railroad_proxy[railroad_proxy['length_m'] >= 5]
-    railroad_proxy = railroad_proxy.to_crs("EPSG:4326")
-
-    # Reset index
-    railroad_proxy = railroad_proxy.reset_index(drop=True)
-
-    # Save output
-    railroad_proxy.to_parquet(reporting_proxy_output)
-    return None
+    if all_eq_df["is_close"].all():
+        rail_proxy_gdf.to_parquet(output_proxy_path)
+        print("YAY")
+    else:
+        raise ValueError("not all year values are normed correctly!")
+    # %%
