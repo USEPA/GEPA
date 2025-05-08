@@ -195,6 +195,8 @@ for _id, kwargs in param_dict.items():
             eia_file_path = [x for x in eia_paths if str(year) in x.name][0]
             e_df = pd.read_excel(eia_file_path, skiprows=3, usecols=eia_cols)
 
+          #EEM: e_df is a list of both underground and surface mines, right? I think we want to have separate mines lists for underground and surface
+
             # rename some columns for easier use, get only the correct mine type
             e_df = (
                 e_df.rename(
@@ -212,6 +214,7 @@ for _id, kwargs in param_dict.items():
             )
 
             # read the mines list from the inventory
+          #EEM: the inventory workbooks only includes a list of underground mines, right?
             sheet_name = f"UG-{year}"
             if year == 2012:
                 skip_rows = 2
@@ -238,6 +241,8 @@ for _id, kwargs in param_dict.items():
                 f"{year} missing MINE ID: {year_mine_df['MSHA Mine ID'].isna().sum()}"
             )
 
+          # EEM: does this join limit the year_mine_df list to those from the inventory only, but add the msha and eia data to that list?
+          ## What I'm asking is whether this list of mines includes all surface and underground mines, or just underground mines. 
             year_mine_df = (
                 year_mine_df.rename(columns={"MSHA Mine ID": "MINE_ID"})
                 .dropna(subset=["MINE_ID"])
@@ -286,14 +291,25 @@ for _id, kwargs in param_dict.items():
             pd.concat(inv_mines_list)
             .reset_index()
             .set_index(["MINE_ID", "year"])
-            .assign(net_emi_tg=lambda df: df["Total Vent Emis (mmcf/yr)"] / mmcf_to_Gg)
+            .assign(net_emi_tg=lambda df: df["Total Vent Emis (mmcf/yr)"] / mmcf_to_Gg) #EEM: the UG liberated emissions for each state are actually the sum of the 
+          # Total Vent Emis column + Total Drainage (mmcf) columns. So that should be added here. Also, in the spreadsheets, these Total Vent and Total Drainage
+          # columns also have the year in the column headers (e.g., Total Drainage 2020 (mmcf)", so please confirm that those years are not messing up the column assignment in this step
+          # Also confirming that we do not need to add the relative EF weights for underground mines because the proxy is the relative emission, not the relative production
             .rename(mapper=lambda x: x.lower().replace(" ", "_"), axis=1)
             # .fillna({"production": 0, "net_emi_tg": 0})
             # .query("(production > 0) | (net_emi_tg > 0)")
         )
         inv_mines_df
+
+      # EEM: note for future improvement, the GHGI workbook actually includes the avoided emissions by mine that are used to calculate the underground recovered and used emissions. 
+      ## Currently, when processing the GHGI emissions, we consider the sum of liberated + recovered and used emissions at the state level, but we could update the methods
+      ## in the future to calculate the net liberated + recovered & used emissions at the mine level instead. This is only relevant to the underground mine emissions. 
+      
         # %%
         # create points from the lat/lons, spatial join with the states
+      # EEM: we are missing a step here from v2 where the MSHA lat/lons for underground and surface mines were corrected based on a previous comparison with 
+      # Google map searches. The files with the corrected locations are already in the data input folder. The example code from v2 is in Step 2.4.3: https://github.com/USEPA/GEPA/blob/v1.0/code/GEPA_Coal/1B1a_Coal.ipynb
+      # This is also where we could make the mine location correction of the San Juan mine in NM that a user pointed out previously. 
         inv_mines_gdf = gpd.GeoDataFrame(
             inv_mines_df.drop(columns=["latitude", "longitude"]),
             geometry=gpd.points_from_xy(inv_mines_df.longitude, inv_mines_df.latitude),
@@ -321,6 +337,7 @@ for _id, kwargs in param_dict.items():
         inv_mines_gdf.groupby("year")["total_vent_emis_(mmcf/yr)"].sum()
         # They do!
         # %%
+      #EEM: is the below comment old? If so, please delete
         # XXX: where do I find in the inventory workbook the total production for the
         # year to validate these values?
         inv_mines_gdf.groupby("year")["net_emi_tg"].sum()
@@ -358,14 +375,18 @@ for _id, kwargs in param_dict.items():
         # TODO: if EPA approves, split the mines into post and regular here. then
         # proceed with the weighted production calculation and normalization for each
         # of them.
+      #EEM: is this a list of the underground mines only or both surface and underground?
         post_proxy_gdf = inv_mines_gdf.query("production > 0").copy()
 
-        # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)" are
-        # listed in the original code, they are not calculated differently from "other".
-        # It is not clear why they are listed separately.
+      #EEM: these factors are applied because there are multiple basins within KY and WV that have different EF's, 
+      # and we want to add that relative weighting to the mines in each basin. We don't need to weight by the EF's
+      # for the other states because all the mines in the state have the same EF and therefore, the only difference
+      # between the mines in those states are the relative production differences. At some point the mines in PA had
+    # different EF's, but that is no longer the case, so PA can be treated like all the other states. 
         # HOWEVER, we're getting vastly different values than v2, so something is wrong.
 
-        def calc_prod_emi(data):
+# EEM: these are the post-mining, underground EF's for the different basins in KY and WV, from the 'Post U E' tab in the GHGI workbook
+        def calc_prod_emi_und(data):
             mine_state = data.name
             print(mine_state)
             prod_coef_dict = {
@@ -383,7 +404,7 @@ for _id, kwargs in param_dict.items():
 
         post_proxy_gdf["weighted_prod"] = (
             post_proxy_gdf.groupby(["mine_state"])
-            .apply(calc_prod_emi, include_groups=False)
+            .apply(calc_prod_emi_und, include_groups=False)
             .rename("weighted_production")
             .droplevel([0])
         )
@@ -405,6 +426,7 @@ for _id, kwargs in param_dict.items():
             display(post_all_close_1[~post_all_close_1])
 
         # %%
+          
         coal_proxy_gdf = inv_mines_gdf.query("net_emi_tg > 0").copy()
 
         coal_proxy_gdf["rel_emi"] = coal_proxy_gdf.groupby(["year", "state_code"])[
@@ -442,7 +464,29 @@ for _id, kwargs in param_dict.items():
         post_proxy_gdf.to_parquet(output_path_coal_post)
 
         # %%
+        #EEM we also need separate coal proxies for surface mines and surface post mining
+        # this list of mines is from EIA (already processed as e_df, but filtered to only include 'Surface' mines)
+        # Both active mines and post-mining activities for surface mines will be based on relative mine production levels
+        # therefore, similar to the und post_proxy above, we need to correct the KY and WV production values with the relative EF weights (from the 'Surface & Post SU' tab in the GHGI workbook)
+        def calc_prod_emi_surf(data):
+            mine_state = data.name
+            print(mine_state)
+            prod_coef_dict = {
+                "Kentucky (East)": 24.9,
+                "Kentucky (West)": 34.3,
+                "West Virginia (Northern)": 59.5,
+                "West Virginia (Southern)": 24.9,
+            }
 
+            if mine_state in list(prod_coef_dict.keys()):
+                res = data["production"] * prod_coef_dict[mine_state]
+            else:
+                res = data["production"]
+            return res
+
+#next, calculate the coal_surf_proxy using the weighted relative production values for each mine and apply to both surface and post mining surface emissions
+
+#EEM: can we delete the comment below?
 
 # Below I was trying to troubleshoot some of the production data differences between the
 # v2 and v3 data. I was trying to compare the production data for underground mines.
