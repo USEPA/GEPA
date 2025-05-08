@@ -149,7 +149,7 @@ class CreateFinalNetCDFs:
 # %%
 file_writer = CreateFinalNetCDFs()
 file_writer.write_outputs()
-
+# %%
 
 # For reference, we can look at the attributes (and other features) of the v2 data
 # # %%
