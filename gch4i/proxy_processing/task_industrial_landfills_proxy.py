@@ -46,6 +46,7 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
+# Change the name of this variable (I believe that this should be mt_to_kt)
 tg_to_kt = 0.001
 year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
