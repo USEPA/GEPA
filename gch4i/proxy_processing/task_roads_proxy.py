@@ -62,7 +62,6 @@ from gch4i.config import (
     load_road_globals
 )
 
-from gch4i.gridding import GEPA_spatial_profile
 from gch4i.utils import *
 
 """
