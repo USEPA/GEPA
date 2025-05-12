@@ -29,6 +29,7 @@ from gch4i.config import (
 
 from gch4i.utils import name_formatter
 
+# change this variable name to 'mt_to_kt'
 tg_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
 mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 
