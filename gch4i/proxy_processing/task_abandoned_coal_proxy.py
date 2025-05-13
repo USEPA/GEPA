@@ -465,9 +465,7 @@ def task_get_abd_coal_proxy_data(
         "& (date_abd.dt.year < @min_year)"
         "& (reopen_date.dt.year < @min_year)"
     ).sort_values("reopen_date")
-    reference_mines_df = reference_mines_df.drop(
-        index=questionable_mines_df.index
-    )
+    reference_mines_df = reference_mines_df.drop(index=questionable_mines_df.index)
     questionable_mines_df
     # %%
 
@@ -478,9 +476,7 @@ def task_get_abd_coal_proxy_data(
         "& (date_abd.dt.year < @min_year)"
         "& (reopen_date.dt.year < @min_year)"
     ).sort_values("reopen_date")
-    reference_mines_df = reference_mines_df.drop(
-        index=now_closed_mines_df.index
-    )
+    reference_mines_df = reference_mines_df.drop(index=now_closed_mines_df.index)
     now_closed_mines_df
     # %%
     # We also have mines that have an abandoned date but no reopen date, so we assume
@@ -488,9 +484,7 @@ def task_get_abd_coal_proxy_data(
     never_reopened_mines_df = reference_mines_df.query(
         "date_abd.dt.year < @min_year" "& (reopen_date.isna())"
     )
-    reference_mines_df = reference_mines_df.drop(
-        index=never_reopened_mines_df.index
-    )
+    reference_mines_df = reference_mines_df.drop(index=never_reopened_mines_df.index)
     never_reopened_mines_df
 
     # %%
@@ -500,14 +494,17 @@ def task_get_abd_coal_proxy_data(
     abandoned_during_study_df = reference_mines_df.query(
         "(date_abd.dt.year < @min_year) & (reopen_date.dt.year > @max_year)"
     ).sort_values("date_abd")
-    reference_mines_df = reference_mines_df.drop(
-        index=abandoned_during_study_df.index
-    )
+    reference_mines_df = reference_mines_df.drop(index=abandoned_during_study_df.index)
     abandoned_during_study_df
     # %%
 
     always_abandoned_mines_df = pd.concat(
-        [questionable_mines_df, now_closed_mines_df, never_reopened_mines_df, abandoned_during_study_df]
+        [
+            questionable_mines_df,
+            now_closed_mines_df,
+            never_reopened_mines_df,
+            abandoned_during_study_df,
+        ]
     )
     always_abandoned_mines_df.sort_values("date_abd")
 
@@ -518,9 +515,11 @@ def task_get_abd_coal_proxy_data(
         "date_abd.dt.year.between(@min_year, @max_year) | "
         "reopen_date.dt.year.between(@min_year, @max_year)"
     )
-    reference_mines_df = reference_mines_df.drop(
-        index=has_status_change_df.index
+    has_2_status_change_df = has_status_change_df.query(
+        "date_abd.dt.year.between(@min_year, @max_year)"
+        "& reopen_date.dt.year.between(@min_year, @max_year)"
     )
+    reference_mines_df = reference_mines_df.drop(index=has_status_change_df.index)
     has_status_change_df.sort_values("date_abd")
 
     # %%
