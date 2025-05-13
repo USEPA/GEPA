@@ -91,6 +91,8 @@ def get_composting_proxy_data(
         .to_crs(4326)
     )
 
+  #the logic for this section is that we want to prioritize EPA facility location data. Next prioritize biocycle and composting council, and then fill in remaining gaps with FRS 
+  # First, we need to remove duplicates within 250 m within the EPA data set
     # read in the composting facilities data
     excess_food_df = (
         pd.read_excel(
@@ -103,22 +105,8 @@ def get_composting_proxy_data(
         )
     )
 
-    # get the composting facilities from the FRS database based on the NAICS code.
-    # I use duckdb for a bit of performance in these very large tables over pandas.
-    frs_composting_fac_df = (
-        duckdb.execute(
-            (
-                "SELECT frs_main.primary_name as name, frs_main.latitude83 as latitude, frs_main.longitude83 as longitude "  # noqa
-                f"FROM (SELECT registry_id, primary_name, latitude83, longitude83 FROM '{frs_facility_path}') as frs_main "  # noqa
-                f"JOIN (SELECT registry_id, naics_code FROM '{frs_naics_path}') AS frs_naics "  # noqa
-                "ON frs_main.registry_id = frs_naics.registry_id "
-                f"WHERE naics_code == {COMPOSTING_FRS_NAICS_CODE}"
-            )
-        )
-        .df()
-        .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
-    )
-
+  # for both the biocycle and composting council datasets, we have less confidence in the location data, therefore,
+  # we want to compare the locations of facilities with the EPA data and remove any facilities that are within 2.5 km of an EPA facility, 
     # read in the biocycle composting facilities data
     biocycle_df = (
         pd.read_csv(biocycle_path)
@@ -142,6 +130,29 @@ def get_composting_proxy_data(
         )
     )
 
+    # Last, read in the FRS data and remove and duplicate facilities within 250 m from within this data set,
+  # then, compare against the other three datasets and remove any facilities that are within 2.5km of any other facilities. 
+  
+    # get the composting facilities from the FRS database based on the NAICS code.
+    # I use duckdb for a bit of performance in these very large tables over pandas.
+
+  # In v2, we also read in the 'Collect_Desc' column and filtered the data for all "collect_Desc' != 'INTERPOLATION-OTHER'. We should make sure that is implemented here too
+    frs_composting_fac_df = (
+        duckdb.execute(
+            (
+                "SELECT frs_main.primary_name as name, frs_main.latitude83 as latitude, frs_main.longitude83 as longitude "  # noqa
+                f"FROM (SELECT registry_id, primary_name, latitude83, longitude83 FROM '{frs_facility_path}') as frs_main "  # noqa
+                f"JOIN (SELECT registry_id, naics_code FROM '{frs_naics_path}') AS frs_naics "  # noqa
+                "ON frs_main.registry_id = frs_naics.registry_id "
+                f"WHERE naics_code == {COMPOSTING_FRS_NAICS_CODE}"
+            )
+        )
+        .df()
+        .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
+    )
+
+  # lastly, after filtering for duplicates, all four datasets can be combined into a single dataframe
+  
     # there is a two step process to get all facilities in one dataframe:
     # 1) put together the facilities that have lat/lon columns and make them
     # geodataframes,
@@ -167,7 +178,9 @@ def get_composting_proxy_data(
     # resulting centroid will be at the intersection of their buffers.
     final_facility_gdf = (
         facility_concat_2_gdf.to_crs("ESRI:102003")
-        .assign(geometry=lambda df: df.buffer(DUPLICATION_TOLERANCE_M))
+        .assign(geometry=lambda df: df.buffer(DUPLICATION_TOLERANCE_M)) # removing facilities at this step does not filter out as many duplicate facilities as the above recommended approach
+        # also, how does the above filter work? i.e., within a 250m radius, which facility does this keep and which does it remove? Since this is a different method than v2, I'm wondering if there are two facilities in neighboring grid cells and the v2 code keeps facility #1, whether this code is keeping facility #2.
+      # I'm noticing some red and blue grid cells next to each other in the v2/v3 comparison map, so I'm just speculating wh ythat would be the case. 
         .dissolve()
         .explode()
         .centroid.to_frame()
