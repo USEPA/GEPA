@@ -363,6 +363,7 @@ def create_wastewater_proxy_files(
             year_emi.loc[:, 'state_ghgi_emis'] = year_emi['state_proportion'] * year_national_emis_available
 
             # Give 75% of the emis to ECHO and 25% to FRS
+          # can we provide more background as to why this split is implemented?
             year_emi.loc[:, 'echo_emis'] = year_emi.loc[:, 'state_ghgi_emis'] * 0.75
             year_emi.loc[:, 'frs_emis'] = year_emi.loc[:, 'state_ghgi_emis'] * 0.25
             
@@ -499,6 +500,11 @@ def create_wastewater_proxy_files(
         # Some GHGRP data are empty after trying to join the GHGRP emi and facility data and have len == 0. Only look for spatial matches if there is GHGRP data.
         if len(ghgrp_df) != 0:
             # Check for very extreme outliers in ghgrp and drop them. This specifically targets a facility in ethanol that had over 500 times the IQR and alone had an order of magnitude more emis than the entire country in 2014.
+          # in v2, there were two corrections we had to make to the GHGRP ethanol data (below):
+          ##CORRECT REPORTING ERROR IN 2014 & negative reported value###
+          ##ghgrp_eth.loc[(ghgrp_eth['Year']==2014) & (ghgrp_eth['V_GHG_EMITTER_FACILITIES.FACILITY_NAME']=='Hub City Energy'),'emis_kt_tot'] /= 100
+          ##ghgrp_eth.loc[:,'emis_kt_tot'] = abs(ghgrp_eth.loc[:,'emis_kt_tot'])
+          # both should be implemented here instead of dropping those facilities. 
             iqr = ghgrp_df['emis_kt'].quantile(0.75) - ghgrp_df['emis_kt'].quantile(0.25)
             ghgrp_df = ghgrp_df[ghgrp_df['emis_kt'] < 500 * iqr].copy()
 
@@ -891,6 +897,7 @@ def create_wastewater_proxy_files(
     # %% Step 2.1 Read in and process FRS data
 
     # Subset the FRS data to only those sectors we need 
+      # naics codes for fv should only be those that start with 3114
     naics_codes = {
         'pp': '3221',
         'mp': '3116',
@@ -997,7 +1004,7 @@ def create_wastewater_proxy_files(
         brewery_df.to_csv(brewery_file, index=False)
 
 
-    # %% Step 2.2.2 Deduplicate brewery facilities by latitude and longitude - breweries will be removed if they occur within 0.25 km of each other
+    # %% Step 2.2.2 Duplicate brewery facilities by latitude and longitude - breweries will be removed if they occur within 0.25 km of each other
     filter_distance = 0.25 # 0.25 km
 
     # Extract coordinates
@@ -1076,6 +1083,8 @@ def create_wastewater_proxy_files(
     echo_nonpotw['SIC Code'] = echo_nonpotw['SIC Code'].astype(str)
 
     # Define the industries and their corresponding NAICS prefixes and SIC codes
+       # following the v2 approach, the fruit and veggie industry should be limited to NAICS code that start with '3114' only. 
+      # also remove the SIC codes 2038 and 2099
     industries = {
         'pp': ('3221', ['2611', '2621', '2631']),
         'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
@@ -1118,6 +1127,7 @@ def create_wastewater_proxy_files(
     ghgrp_ind['State'] = ghgrp_ind['State'].str.title().map(us_state_to_abbrev_dict)
 
     # Filter data for different industries
+      # following the v2 approach, the fruit and veggie industry should be limited to NAICS code that start with '3114' only. 
     industry_filters = {
         'pp': '322',      # Pulp and paper
         'mp': '3116',     # Red meat and poultry
