@@ -2027,7 +2027,8 @@ class GroupGridder(BaseGridder):
         Function to plot the raster data for each year in the dictionary of rasters that are
         output at the end of each sector script.
         """
-        fg = self.annual_flux_da.where(lambda x: x > 0).plot.imshow(
+        plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x > 0)
+        fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=self.emi_custom_colormap,
@@ -2082,8 +2083,11 @@ class GroupGridder(BaseGridder):
             lambda x: x > 0
         )
 
-        c_map, c_norm = self._get_cmap(self.difference_raster)
-        fg = self.difference_raster.plot(
+        plotting_data = self.difference_raster / 1e10
+
+        c_map, c_norm = self._get_cmap(plotting_data)
+        # Convert from cm^2 to km^2: 1 km^2 = 1e10 cm^2
+        fg = plotting_data.plot(
             cmap=c_map,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
@@ -2324,8 +2328,9 @@ class GroupGridder(BaseGridder):
         plt.close()
 
     def _plot_difference_map(self):
-        c_map, c_norm = self._get_cmap(self.flux_diff_da)
-        fg = self.flux_diff_da.plot.imshow(
+        plotting_data = self.flux_diff_da / 1e10
+        c_map, c_norm = self._get_cmap(plotting_data)
+        fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=c_map,
@@ -2445,7 +2450,7 @@ class GroupGridder(BaseGridder):
             c_map = "Blues"
         else:
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
-            c_map = "coolwarm"
+            c_map = "bwr"
 
         return c_map, c_norm
 
