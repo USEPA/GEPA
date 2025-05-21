@@ -112,7 +112,7 @@ high_res_area_input_path: Path = global_data_dir_path / "gridded_area_001_cm2.ti
 # the low res area path used as a referenc to build xarray datasett
 area_input_path: Path = global_data_dir_path / "gridded_area_01_cm2.tif"
 # the county shapefile which is used to normalize data to the right geographic level
-county_path: str = global_data_dir_path / "tl_2020_us_county.zip"
+county_path: Path = global_data_dir_path / "tl_2020_us_county.zip"
 # the outputs paths for all the proxies
 output_paths: Annotated[list[Path], Product] = dst_paths
 
