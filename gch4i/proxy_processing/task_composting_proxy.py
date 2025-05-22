@@ -51,7 +51,7 @@ composting_dir = sector_data_dir_path / "composting"
 @mark.persist
 @task(id="composting_proxy")
 def get_composting_proxy_data(
-    excess_food_op_path: Path = composting_dir / "CompostingFacilities.xlsx",
+    excess_food_op_path: Path = composting_dir / "CompostFacilities.xlsx",
     frs_facility_path: Path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
     frs_naics_path: Path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
     biocycle_path: Path = composting_dir / "biocycle_locs_clean.csv",
@@ -79,7 +79,9 @@ def get_composting_proxy_data(
     Returns:
         Creates a parquet file containing facility locations with state codes.
     """
+    # %%
     # read in state geometries
+    # and filter to only the lower 48 states + DC
     state_gdf = (
         gpd.read_file(state_geo_path)
         .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
@@ -147,10 +149,10 @@ def get_composting_proxy_data(
             duckdb.execute(
                 (
                     "SELECT frs_main.primary_name as name, frs_main.latitude83 as latitude, frs_main.longitude83 as longitude "  # noqa
-                    f"FROM (SELECT registry_id, primary_name, latitude83, longitude83 FROM '{frs_path}') as frs_main "  # noqa
+                    f"FROM (SELECT registry_id, primary_name, latitude83, longitude83, COLLECT_DESC FROM '{frs_path}') as frs_main "  # noqa
                     f"JOIN (SELECT registry_id, naics_code FROM '{naics_path}') AS frs_naics "  # noqa
                     "ON frs_main.registry_id = frs_naics.registry_id "
-                    f"WHERE naics_code == {COMPOSTING_FRS_NAICS_CODE}"
+                    f"WHERE naics_code == {COMPOSTING_FRS_NAICS_CODE} AND collect_desc != 'INTERPOLATION-OTHER'"
                 )
             )
             .df()
@@ -277,6 +279,10 @@ def get_composting_proxy_data(
 
     if not all_eq_df["is_close"].all():
         raise ValueError("not all values are normed correctly!")
+    # %%
+    # this shows that all states (except for DC which we note) have more than 2
+    # facilities. We therefore do not include populaiton data for any state as in v2.
+    proxy_gdf.groupby("state_code").size().sort_values(ascending=True)
     # %%
     # final plot of the data by source
     ax = state_gdf.boundary.plot(color="xkcd:slate", linewidth=0.5)
