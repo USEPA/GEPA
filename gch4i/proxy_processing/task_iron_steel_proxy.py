@@ -211,28 +211,28 @@ def task_get_iron_steel_proxy_data(
     # Normalize relative emissions to state and year for each facility
 
     # Step 0: Drop empty ghg_quantity
-    proxy_df = proxy_df[proxy_df['ghg_quantity'] > 0]
+    full_proxy_df = proxy_df[proxy_df['ghg_quantity'] > 0]
 
     # Step 1: Calculate the sum of emissions for each state-year group
-    proxy_df['total_emissions'] = (
-        proxy_df.groupby(['state_code', 'year'])['ghg_quantity'].transform('sum')
+    full_proxy_df['total_emissions'] = (
+        full_proxy_df.groupby(['state_code', 'year'])['ghg_quantity'].transform('sum')
     )
 
     # Step 2: Normalize the emissions for each facility
-    proxy_df['rel_emi'] = proxy_df['ghg_quantity'] / proxy_df['total_emissions']
+    full_proxy_df['rel_emi'] = full_proxy_df['ghg_quantity'] / full_proxy_df['total_emissions']
 
     # Step 3: Drop the total_emissions column
-    proxy_df = proxy_df.drop(columns=['total_emissions'])
+    full_proxy_df = full_proxy_df.drop(columns=['total_emissions'])
 
     ####################################################################################
     # %% Geopandas conversion
 
     proxy_gdf = (
         gpd.GeoDataFrame(
-            proxy_df,
+            full_proxy_df,
             geometry=gpd.points_from_xy(
-                proxy_df["longitude"],
-                proxy_df["latitude"],
+                full_proxy_df["longitude"],
+                full_proxy_df["latitude"],
                 crs=4326,
             )
         )
@@ -276,28 +276,60 @@ def task_get_iron_steel_proxy_data(
 
     missing_states = emi_states.difference(proxy_states)
 
-    # Add missing states alternative data to grouped_proxy
+    ####################################################################################
+    # If missing_states, then create and append alternative proxy
     if missing_states:
-        # Create alternative proxy from missing states
-        alt_proxy = (
-            pd.DataFrame(missing_states, columns=['state_code', 'year'])
-            # Assign facility_id and _name to NA, and make rel_emi = 1
-            .assign(
-                facility_id=pd.NA,
-                facility_name=pd.NA,
-                rel_emi=1
-            )
-            # Merge state polygon geometry
-            .merge(
-                state_gdf[['state_code', 'geometry']],
-                on='state_code',
-                how='left'
-            )
+
+        # Grab facilities from proxy_df that that have missing state/year data
+        unique_states = {state for (state, year) in missing_states}
+        missing_facilities = (
+            proxy_df.query("state_code in @unique_states")
+            .drop_duplicates(subset='facility_id')
         )
-        # Convert to GeoDataFrame
-        alt_proxy = gpd.GeoDataFrame(alt_proxy, geometry='geometry', crs='EPSG:4326')
+
+        # Begin missing state loop for alternate proxy data
+        rows = []
+
+        for state, year in missing_states:
+            # Filter facilities in this state (year doesn't matter)
+            state_facilities = missing_facilities[
+                missing_facilities['state_code'] == state
+                ]
+
+            n = len(state_facilities)
+            if n == 0:
+                # If no facilities in this state, skip
+                continue
+
+            # Assign 1/n to rel_emi for each row
+            for _, row in state_facilities.iterrows():
+                rows.append({
+                    'facility_id': row['facility_id'],
+                    'facility_name': row['facility_name'],
+                    'state_code': state,
+                    'year': year,
+                    'rel_emi': 1 / n,
+                    'latitude': row['latitude'],
+                    'longitude': row['longitude']
+                })
+
+        # Combine all rows into a DataFrame
+        missing_rows_df = pd.DataFrame(rows)
+
+        # Convert alt_proxy to GeoDataFrame
+        alt_proxy = gpd.GeoDataFrame(
+            missing_rows_df,
+            geometry=gpd.points_from_xy(
+                missing_rows_df["longitude"],
+                missing_rows_df["latitude"],
+                crs=4326,
+            )
+        ).drop(columns=["latitude", "longitude"])
+
         # Append to grouped_proxy
         proxy_gdf = pd.concat([proxy_gdf, alt_proxy], ignore_index=True)
+
+    ####################################################################################
 
     proxy_gdf.to_parquet(output_path)
     return None
