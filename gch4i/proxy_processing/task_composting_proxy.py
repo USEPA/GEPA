@@ -44,7 +44,6 @@ COMPOSTING_FRS_NAICS_CODE = 562219
 DUPLICATION_TOLERANCE_M = 2_500  # 2.5 km
 
 composting_dir = sector_data_dir_path / "composting"
-# %%
 
 
 # %% Pytask Function
@@ -93,25 +92,34 @@ def get_composting_proxy_data(
         .to_crs(4326)
     )
 
-    # This geom will be used to filter facilities spatially
+    # This geom will be used to filter facilities spatially.
     STATE_UNION = state_gdf.to_crs("ESRI:102003").union_all()
     # %%
 
     # read in facilities data from all the sources
 
-    def make_gdf(in_df):
+    def make_gdf(in_df, geo_filter):
+        """helper function to create a GeoDataFrame from the input DataFrame.
+
+        This expects the input DataFrame to have 'latitude' and 'longitude' columns
+        in CRS 4326. The output GeoDataFrame will be in the ESRI:102003 projection.
+        to allow for spatial operations.
+        """
+
+        # make the geodataframe from the input dataframe and reproject it.
         out_gdf = gpd.GeoDataFrame(
             in_df.drop(columns=["latitude", "longitude"]),
             geometry=gpd.points_from_xy(in_df["longitude"], in_df["latitude"]),
             crs=4326,
         ).to_crs("ESRI:102003")
+
+        # get only valid geometries and those that intersect with the state union
+        # geometry. This is to remove any points that are outside the US.
         out_gdf = out_gdf[out_gdf.is_valid & ~out_gdf.is_empty]
-        out_gdf = out_gdf[out_gdf.intersects(STATE_UNION)].loc[
-            :, ["source", "geometry"]
-        ]
+        out_gdf = out_gdf[out_gdf.intersects(geo_filter)].loc[:, ["source", "geometry"]]
         return out_gdf
 
-    def read_comp_coucil_data(in_path):
+    def read_comp_coucil_data(in_path, geo_filter):
         # google earth exports 3d points, covert them to 2d to avoid issues.
         def _drop_z(geom):
             return wkb.loads(wkb.dumps(geom, output_dimension=2))
@@ -129,22 +137,20 @@ def get_composting_proxy_data(
         )
 
         out_gdf = out_gdf[out_gdf.is_valid & ~out_gdf.is_empty]
-        out_gdf = out_gdf[out_gdf.intersects(STATE_UNION)].loc[
-            :, ["source", "geometry"]
-        ]
+        out_gdf = out_gdf[out_gdf.intersects(geo_filter)].loc[:, ["source", "geometry"]]
 
         return out_gdf
 
-    def read_biocycle_data(in_path):
+    def read_biocycle_data(in_path, geo_filter):
         out_df = (
             pd.read_csv(in_path)
             .rename(columns={"lat": "latitude", "lon": "longitude"})
             .assign(source="biocycle")
         )
-        out_gdf = make_gdf(out_df)
+        out_gdf = make_gdf(out_df, geo_filter)
         return out_gdf
 
-    def read_frs_data(frs_path, naics_path):
+    def read_frs_data(frs_path, naics_path, geo_filter):
         out_df = (
             duckdb.execute(
                 (
@@ -160,11 +166,11 @@ def get_composting_proxy_data(
                 formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs"
             )
         )
-        out_gdf = make_gdf(out_df)
+        out_gdf = make_gdf(out_df, geo_filter)
 
         return out_gdf
 
-    def read_excess_food_data(in_path):
+    def read_excess_food_data(in_path, geo_filter):
         out_df = (
             pd.read_excel(
                 in_path,
@@ -177,14 +183,14 @@ def get_composting_proxy_data(
                 source="ex_food",
             )
         )
-        out_gdf = make_gdf(out_df).loc[:]
+        out_gdf = make_gdf(out_df, geo_filter)
 
         return out_gdf
 
-    epa_gdf = read_excess_food_data(excess_food_op_path)
-    biocycle_gdf = read_biocycle_data(biocycle_path)
-    frs_gdf = read_frs_data(frs_facility_path, frs_naics_path)
-    comp_council_gdf = read_comp_coucil_data(comp_council_path)
+    epa_gdf = read_excess_food_data(excess_food_op_path, STATE_UNION)
+    biocycle_gdf = read_biocycle_data(biocycle_path, STATE_UNION)
+    frs_gdf = read_frs_data(frs_facility_path, frs_naics_path, STATE_UNION)
+    comp_council_gdf = read_comp_coucil_data(comp_council_path, STATE_UNION)
     # %%
     # plot out the data to see what we have
     ax = state_gdf.to_crs("ESRI:102003").boundary.plot(color="black", linewidth=0.5)
