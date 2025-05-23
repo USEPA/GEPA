@@ -42,7 +42,7 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 g_info.display_all_pair_statuses()
 # %%
 # gch4i_name = "3A_enteric_fermentation"
-gch4i_name = "3C_rice_cultivation"
+gch4i_name = "5B1_composting"
 
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}'"
