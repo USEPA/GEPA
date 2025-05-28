@@ -72,7 +72,6 @@ from gch4i.utils import (
 
 logger = logging.getLogger(__name__)
 
-
 REL_EMI_COL_LIST = ["rel_emi", "ch4", "emis_kt", "ch4_flux"]
 
 
@@ -2027,7 +2026,10 @@ class GroupGridder(BaseGridder):
         Function to plot the raster data for each year in the dictionary of rasters that are
         output at the end of each sector script.
         """
-        plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x > 0)
+
+        # we set 0 and negative values as NA
+        plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
+        plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
@@ -2080,7 +2082,7 @@ class GroupGridder(BaseGridder):
 
         # Calculate the difference between the first and last years
         self.difference_raster = (last_year_data - first_year_data).where(
-            lambda x: x > 0
+            lambda x: x != 0
         )
 
         plotting_data = self.difference_raster / 1e10
@@ -2384,11 +2386,11 @@ class GroupGridder(BaseGridder):
         for year, ax in zip(self.flux_diff_da.time.values, axs.ravel()):
             annual_flux = (
                 self.annual_flux_da.sel(time=year)
-                .where(lambda x: x > 0)
+                .where(lambda x: x != 0)
                 .values.flatten()
             )
             v2_flux = (
-                self.v2_flux_da.sel(time=year).where(lambda x: x > 0).values.flatten()
+                self.v2_flux_da.sel(time=year).where(lambda x: x != 0).values.flatten()
             )
 
             # Remove NaN values
@@ -2479,7 +2481,9 @@ class GroupGridder(BaseGridder):
             .assign(sum_check=lambda df: np.isclose(df.band_data, 12, rtol=0.1))
         )
         self.month_scale_check["sum_check"].all()
-        self.write_tif_output(self.month_scale_ds["band_data"], self.monthly_scale_output_path)
+        self.write_tif_output(
+            self.month_scale_ds["band_data"], self.monthly_scale_output_path
+        )
 
     def run_gridding(self):
         self.get_source_QC_df()
@@ -2491,9 +2495,9 @@ class GroupGridder(BaseGridder):
             self.annual_mass_da, "year", "mass2flux"
         )
         self.QC_flux_emis()
-        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
-        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
-        self.plot_annual_raster_data()
         self.plot_raster_data_difference()
+        self.plot_annual_raster_data()
         if self.monthly_source_count > 0:
             self.calculate_monthly_scaling()
+        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
+        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
