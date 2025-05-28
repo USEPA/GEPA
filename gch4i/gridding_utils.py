@@ -2449,7 +2449,7 @@ class GroupGridder(BaseGridder):
             c_map = "Reds"
         elif c_max <= 0:
             c_norm = colors.Normalize(vmin=c_min, vmax=0)
-            c_map = "Blues"
+            c_map = "Blues_r"
         else:
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
             c_map = "bwr"
