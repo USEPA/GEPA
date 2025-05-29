@@ -25,14 +25,15 @@ class CreateFinalNetCDFs:
         self.attrs = {
             "title": "Gridded U.S. Greenhouse Gas Inventory (Version 3): Annual methane emissions",
             "publication": "A gridded inventory of annual 2012-2022 U.S. anthropogenic methane emissions",
+            # TODO: review list of authors and update as needed
             "authors": "Joannes D. Maasakkers, Erin E. McDuffie, Julie Powers, Shane Cofffield, Yasmine Farhat, Nicholas Kruskamp, Hannah Lohman, Melissa P. Sulprizio, Candice Chen, Maggie Schultz, Lily Brunelle, Ryan Thrush, John Steller, Christopher Sherry, Daniel J. Jacob, Seongeun Jeong, Bill Irving, and Melissa Weitz",
             "history": "May 1, 2025",
             "conventions": "COARDS",
             "version": "1.0 - Publication version (Data equals the preprint version)",
+            # TODO: review and update the contact information
             "contact": "Powers.Julie@epa.gov and McDuffie.Erin.E@epa.gov",
-            # NOTE: this is a placeholder for the year of the data
-            # the expectation is that year will be replaced with the year of the data
-            # during processing
+            # NOTE: this is a placeholder for the year of the data. Year will be
+            # replaced with the year of the data during processing.
             "year": "xxxx",
         }
         self._get_month_scale_attrs()
@@ -59,6 +60,7 @@ class CreateFinalNetCDFs:
         # gch4i_flux_data_dict = {}
         for i, year in enumerate(YEARS):
             year_data_dict = {}
+            # TODO: remove draft when final final.
             out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_draft.nc"
             for in_path in self.flux_data_files:
                 # Get the file name and extract the source category and long name
@@ -145,10 +147,14 @@ class CreateFinalNetCDFs:
         self.create_final_netcdfs()
         self.create_montly_scaling_files()
 
+    # TODO: plotting function to visualize the data
+    def plot_data(self):
+        pass
 
 # %%
 file_writer = CreateFinalNetCDFs()
 file_writer.write_outputs()
+file_writer.plot_data()
 # %%
 
 # For reference, we can look at the attributes (and other features) of the v2 data
