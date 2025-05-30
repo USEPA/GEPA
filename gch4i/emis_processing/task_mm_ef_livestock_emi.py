@@ -3,11 +3,14 @@ Name:                   task_livestock_enteric_fermentation.py
 Date Last Modified:     2025-01-30
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of Livestock Enteric Fermentation emissions to Year,
-                            Month, State, County, emissions format
-gch4i_name:             3A_enteric_fermentation
+                        Month, State, County, emissions format
+gch4i_name:             3A_enteric_fermentation, 3B_manure_management
 Input Files:            - {ghgi_data_dir_path}/3A_enteric_fermentation/
                             Gridded Methane - Enteric total emissions by
                             County_v2_17Sept2024.xlsx
+                        - {ghgi_data_dir_path}/3B_manure_management/
+                            Gridded Methane - Manure emissions by
+                            County_v1_17Sept2024.xlsx
 Output Files:           - {emi_data_dir_path}/
                             enteric_fermentation_beef_emi.csv
                             enteric_fermentation_bison_emi.csv
@@ -19,12 +22,33 @@ Output Files:           - {emi_data_dir_path}/
                             enteric_fermentation_onfeed_emi.csv
                             enteric_fermentation_sheep_emi.csv
                             enteric_fermentation_swine_emi.csv
+                            manure_management_beef_emi.csv
+                            manure_management_bison_emi.csv
+                            manure_management_broilers_emi.csv
+                            manure_management_chickens_emi.csv
+                            manure_management_dairy_emi.csv
+                            manure_management_goats_emi.csv
+                            manure_management_horses_emi.csv
+                            manure_management_layers_emi.csv
+                            manure_management_mules_emi.csv
+                            manure_management_pullets_emi.csv
+                            manure_management_sheep_emi.csv
+                            manure_management_swine_emi.csv
+                            manure_management_turkeys_emi.csv
+                            manure_management_cattle_emi.csv
+                            manure_management_onfeed_emi.csv
+NOTES:                  - NFK 2025.05.30: I have reworked this file as the original
+                        approach was not appropriately pickup up all the GHGI animal
+                        names to aggregate the emissions. This new code will now throw
+                        an error if the name is not appropriately crosswalked. There are
+                        reference crosswalk dictionaries for both the EF and MM sources
+                        for reference, but the code still uses the data found in the
+                        data guide excel file.
 """
 
+# %% STEP 0. Load packages, configuration files, and local parameters ------------------
 import ast
 import re
-
-# %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path
 from typing import Annotated
 
@@ -111,37 +135,33 @@ proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").quer
     f"gch4i_name == '{source_name_ef}' | gch4i_name == '{source_name_mm}'"
 )
 
-param_dict = {
-    "3A_enteric_fermentation": {
-        "input_path": ghgi_data_dir_path
-        / "3A_enteric_fermentation"
-        / "Gridded Methane - Enteric total emissions by County_v2_17Sept2024.xlsx",
-        "sheet_params": [
-            "Gridded_Methane___Enteric_total",
-            2,
-        ],
-        "crosswalk_dict": ef_crosswalk_dict,
-        "output_paths": [
-            emi_data_dir_path / f"enteric_fermentation_{animal}_emi.csv"
-            for animal in ef_crosswalk_dict.values()
-        ],
-    },
-    "3B_manure_management": {
-        "input_path": ghgi_data_dir_path
-        / "3B_manure_management"
-        / "Gridded Methane - Manure emissions by County_v1_17Sept2024.xlsx",
-        "sheet_params": [
-            "Gridded_Methane___Manure_total",
-            2,
-        ],
-        "crosswalk_dict": mm_crosswalk_dict,
-        "output_paths": [
-            emi_data_dir_path / f"manure_management_{animal}_emi.csv"
-            for animal in mm_crosswalk_dict.values()
-        ],
-    },
-}
+# Initialize the emi_parameters_dict
+emi_parameters_dict = {}
+# Loop through the proxy data and store the parameters in the emi_parameters_dict
+for group_name, group_data in proxy_data.groupby("gch4i_name"):
+    file_name = group_data.file_name.iloc[0]
+    file_path = ghgi_data_dir_path / group_name / file_name
+    short_group_name = group_name.split("_", maxsplit=1)[-1]
+    sheet_params = ast.literal_eval(group_data.add_params.iloc[0])["arguments"]
+    emi_dict = {}
+    output_paths = []
+    for emi_row in group_data.itertuples():
+        proxy_name = emi_row.Subcategory2.strip().casefold()
+        # Create output path
+        output_path = emi_data_dir_path / f"{short_group_name}_{proxy_name}_emi.csv"
+        output_paths.append(output_path)
+        emi_name_list = ast.literal_eval(emi_row.add_params)["substrings"]
+        for emi_name in emi_name_list:
+            emi_dict[emi_name] = proxy_name
+    emi_dict
 
+    emi_parameters_dict[group_name] = dict(
+        input_path=file_path,
+        sheet_params=sheet_params,
+        crosswalk_dict=emi_dict,
+        output_paths=output_paths,
+    )
+emi_parameters_dict
 
 # %% STEP 3. Create Pytask Function and Loop
 
@@ -152,13 +172,17 @@ def task_livestock_emi(
     crosswalk_dict: dict,
     output_paths: Annotated[list[Path], Product],
 ):
-
+    print("reading input file:", input_path.name)
+    # Read the input file
     in_df = pd.read_excel(
         input_path,
         sheet_name=sheet_params[0],  # Sheet name
         skiprows=sheet_params[1],  # Skip Rows
     )
+    print("done reading input file:", input_path.name)
 
+    # we now process the file at once instead of doing for each animal type
+    print("processing data...")
     emi_df = in_df.copy()
     emi_df = emi_df.iloc[:, 1:]
     emi_df.columns.values[5:] = list(range(min_year, max_year + 1))
@@ -201,72 +225,30 @@ def task_livestock_emi(
         .sort_values(by=["fips", "year", "month"])
     )
 
+    print("writing output files...")
     for animal, data in emi_df.groupby("animal"):
         animal = animal.lower()
-        output_path = [x for x in output_paths if animal in x.name][0]
         print(f"Processing {animal}")
-        # output_path = emi_data_dir_path / f"enteric_fermentation_{animal}_emi.csv"
-        data.drop(columns=["animal"]).to_csv(output_path, index=False)
+        # this sort of backs into making sure that the animal name in the dataframe as
+        # assigned from the crosswalk_dict matches what we expect for the output file.
+        # If the crosswalk did not work or an animal name is not accounted for this will
+        # throw an error.
+        try:
+            output_path = [x for x in output_paths if animal in x.name][0]
+        except IndexError:
+            raise ValueError(
+                f"Animal '{animal}' not found in crosswalk_dict. "
+                "Please check the crosswalk dictionary."
+            )
+        data.drop(columns="animal").to_csv(output_path, index=False)
         print(f"Saved to {output_path.name}\n")
 
 
 # %%
 sesh = pytask.build(
-    tasks=[task_livestock_emi(**kwargs) for kwargs in param_dict.values()],
-    marker_expression="persist",
+    tasks=[task_livestock_emi(**kwargs) for kwargs in emi_parameters_dict.values()],
+    marker_expression="mark.persist",
     dry_run=True,
 )
 sesh
-# %%
-ef_results = []
-for out_path in output_paths:
-    ef_results.append(pd.read_csv(out_path).assign(animal=out_path.name.split("_")[-2]))
-# %%
-ef_results_df = pd.concat(ef_results)
-ef_results_df
-# %%
-ef_results_by_year = (
-    ef_results_df.groupby(["year", "animal"])["ghgi_ch4_kt"]
-    .sum()
-    .reset_index()
-    .sort_values(by=["animal", "year"])
-)
-ef_results_by_year
-# %%
-
-emi_total_df = (
-    emi_df.groupby(["animal", "year"])["ghgi_ch4_kt"]
-    .sum()
-    .reset_index()
-    .sort_values(by=["animal", "year"])
-)
-emi_total_df
-# %%
-animal
-# %%
-data
-# %%
-bison_df = pd.read_csv(
-    Path(
-        "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/emis/enteric_fermentation_bison_emi.csv"
-    )
-)
-# %%
-bison_df
-# %%
-emi_df.query("animal == 'bison' & county == 'ALEUTIAN ISLANDS'").sort_values(
-    by=["year", "month"]
-)
-# %%
-emi_df
-# %%
-in_df.query("animal == 'Bison'")["2012County"].sum() * tg_to_kt
-# %%
-bison_df.groupby("year")["ghgi_ch4_kt"].sum()
-# %%
-emi_df.query("animal == 'bison' & year == 2012")["ghgi_ch4_kt"].sum()
-# %%
-for group_name, group_data in proxy_data.groupby("gch4i_name"):
-    input_path = Path(group_data["file_name"].values[0])
-    sheet_params = ast.literal_eval(group_data["add_params"].values[0])
 # %%
