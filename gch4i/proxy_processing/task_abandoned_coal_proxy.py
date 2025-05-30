@@ -430,7 +430,6 @@ def task_get_abd_coal_proxy_data(
     # emissions calculations.
 
     all_mines_df.sort_values("reopen_date", ascending=False)
-    # %%
 
     # %%
     # # actives mines are those that are listed as active and have a reopen date before
@@ -560,6 +559,14 @@ def task_get_abd_coal_proxy_data(
     open_aban_open_df = has_2_status_change_df.query("reopen_date > date_abd")
     aban_open_aban_df = has_2_status_change_df.query("reopen_date <= date_abd")
 
+    prepped_2_status_df = has_2_status_change_df.assign(
+        reopen_date=np.nan,
+        gepa_status=lambda df: np.where(
+            datetime.datetime(year=2012, month=12, day=31) < df["date_abd"], "open", "abandoned"
+        ),
+    )
+
+
     # reference_mines_df = reference_mines_df.drop(index=has_status_change_df.index)
     # has_status_change_df.sort_values("date_abd")
     status_change_count_check = (
@@ -594,32 +601,42 @@ def task_get_abd_coal_proxy_data(
     # %%
     """
     Here we are now holding the following dataframes for processing:
-    -   always_abandoned_mines_df:
-        -   mines that were abandoned prior to the study period and have not reopened.
-        -   These are assumed to be abandoned and we calculate emissions based on the
-            date of abandonment regardless of the reopen date.
-    - reopens_during_study_df:
-        -   mines that have reopened during the study period. These mines will be
-            calculated based on the date of abandonment up to the date of reopen.
-    - closes_during_study_df:
-        -   mines that have closed during the study period. These mines will be be added
-            to the abandoned mines list and calculated based on the date of abandonment.
-    - has_2_status_change_df:
-        -   mines that have a status change during the study period and have reopened
-            during the study period.
-        -   These mines can follow these patterns:
-            -   abandoned - reopen - abandoned
-                -   mine emissions are calculated with the period of reopen removed in
-                    the calculation.
-            -   open - abandonded - repoen
+    -   core_mines_df
+        -   always_abandoned_mines_df:
+            -   mines that were abandoned prior to the study period and have not reopened.
+            -   These are assumed to be abandoned and we calculate emissions based on the
+                date of abandonment regardless of the reopen date.
+    -   processing_mines_df == has_status_change_df + has_2_status_change_df
+        - reopens_during_study_df:
+            -   mines that have reopened during the study period. These mines will be
+                calculated based on the date of abandonment up to the date of reopen.
+        - closes_during_study_df:
+            -   mines that have closed during the study period. These mines will be be added
+                to the abandoned mines list and calculated based on the date of abandonment.
+        - has_2_status_change_df:
+            -   Since we have to make some assumptions about the time that any of these
+                mines were abandoned, we will calculate the emissions based on the date of
+                abandonment only, ignoring the reopen date.
+            -   mines that have a status change during the study period and have reopened
+                during the study period.
+            -   These mines can follow these patterns:
+                -   abandoned - reopen - abandoned
+                    -   mine emissions are calculated with the period of reopen removed in
+                        the calculation.
+                -   open - abandonded - repoen
     """
 
     # %%
     result_list = []
 
     core_mines_df = always_abandoned_mines_df.copy()
-    processing_mines_df = has_status_change_df.copy()
-
+    # for the mines with 2 status changes, we are going to remove the reopen date so
+    # that we are only using the date of abandonment for the calculations.
+    # NOTE: we can ignore the FutreWarning here. It does not like setting the col as
+    # np.nan, but we are doing this to remove the reopen date from the calculations.
+    processing_mines_df = pd.concat(
+        [has_status_change_df, prepped_2_status_df]
+    ).copy()
     print(f"starting with {len(core_mines_df)} core mines...")
     print(f"{len(processing_mines_df)} open/close during time...")
     print()
@@ -639,11 +656,6 @@ def task_get_abd_coal_proxy_data(
             .all()
         ):
             raise ValueError("Ratios do not sum to 1")
-
-        # EEM: is the code below legacy from v2? If so, please delete
-        # The logic here was that this date would be representative of the mean emission rate for that year (since we are dealing with exponential decay rates)
-        # the same logic was behind why we divided the number of closed days by 2.
-        # I think that if we treat all mines in the same way, it should still be ok to use the entire year
 
         # this year date to calc relative emissions
         # NOTE: this is different from the v2 notebook where the date was 07/02
@@ -835,6 +847,5 @@ def task_get_abd_coal_proxy_data(
     # %%
     # save the final proxy data
     proxy_gdf.to_parquet(output_path)
-
 
 # %%
