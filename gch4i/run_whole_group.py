@@ -41,7 +41,7 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 # display the overall status of emi/proxy pairs
 g_info.display_all_pair_statuses()
 # %%
-# gch4i_name = "3A_enteric_fermentation"
+
 gch4i_name = "5B1_composting"
 
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
