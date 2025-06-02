@@ -47,7 +47,7 @@ from gch4i.config import (
 from gch4i.utils import name_formatter
 
 # Change the name of this variable (I believe that this should be mt_to_kt)
-tg_to_kt = 0.001
+mt_to_kt = 0.001
 year_range = [*range(min_year, max_year+1,1)] #List of emission years
 year_range_str=[str(i) for i in year_range]
 num_years = len(year_range)
@@ -56,6 +56,7 @@ num_years = len(year_range)
 @mark.persist
 @task(id="industrial_landfills_proxy")
 def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
+  # note that this file path is not producing the full list of subpart tt facilities
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_r_proxy.parquet",
@@ -93,7 +94,7 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
                         "naics_code"))
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-        .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
@@ -137,10 +138,10 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
             nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
 ):
     """
-    The Mills OnLine database of facilities is compared against the Subpart HH 
+    The Mills OnLine database of facilities is compared against the Subpart TT 
     reporting facilities with NAICS codes starting with 321 and 322 to develop 
     a list of nonreporting facilities (facilities that appear in the Mills OnLine 
-    database but not the Subpart HH list).
+    database but not the Subpart TT list).
     
     Facility locations (lat/lon) are determined by matching the nonreporting facility cities and states
     to the facilities in the FRS database.
@@ -176,7 +177,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
                         "naics_code"))
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-        .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
@@ -302,6 +303,9 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .loc[:, ["state_code", "geometry"]]
     )
 
+  #does this dataframe have a 'ch4_kt' column? There are no emissions estimated for FRS/MillsOnline facilities, so is this line of code setting all the relative values to 1/num facilities? (e.g., evenly distributing the emissions?)
+  #noting that we can't implement the v2 method where we only assigned the GHGI-GHGRP fraction of emissions to these non-reporting facilities because there are multiple cases
+  # where the GHGRP estiamted emissions for facilities within a state are larger than the GHGI emissions for a state
     nonreporting_pulp_paper_gdf['rel_emi'] = nonreporting_pulp_paper_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
     nonreporting_pulp_paper_gdf = nonreporting_pulp_paper_gdf.drop(columns='ch4_kt')
 
@@ -310,6 +314,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
 
 
 def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
+  #note that this is not the full list of tt facilities
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_fb_r_proxy.parquet",
@@ -348,7 +353,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
                     "naics_code"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})
@@ -385,6 +390,7 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
 
 def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+  #note that this is not the full tt facilities list
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
     frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
@@ -399,10 +405,10 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     311615, 311225, 311613, 311710, 311221, 311224, 311314, 311313. Waste-in-place
     at each facility is assumed to be the proxy for methane emissions.
 
-    The EPA Food Opportunities Map facilities are compared against the Subpart HH 
+    The EPA Food Opportunities Map facilities are compared against the Subpart TT 
     reporting facilities to develop a list of nonreporting facilities 
     (facilities that appear in the EPA Food Opportunities Map but not the 
-    Subpart HH list).
+    Subpart TT list).
     
     Facility locations (lat/lon) are determined by matching the nonreporting facility 
     cities and states to the facilities in the FRS database.
@@ -438,7 +444,7 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                     "naics_code"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})

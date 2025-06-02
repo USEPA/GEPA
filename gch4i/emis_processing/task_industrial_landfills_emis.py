@@ -30,7 +30,7 @@ from gch4i.config import (
 from gch4i.utils import name_formatter
 
 # change this variable name to 'mt_to_kt'
-tg_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
+mt_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
 mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 
 
@@ -40,6 +40,7 @@ mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 def task_get_industrial_landfills_pulp_paper_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    # this is not the full list fo landfills (hopefully this will help with the non-reporting states)
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
     reporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
@@ -110,7 +111,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
                         "naics_code"))
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-        .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
         .drop(columns=["ch4_t"])
         .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .astype({"year": int})
@@ -231,6 +232,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
 def task_get_industrial_landfills_food_beverage_inv_data(
     inventory_workbook_path: Path = ghgi_data_dir_path / "landfills/State_IND_LF_1990-2022_LA.xlsx",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    # not the full list of tt facilities (hopefully this will help with the missing state data)
     subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
     food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
     reporting_fb_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_r_emi.csv",
@@ -250,7 +252,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     .to_crs(4326)
     )
         
-    # State-level inventory emissions for pulp and paper (reporting + non-reporting)
+    # State-level inventory emissions for food and beverage (reporting + non-reporting)
     state_inventory_fb_emi_df = (
         pd.read_excel(
             inventory_workbook_path,
@@ -282,7 +284,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
-    # National-level inventory emissions for pulp and paper (reporting + non-reporting)
+    # National-level inventory emissions for food and beverage (reporting + non-reporting)
     national_inventory_fb_emi_df = state_inventory_fb_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
     # Reporting facilities from subpart tt with NAICS codes that start with 321 and 322
@@ -301,7 +303,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
                     "naics_code"))
     .rename(columns=lambda x: str(x).lower())
     .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * tg_to_kt)
+    .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
     .drop(columns=["ch4_t"])
     .drop_duplicates(subset=['facility_id', 'year'], keep='first')
     .astype({"year": int})
@@ -312,7 +314,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     .query("state_code.isin(@state_gdf['state_code'])")
     .reset_index(drop=True)
     )
-    # State-level Subpart TT emissions for pulp and paper (reporting)
+    # State-level Subpart TT emissions for food and beverage (reporting)
     state_subpart_tt_fb_emi_df = subpart_tt_fb_emi_df.groupby(['year', 'state_code']).sum().reset_index()
     # list of unique states in subpart tt
     subpart_tt_fb_states = state_subpart_tt_fb_emi_df['state_code'].unique()

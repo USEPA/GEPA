@@ -118,17 +118,18 @@ def get_msw_landfills_inv_data(in_path, src, params):
 
     # Calculate Reporting vs Non-reporting emissions
     # Initiliaze non-reporting emissions
+   
     nonreporting_emi_df = pd.DataFrame()
     # Scale non-reporting emissions
     emi_09 = (
         emi_df
         .query("year <= 2016")
-        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.09)
+        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.09) #these factors follow the approach used in the GHGI
         )
     emi_11 = (
         emi_df
         .query("year >= 2017")
-        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.11)
+        .assign(ghgi_ch4_kt=lambda df: df["ghgi_ch4_kt"] * 0.11) #these factors follow the approach used in the GHGI
         )
     # Concatenate non-reporting emissions
     nonreporting_emi_df = pd.concat([nonreporting_emi_df, emi_09, emi_11],

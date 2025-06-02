@@ -96,7 +96,7 @@ smod_shp_path = "GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_UC_V2_0.shp"
 census_urban_path = f"zip://{source_dir}/tl_2020_us_uac20_corrected.zip"
 ahs_septic_use_path = source_dir / "AHS TABLE4 3_12_2025.csv"
 
-
+# can we set these paths in our config file?
 pop_path = Path("C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy/population_proxy.nc")
 pop_proxy_ds = xr.open_dataset(pop_path)
 pop_proxy_ds
@@ -362,12 +362,14 @@ def task_septic_proxy(
     # %%
 
     # %%
+  # can we set these paths in our config file?
     roads_path = Path(
         "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy/roads_proxy.nc"
     )
     roads_ds = xr.open_dataset(roads_path)
     roads_ds
     # %%
+  # can we set these paths in our config file?
     proxy_dir = Path("C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy")
     proxy_files = [x for x in proxy_dir.glob("*.nc") if x.suffix == ".nc"]
     proxy_files

@@ -151,6 +151,9 @@ def create_wastewater_proxy_files(
             "SIC Code", "NAICS Code", "City", "State", "County", "Facility Latitude", 
             "Facility Longitude", "Wastewater Flow (MGal/yr)", "Average Daily Flow (MGD)"
         ]].fillna(0)
+      # in step 2.1.1 of the v2 code, there was a process to attempt to fill in missing flow rate data using other variables like Facility Design Flow and 
+      # Actual average daily flow. Since missing echo data seems to be an issue later on in the process, have we attempted to fill in any of that missing flow rate data here? 
+      # if not, can we add that here?
         # Write the combined data to a CSV file
         combined_df.to_csv(combined_echo_file_path, index=False)
         return combined_df
