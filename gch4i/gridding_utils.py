@@ -361,7 +361,7 @@ class GriddingInfo:
             subset=["gch4i_name", "emi_id", "proxy_id"]
         )
         self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df.merge(
-            self.status_df, on=["gch4i_name", "emi_id", "proxy_id"]
+            self.status_df, on=["gch4i_name", "emi_id", "proxy_id"], how="left"
         )
 
         # if SKIP:
