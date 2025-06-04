@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated
 
 import geopandas as gpd
+import numpy as np
 import pytask
 import rasterio
 from pytask import Product
@@ -29,6 +30,7 @@ from gch4i.utils import (
     get_cell_gdf,
     proxy_from_stack,
     stack_rasters,
+    normalize,
 )
 
 # %%
@@ -37,6 +39,11 @@ fl_data_path = sector_data_dir_path / "flooded_lands"
 intermediate_dir = fl_data_path / "intermediate"
 intermediate_dir.mkdir(exist_ok=True, parents=True)
 fl_gpkg_path = fl_data_path / "flooded_lands_.gpkg"
+
+
+# NOTE: I organize the proxy creation for these tasks to reduce the runtime. The wetland
+# data are huge, so I/O is the biggest bottleneck. By organizing the tasks this way, we
+# can avoid reading the same data multiple times.
 
 query_dict = dict(
     fl_rem_res=("lu == 'Flooded Land Remaining Flooded Land' & type == 'reservoir'"),
@@ -145,23 +152,41 @@ def task_process_fl_data(
         # accounts for polygons that span multiple cells so that the emissions are
         # allocated via the fractional area. Then groupby the cell id and sum the
         # emissions.
-        print(f"calculating grid cell emissions for {key} in {the_year}")
         ch4_sum = (
             data_gdf.overlay(EMTPY_GRID_GDF.reset_index(drop=False), how="intersection")
+            .loc[:, ["index", "fl_area", "ch4.total.tonnes.y", "geometry"]]
             .assign(
                 fractional_area=lambda df: df.area / df["fl_area"],
-                frac_emi=lambda df: df["fractional_area"] * df["ch4.total.tonnes.y"],
+                flooded_emi=lambda df: df["fractional_area"] * df["ch4.total.tonnes.y"],
+                flooded_area=lambda df: df["fractional_area"] * df["fl_area"],
             )
-            .groupby("index")["frac_emi"]
-            .sum()
-            .rename("ch4_sum")
+            .drop(columns=["ch4.total.tonnes.y", "fractional_area", "fl_area"])
+            .dissolve("index", aggfunc="sum")
         )
-        # join this data back to the empty grid, reshape the data to the original
-        # grid.
-        res_gdf = EMTPY_GRID_GDF.join(ch4_sum)
+        ch4_sum_gdf = (
+            EMTPY_GRID_GDF.join(ch4_sum.drop(columns="geometry"))
+            # .assign(centroid=lambda df: df.geometry.centroid)
+            # .set_geometry("centroid")
+            # .sjoin(state_gdf[["state_code", "geometry"]], how="left")
+            # .set_geometry("geometry")
+            # .drop(columns=["centroid", "index_right"])
+        )
+
+        grid_sum_check = np.isclose(
+            ch4_sum_gdf["flooded_emi"].sum(),
+            data_gdf["ch4.total.tonnes.y"].sum(),
+            atol=0,
+            rtol=0.01,
+        )
+        if not grid_sum_check:
+            raise ValueError(
+                f"Grid sum check failed for {key} in {the_year}. "
+                f"Grid sum: {ch4_sum_gdf['flooded_emi'].sum()}, "
+                f"Data sum: {data_gdf['ch4.total.tonnes.y'].sum()}"
+            )
 
         print(f"saving data for {key} in {the_year}")
-        out_arr = res_gdf.ch4_sum.values.reshape(profile.arr_shape)
+        out_arr = ch4_sum_gdf.flooded_emi.values.reshape(profile.arr_shape)
         # save the file
         with rasterio.open(out_path, "w", **profile.profile) as dst:
             dst.write(out_arr, 1)
@@ -195,16 +220,12 @@ _ID_PROXY_PARAMS = get_proxy_params(query_dict)
 # %%
 
 
-pytask_sesh = pytask.Session(
+pytask_sesh = pytask.build(
     tasks=[
         task_process_fl_data(**kwargs) for _id, kwargs in _ID_TO_KWARGS_FL_DATA.items()
     ]
-)
-pytask_sesh = pytask.Session(
-    tasks=[task_stack_fl_data(**kwargs) for _id, kwargs in _ID_TO_KWARGS_STACK.items()]
-)
-pytask_sesh = pytask.Session(
-    tasks=[task_fl_proxy(**kwargs) for _id, kwargs in _ID_PROXY_PARAMS.items()]
+    + [task_stack_fl_data(**kwargs) for _id, kwargs in _ID_TO_KWARGS_STACK.items()]
+    + [task_fl_proxy(**kwargs) for _id, kwargs in _ID_PROXY_PARAMS.items()]
 )
 
 
