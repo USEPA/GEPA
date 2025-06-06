@@ -42,11 +42,13 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 g_info.display_all_pair_statuses()
 # %%
 
-gch4i_name = "5B1_composting"
+gch4i_name = "1B2ab_abandoned_og_wells"
 
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}'"
 )
+gridding_rows
+# %%
 for emi_proxy_data in tqdm(
     gridding_rows.itertuples(index=False),
     total=len(gridding_rows),
