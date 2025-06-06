@@ -1,8 +1,8 @@
 """
 Name:                   task_msw_landfills_emis.py
 Date Last Modified:     2024-12-16
-Authors Name:           A. Burnette (RTI International)
-Purpose:                Mapping of msw_landfill emissions to State, Year, emissions
+Authors Name:           H. Lohman, A. Burnette (RTI International)
+Purpose:                Mapping of MSW landfill emissions to State, Year, emissions
                         format
 gch4i_name:             5A_msw_landfills
 Input Files:            - {ghgi_data_dir_path}/{5A_msw_landfills}/
