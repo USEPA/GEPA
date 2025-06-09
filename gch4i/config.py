@@ -43,10 +43,6 @@ EQ_AREA_CRS = "ESRI:102003"
 #######################
 # data_load_functions
 # Common GEPA functions to load global data files
-#### Authors: 
-# Erin E. McDuffie, Joannes D. Maasakkers, Candice F. Z. Chen
-#### Date Last Updated: 
-# Feb. 26, 2021
 
 # Import modules
 import pandas as pd
