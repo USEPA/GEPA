@@ -20,18 +20,18 @@ class CreateFinalNetCDFs:
         # the path to the directory where the monthly scaling factors are stored
         self.monthly_scaling_dir = prelim_gridded_dir / "monthly_scaling"
         # flux units
-        self.units = "moleccm-2s-1"
+        self.units = "molec cm-2 s-1"
         # attributes written to the final files
         self.attrs = {
-            "title": "Gridded U.S. Greenhouse Gas Inventory (Version 3): Annual methane emissions",
+            "title": "Gridded U.S. Methane Anthropogenic Greenhouse Gas Inventory (Version 3)",
             "publication": "A gridded inventory of annual 2012-2022 U.S. anthropogenic methane emissions",
-            # TODO: review list of authors and update as needed
-            "authors": "Joannes D. Maasakkers, Erin E. McDuffie, Julie Powers, Shane Cofffield, Yasmine Farhat, Nicholas Kruskamp, Hannah Lohman, Melissa P. Sulprizio, Candice Chen, Maggie Schultz, Lily Brunelle, Ryan Thrush, John Steller, Christopher Sherry, Daniel J. Jacob, Seongeun Jeong, Bill Irving, and Melissa Weitz",
+            # To Do: add other RTI co-authors, confirm EPA co-authors
+            "authors": "Erin E. McDuffie, Julie Powers, Shane Cofffield, Yasmine Farhat, Nicholas Kruskamp, Hannah Lohman, Joannes D. Maasakkers",
             "history": "May 1, 2025",
             "conventions": "COARDS",
             "version": "1.0 - Publication version (Data equals the preprint version)",
             # TODO: review and update the contact information
-            "contact": "Powers.Julie@epa.gov and McDuffie.Erin.E@epa.gov",
+            "contact": "McDuffie.Erin.E@epa.gov",
             # NOTE: this is a placeholder for the year of the data. Year will be
             # replaced with the year of the data during processing.
             "year": "xxxx",
