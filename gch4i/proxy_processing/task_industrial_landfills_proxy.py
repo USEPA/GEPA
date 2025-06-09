@@ -1,6 +1,6 @@
 """
 Name:                   task_industrial_landfills_proxy.py
-Date Last Modified:     2025-04-02
+Date Last Modified:     2025-06-09
 Authors Name:           H. Lohman (RTI International)
 Purpose:                Mapping of industrial landfills reporting and non-reporting
                         food & beverage and pulp & paper proxy emissions

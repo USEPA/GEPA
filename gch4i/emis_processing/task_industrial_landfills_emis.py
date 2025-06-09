@@ -1,6 +1,6 @@
 """
 Name:                   task_industrial_landfills_emis.py
-Date Last Modified:     2024-12-16
+Date Last Modified:     2025-06-09
 Authors Name:           H. Lohman (RTI International)
 Purpose:                Mapping of industrial landfill emissions to State, Year, emissions
                         format
