@@ -58,7 +58,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
     ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
-    mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
+    nonreporting_pp_proxy_path: Path = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
     reporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
     nonreporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_nr_emi.csv",
 ) -> None:
@@ -77,6 +77,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     )
 
     # State-level inventory emissions for pulp and paper (reporting + non-reporting)
+    # Assume the emissions in the file are the sum of reporting and non-reporting facilities
     state_inventory_pp_emi_df = (
         pd.read_excel(
             inventory_workbook_path,
@@ -111,7 +112,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     # National-level inventory emissions for pulp and paper (reporting + non-reporting)
     national_inventory_pp_emi_df = state_inventory_pp_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # Reporting facility emissions from Subpart TT
+    # Get reporting facility emissions from Subpart TT
     reporting_pp_emissions = (
         pd.read_csv(
             subpart_tt_emissions_path,
@@ -144,7 +145,6 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
-
     # Merge the emissions with the facility locations
     # Query pulp & paper NAICS codes
     subpart_tt_pp_emi_df = ((
@@ -155,7 +155,6 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .dropna(subset=["latitude", "longitude"])
         .reset_index(drop=True)
     )
-
     # State-level Subpart TT emissions for pulp and paper (reporting)
     state_subpart_tt_pp_emi_df = subpart_tt_pp_emi_df.groupby(['year', 'state_code']).sum().reset_index()
     # list of unique states in subpart tt
@@ -163,47 +162,9 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     # National-level Subpart TT emissions for pulp and paper (reporting)
     national_subpart_tt_pp_emi_df = state_subpart_tt_pp_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # List of pulp and paper mills by state, county, and city
-    mills_online_df = (
-        pd.read_excel(
-            mills_online_path,
-            skiprows=3,
-            nrows=927,
-            usecols="A:F",
-        )
-        .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"mill id#": "facility_id", "state": "state_name", "pulp and paper mill": "pulp_and_paper_mill"})
-        .query("pulp_and_paper_mill == 'Yes'")
-        .drop(columns=["pulp_and_paper_mill"])
-        .query("state_name.isin(@state_gdf['state_name'])")
-        .reset_index(drop=True)
-    )
-    # assign state codes to mills online facilities
-    mills_locs = mills_online_df.copy()
-    num_mills = len(mills_locs)
-    for imill in np.arange(0,num_mills):
-        state_name = mills_locs['state_name'][imill]
-        state_code = state_gdf[state_gdf['state_name'] == state_name]['state_code']
-        mills_locs.loc[imill, 'state_code'] = state_code.to_string(index=False)
-    # match subpart tt reporting facilities to the mills online facility list 
-    # and pull out non-reporting facilities
-    mills_locs.loc[:, 'ghgrp_match'] = 0
-    mills_locs.loc[:, 'city'] = mills_locs.loc[:, 'city'].str.lower()
-    subpart_tt_pp_emi_df.loc[:, 'city'] = subpart_tt_pp_emi_df.loc[:, 'city'].str.lower()
-    # try to match facilities to GHGRP based on county and city
-    for iyear in years:
-        for ifacility in np.arange(0,num_mills):
-            imatch = np.where((subpart_tt_pp_emi_df['year'] == iyear) & \
-                            (subpart_tt_pp_emi_df['state_code'] == mills_locs.loc[ifacility,'state_code']) & \
-                            (subpart_tt_pp_emi_df['city'] == mills_locs.loc[ifacility,'city']))[0]
-            if len(imatch) > 0:
-                mills_locs.loc[ifacility,'ghgrp_match'] = 1
-            else:
-                continue
-    # drop facilities already in reporting dataframe
-    mills_locs = mills_locs.query('ghgrp_match == 0')
+    nr_pp_proxy_df = gpd.read_parquet(nonreporting_pp_proxy_path)
     # list of unique states in non-reporting dataframe
-    nr_pp_states = mills_locs['state_code'].unique()
+    nr_pp_states = nr_pp_proxy_df['state_code'].unique()
     # remove city from subpart tt dataframe
     subpart_tt_pp_emi_df = subpart_tt_pp_emi_df.drop(columns=["city"])
 
