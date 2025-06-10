@@ -41,12 +41,18 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 # display the overall status of emi/proxy pairs
 g_info.display_all_pair_statuses()
 # %%
-gch4i_name = "4C1_4C2_Grassland_remaining_grassland"
-# gch4i_name = "4A1_4A2_Forest_land_remaining_forest_land"
+# gch4i_name = "3A_enteric_fermentation"
+gch4i_name = "3C_rice_cultivation"
 
-gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+gridding_rows = g_info.mapping_df.query(
     f"gch4i_name == '{gch4i_name}'"
 )
+num_pairs = len(gridding_rows)
+print(f"Number of emi/proxy pairs to grid: {num_pairs}")
+# display the rows that will be gridded
+display(gridding_rows)
+
+# %%
 for emi_proxy_data in tqdm(
     gridding_rows.itertuples(index=False),
     total=len(gridding_rows),

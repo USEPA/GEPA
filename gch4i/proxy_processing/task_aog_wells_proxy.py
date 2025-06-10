@@ -153,6 +153,8 @@ def get_aog_wells_proxy_data(
     )
 
     # Read in Enverus Abandoned Well Data (from ERG)
+  # EEM - this is the old v2 file, please update to the v3 file - located in the O&G Data Drop folder
+  # read in the well type, plugging status and location
     location_data = (
         pd.read_csv(Enverus_path, low_memory=False)
         # Drop columns
@@ -194,6 +196,13 @@ def get_aog_wells_proxy_data(
     Calculate the state-level fraction of abandoned gas to oil wells
     - This will be applied to the 'DRY' well counts in the next step
     - Also used to allocate the dry well population to either oil or gas types
+
+    # EEM - update this step to use the latest AOG well data. 
+    # Because emissions in the inventory are calculated as well counts * EF and the EF only depends on plugging status (and state) 
+    # we don't need to apportion dry wells in this code. 
+    # Instead, we just need to calculate the effective emissions from each well by weighting the well based on whether it is plugged or not (based on Enverus)
+    # The EFs for each state and plugging status are on the 3_State_EF tab in the new AOG wells file
+    
 
     gas wells = gas wells + dry wells * (gas wells / (gas wells + oil wells))
     """
@@ -361,6 +370,8 @@ def get_aog_wells_proxy_data(
 
     # STEP 4. Correct IL/IN Data
     ####################################################################################
+  # EEM: we still do want to make this correction for the IL/IN wells. If wwe have information about whether they are plugged or not, we can do the same relative weightings
+  # as for other states. If not, we can allocate emissions evenly across wells. 
     # Determine file extension
     if filter_condition == "GAS":
         file_extension = ERG_NEI_gas
@@ -672,6 +683,9 @@ def task_aog_gas_proxy_data(
     / "sector"
     / "nei_og"
     / "NEI_Reference_Grid_LCC_to_WGS84_latlon.shp",
+  # EEM: this is the v2 version of the abandoned wells file. The new file is in the 'O&G Data Drop' folder. 
+  # This new file includes the location, well type, and plug status of each individual well, which sould be used in v3. 
+  # this will help fill in the missing data for the 3 missing states
     Enverus_path: Path = V3_DATA_PATH.parent
     / "GEPA_Source_Code"
     / "Global_InputData"
