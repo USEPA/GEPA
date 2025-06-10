@@ -5,10 +5,11 @@ Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script is used to process the NLCD land cover data into
                         forest and grass binary layers aligned  the GEPA grid. The NLCD
                         dat is manually downloaded from the MRLC website and placed in
-                        the `gch4i/sector_data/nlcd` directory. The script creates binary
-                        rasters for forest and grassland, warps them to the GEPA grid, and
-                        vectorizes the rasters into GeoDataFrames. The resulting data is saved
-                        as GeoDataFrames in Parquet format for further analysis.
+                        the `gch4i/sector_data/nlcd` directory. The script creates
+                        binary rasters for forest and grassland, warps them to the GEPA
+                        grid, and vectorizes the rasters into GeoDataFrames. The
+                        resulting data is saved as GeoDataFrames in Parquet format for
+                        further analysis.
 """
 
 # %%
@@ -36,7 +37,7 @@ nlcd_2012_data_path = nlcd_dir / "Annual_NLCD_LndCov_2012_CU_C1V0.tif"
 # https://www.mrlc.gov/sites/default/files/docs/LSDS-2103%20Annual%20National%20Land%20Cover%20Database%20(NLCD)%20Collection%201%20Science%20Product%20User%20Guide%20-v1.0%202024_10_15.pdf
 forest_vals = [41, 42, 43]
 
-# NOTE: shrubland (52) may also be a valid classification for grassland?
+# NOTE: shrubland (52) may also be a valid classification for grassland
 grass_vals = [52, 71]
 
 
