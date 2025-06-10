@@ -438,9 +438,9 @@ def task_get_electricity_generation_proxy_data(
 ########################################################################################
 # %% indu_proxy
 
-@mark.persist
-@task(id='indu_proxy')
-def task_get_reporting_indu_proxy_data(
+# this seperate function does most of the processing
+# so that it can be imported and used by ng_indu_proxy
+def create_raw_indu_proxy( 
     subpart_C=GHGRP_subC_inputfile,
     subpart_D=GHGRP_subD_inputfile,
     facility_path=GHGRP_subDfacility_loc_inputfile,
@@ -532,7 +532,18 @@ def task_get_reporting_indu_proxy_data(
         )
         .drop(columns=['latitude', 'longitude'])
     )
+    return proxy_gdf
 
+@mark.persist
+@task(id='indu_proxy')
+def task_get_reporting_indu_proxy_data(subpart_C=GHGRP_subC_inputfile,
+    subpart_D=GHGRP_subD_inputfile,
+    facility_path=GHGRP_subDfacility_loc_inputfile,
+    reporting_indu_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / 'indu_proxy.parquet'
+):
+    
+    proxy_gdf = create_raw_indu_proxy(subpart_C, subpart_D, facility_path, reporting_indu_proxy_output_path)
+    
     # Normalize relative emissions to sum to 1 for each year and state
     # Drop state-years with 0 total volume
     proxy_gdf = (
@@ -546,6 +557,6 @@ def task_get_reporting_indu_proxy_data(
     )
     # Drop the original ch4_flux column
     proxy_gdf = proxy_gdf.drop(columns=['ch4_flux'])
-
-    proxy_gdf.to_parquet(reporting_indu_output_path)
+    
+    proxy_gdf.to_parquet(reporting_indu_proxy_output_path)
     return None
