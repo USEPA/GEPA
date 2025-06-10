@@ -1,21 +1,25 @@
 """
 Name:                   task_grassland_proxy.py
-Date Last Modified:     2024-03-11
-Authors Name:           C. Coxen (RTI International)
+Date Last Modified:     2024-06-10
+Authors Name:           C. Coxen, Nick Kruskamp (RTI International)
 Purpose:                Generate proxy data for forest land remaining forest land emissions
-Input Files:            - {sector_data_dir_path}/forestlands_grasslands/MTBS_byEventFuelFuelbed_09Sep2024.csv
-                        - {sector_data_dir_path}/forestlands_grasslands/fccs_fuelbed_Aug2023_jesModified.csv
-                        - {sector_data_dir_path}/forestlands_grasslands/nawfd_fuelbed_Aug2023_jesModified.csv
-                        - {sector_data_dir_path}/forestlands_grasslands/mtbs_perims_DD.shp
-                        - {global_data_dir_path}/tl_2020_us_state/tl_2020_us_state.shp
-                        - {emi_data_dir_path}/grassland_emi.csv
+Input Files:            -   {sector_data_dir_path}/forestlands_grasslands/MTBS_byEventFuelFuelbed_09Sep2024.csv
+                        -   {sector_data_dir_path}/forestlands_grasslands/fccs_fuelbed_Aug2023_jesModified.csv
+                        -   {sector_data_dir_path}/forestlands_grasslands/nawfd_fuelbed_Aug2023_jesModified.csv
+                        -   {sector_data_dir_path}/nlcd/NLCD_2012_grass_binary_gepa.parquet
+                        -   {sector_data_dir_path}/forestlands_grasslands/mtbs_perims_DD.shp
+                        -   {global_data_dir_path}/tl_2020_us_state/tl_2020_us_state.shp
+                        -   {emi_data_dir_path}/grassland_emi.csv
 
-Output Files:           - grassland_proxy.parquet
+Output Files:           -   grassland_proxy.parquet
 
-Notes:                  - This script assigns proxy GHGI emissions for grassland remaining grassland using MTBS fire data.
-                        - The proxy geometries are brought in from the MTBS fire permiter data. Some year-state combinations are missing
-                            MTBS emissions data and are given a proportion of 1.0 for the entire state. These state-years are given the
-                            geometry of the state from the tl_2020_us_state shapefile to allocate emissions across the entire state.
+Notes:                  -   This script assigns proxy GHGI emissions for grassland
+                            remaining grassland using MTBS fire data.
+                        -   The proxy geometries are brought in from the MTBS fire
+                            permiter data. Some year-state combinations are missing
+                            MTBS emissions data and are given a proportion of 1.0 for
+                            the entire state. These state-years are given the
+                            geometry of the grass land cover from the 2012 NLCD data.
 """
 
 # %% Import Libraries
