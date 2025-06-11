@@ -2032,6 +2032,11 @@ class GroupGridder(BaseGridder):
         """
 
         # we set 0 and negative values as NA
+      #EEM: The incoming data are in units on molec/cm2/s
+      # we want to plot them in units of Mg/km2/year
+      # Therefore, we need to divide them byt eh following conversion factor:
+      # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
+      # This conversion factor also needs to be applied to the difference plots. 
         plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         fg = plotting_data.plot.imshow(
@@ -2132,7 +2137,7 @@ class GroupGridder(BaseGridder):
         plt.close()
 
     def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
-        """calculate emissions in kt to flux"""
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
         return (
             10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
         )
