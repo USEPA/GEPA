@@ -9,16 +9,18 @@ Purpose:                This script produces proxies for underground and surface
                         underground or surface mines. The production data is then joined
                         with the mines database to get the production data for each
                         mine.
-Input Files:            - {ghgi_data_dir_path} / "1B1a_coal_mining_underground/
+Input Files:            -   {ghgi_data_dir_path} / "1B1a_coal_mining_underground/
                             Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        - {ghgi_data_dir_path} / "1B1a_coal_mining_surface/
+                        -   {ghgi_data_dir_path} / "1B1a_coal_mining_surface/
                             Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        - {sector_data_dir_path} / "abandoned_mines/Mines.zip"
-                        - {global_data_dir_path} / "tl_2020_us_state.zip"
-                        - {EIA_dir_path} / "coalpublic{year}.xls"
-Output Files:           - {proxy_data_dir_path} /
+                        -   {sector_data_dir_path} / "abandoned_mines/Mines.zip"
+                        -   {global_data_dir_path} / "tl_2020_us_state.zip"
+                        -   {sector_data_dir_path} / "coal" / "Updated_Loc.csv",
+                        -   {sector_data_dir_path} / "coal" / "Updated_Loc_ug.csv",
+                        -   {EIA_dir_path} / "coalpublic{year}.xls"
+Output Files:           -   {proxy_data_dir_path} /
                             "coal_{mine_type.lower()}_proxy.parquet"
-                        - {proxy_data_dir_path} /
+                        -   {proxy_data_dir_path} /
                             "coal_post_{mine_type.lower()}_proxy.parquet"
 
 NOTE: The 2021 and recent EIA files had to be converted manually to the .xlsx format.
@@ -34,12 +36,12 @@ from pathlib import Path
 from typing import Annotated
 from zipfile import ZipFile
 
-import pyarrow.parquet  # noqa
-import osgeo  # noqa
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import osgeo  # noqa
 import pandas as pd
+import pyarrow.parquet  # noqa
 import seaborn as sns
 from IPython.display import display
 from pytask import Product, mark, task
@@ -53,6 +55,29 @@ from gch4i.config import (
     years,
 )
 from gch4i.utils import download_url, normalize
+
+
+def get_corrected_mine_locs(in_paths, state_gdf):
+    corrected_loc_dfs = []
+    for in_path in in_paths:
+        corrected_loc_dfs.append(pd.read_csv(in_path))
+    corrected_loc_df = pd.concat(corrected_loc_dfs).rename(
+        columns={"msha_change": "MINE_ID"}
+    )
+
+    corrected_loc_df[["lat", "lon"]] = (
+        corrected_loc_df["correct_lat"].str.split("-", expand=True).astype(float)
+    )
+    # convert to negative for west longitudes
+    corrected_loc_df["lon"] = -corrected_loc_df["lon"]
+    corrected_loc_gdf = gpd.GeoDataFrame(
+        corrected_loc_df.drop(columns=["correct_lat", "correct_lng", "lat", "lon"]),
+        geometry=gpd.points_from_xy(corrected_loc_df.lon, corrected_loc_df.lat),
+        crs=4326,
+    ).set_index("MINE_ID")
+    ax = corrected_loc_gdf.plot()
+    state_gdf.boundary.plot(ax=ax, lw=0.5, color="xkcd:slate")
+    return corrected_loc_gdf
 
 
 # %% Set Constants & Paths
@@ -92,27 +117,32 @@ inv_ug_mine_count_by_year = {
 # Million cubic ft (mmcf) to Tg conversion factor - Source: EPA spreadsheet,
 # 'CM Emissions Summary' cell C 40.
 mmcf_to_Gg = 51921
-
+# coal input data
 coal_sector_dir = sector_data_dir_path / "coal"
-
+# county geospatial data
+CNTY_GEO_PATH: Path = global_data_dir_path / "tl_2020_us_county.zip"
+# EIA input data
 EIA_dir_path = coal_sector_dir / "EIA"
 
+# the two types of mines we are processing
+mine_types = ["Underground", "Surface"]
+
+# the columns we want to keep from the MSHA mines list
 mine_list_filter_cols = [
     "MSHA Mine ID",
     "District No.",
     "Mine Name",
     "State",
-    # "County",
-    # "Company Name",
-    # "Basin",
 ]
 
+# paths to the corrected location files
+# these are treated as a single dataframe in the processing
 corrected_location_paths = [
     coal_sector_dir / "Updated_Loc.csv",
     coal_sector_dir / "Updated_Loc_ug.csv",
 ]
-
-
+#
+# %% Download EIA Data
 for year in years:
     eia_name = f"coalpublic{year}.xls"
     eia_file_path = EIA_dir_path / eia_name
@@ -143,10 +173,6 @@ for year in years:
 
 # %%
 
-CNTY_GEO_PATH: Path = global_data_dir_path / "tl_2020_us_county.zip"
-
-
-mine_types = ["Underground", "Surface"]
 param_dict = {}
 for mine_type in mine_types:
 
@@ -229,11 +255,6 @@ for _id, kwargs in param_dict.items():
                 on="statefp",
                 how="left",
             )
-            # .assign(rep_point=lambda df: df.representative_point())
-            # .set_geometry("rep_point")
-            # .sjoin(state_gdf, how="left")
-            # .set_geometry("geometry")
-            # .drop(columns=["rep_point"])
             .assign(
                 county_name=lambda df: df["county_name"].str.casefold(),
                 state_name=lambda df: df["state_name"].str.casefold(),
@@ -241,34 +262,6 @@ for _id, kwargs in param_dict.items():
         )
         # %%
 
-        def get_corrected_mine_locs(in_paths):
-            corrected_loc_dfs = []
-            for in_path in in_paths:
-                corrected_loc_dfs.append(pd.read_csv(in_path))
-            corrected_loc_df = pd.concat(corrected_loc_dfs).rename(
-                columns={"msha_change": "MINE_ID"}
-            )
-
-            corrected_loc_df[["lat", "lon"]] = (
-                corrected_loc_df["correct_lat"]
-                .str.split("-", expand=True)
-                .astype(float)
-            )
-            # convert to negative for west longitudes
-            corrected_loc_df["lon"] = -corrected_loc_df["lon"]
-            corrected_loc_gdf = gpd.GeoDataFrame(
-                corrected_loc_df.drop(
-                    columns=["correct_lat", "correct_lng", "lat", "lon"]
-                ),
-                geometry=gpd.points_from_xy(corrected_loc_df.lon, corrected_loc_df.lat),
-                crs=4326,
-            ).set_index("MINE_ID")
-            ax = corrected_loc_gdf.plot()
-            state_gdf.boundary.plot(ax=ax, lw=0.5, color="xkcd:slate")
-            return corrected_loc_gdf
-
-        # get the corrected mine locations
-        corrected_loc_gdf = get_corrected_mine_locs(corrected_location_paths)
         # %%
         # load the MSHA mine data
         with ZipFile(msha_path) as z:
@@ -315,6 +308,10 @@ for _id, kwargs in param_dict.items():
             .assign(state_name=lambda df: df.state_name.str.strip().str.casefold())
         )
         # %%
+        # we now check that all the MSHA points are valid and not empty
+        # for the ones that are not valid or empty, we will try to get the geometry
+        # from the county it is listed in.
+
         msha_gdf = msha_gdf[(msha_gdf.is_valid) & (~msha_gdf.is_empty)].copy()
         msha_no_geo_df = msha_df[~msha_df.index.isin(msha_gdf.index)]
         msha_w_cnty_gdf = (
@@ -343,6 +340,7 @@ for _id, kwargs in param_dict.items():
         msha_w_geo_count = msha_w_geo_gdf.shape[0]
         msha_no_geo_count = msha_no_geo_df.shape[0]
 
+        # report out the counts of the different geodataframes
         print(f"MSHA mines w/ point geo:    {msha_gdf.index.nunique():,}")
         print(f"MSHA mines w/ county:       {msha_w_cnty_gdf.index.nunique():,}")
         print("-" * 50)
@@ -353,6 +351,8 @@ for _id, kwargs in param_dict.items():
         print("-" * 50)
         print(f"total MSHA mines:           {msha_df.shape[0]:,}")
 
+        # if we get here and are missing some mines, we will raise an error
+        # something needs to be corrected.
         if not total_msha_count == (msha_w_geo_count + msha_no_geo_count):
             print(
                 f"Sum of geodataframes does not match original MSHA dataframe: "
@@ -373,8 +373,6 @@ for _id, kwargs in param_dict.items():
         eia_mines_list = []
         for year in years:
             eia_file_path = [x for x in eia_paths if str(year) in x.name][0]
-
-            # EEM: e_df is a list of both underground and surface mines, right? I think we want to have separate mines lists for underground and surface
 
             # rename some columns for easier use, get only the correct mine type
             e_df = (
@@ -404,17 +402,22 @@ for _id, kwargs in param_dict.items():
         eia_mines_df
 
         # %%
-
+        # report out how many unique mines EIA has
         unique_eia_mines = eia_mines_df[eia_mines_df.index.duplicated()]
         unique_eia_mines
         # %%
+        # double check that our unique mines are not duplicated
         duplicate_mine_ids = unique_eia_mines[
             unique_eia_mines.index.duplicated(keep=False)
         ]
         duplicate_mine_ids
 
         # %%
-
+        # we now join the EIA mines with the MSHA mines to get the geometry
+        # we go through the process of matching EIA with MSHA to get the geometry
+        # NOTE: HOWEVER, if a mine is listed in EIA and MSHA but their state names do
+        # not match, we will not use the MSHA geometry for that mine. We will try to get
+        # the geometry from the county it is listed in from EIA.
         print(f"total EIA mines: {eia_mines_df.shape[0]:,}")
         count_not_in_msha = eia_mines_df[
             ~eia_mines_df.index.isin(msha_gdf.index)
@@ -464,10 +467,8 @@ for _id, kwargs in param_dict.items():
         print(f"eia mines left: {eia_mines_left_df.shape[0]:,}")
         # %%
 
-        # get the set of mines that still have no geo.
-        # eia_mines_no_geo = pd.concat([mismatched_state_mines, eia_mines_left_df]).reset_index()
-        # print(f"eia mines with no geo: {eia_mines_no_geo.shape[0]:,}")
-
+        # now we have the EIA mines with MSHA points and will pull the county geoms
+        # for the rest.
         # try to get geom from the counties
         eia_mines_w_cnty_gdf = (
             county_gdf[["county_name", "state_name", "geometry", "state_code"]]
@@ -489,6 +490,8 @@ for _id, kwargs in param_dict.items():
         # this is used to get location data onto inventory mines and EIA mines via
         # the county it is listed in from EIA
         # %%
+        # put the EIA point + county geoms back together and check that the counts
+        # match the original EIA mines dataframe.
         eia_mines_gdf = pd.concat([eia_mines_msha_geo_gdf, eia_mines_w_cnty_gdf]).loc[
             :,
             [
@@ -513,6 +516,7 @@ for _id, kwargs in param_dict.items():
         eia_mines_gdf
         # %%
 
+        # a quick report of mines that are active but have 0 production.
         print("how many mines are listed as active but have 0 production?")
         eia_mines_gdf.query(
             "mine_status == 'Active' & (production == 0)"
@@ -533,6 +537,7 @@ for _id, kwargs in param_dict.items():
         )
 
         # %%
+        # calculate the basin weighted production for each mine.
         def calc_prod_emi(data):
             # NOTE: although "Pennsylvania (Bituminous)" and "Pennsylvania (Anthracite)"
             # are listed in the original code, they are not calculated differently from
@@ -545,6 +550,9 @@ for _id, kwargs in param_dict.items():
                 "West Virginia (Southern)": 136.8,
             }
 
+            # if the mine_state is in the prod_coef_dict, we will multiply the
+            # production by the coefficient for that state, otherwise we will just
+            # return the production as is.
             if mine_state in list(prod_coef_dict.keys()):
                 res = data * prod_coef_dict[mine_state]
             else:
@@ -584,32 +592,28 @@ for _id, kwargs in param_dict.items():
             f"{duplicate_mine_ids.index.value_counts().sort_values()}"
         )
         duplicate_mine_ids
-        # %%
-        # test_mine_id = 4609535
-        if mine_type == "Surface":
-            test_mine_id = 3609183
-            test_mine_gdf = eia_mines_gdf[
-                eia_mines_gdf.index == test_mine_id
-            ].sort_values("year")
-            display(test_mine_gdf)
-            print(test_mine_gdf.year.nunique())
-            ax = test_mine_gdf.plot(color="xkcd:lavender")
-            msha_gdf[msha_gdf.index == test_mine_id].plot(
-                ax=ax, color="xkcd:teal", markersize=50, zorder=10
-            )
-            ax.set_title(f"mine_id {test_mine_id}")
-            xlim = ax.get_xlim()
-            ylim = ax.get_ylim()
-            state_gdf.boundary.plot(ax=ax, lw=1, color="xkcd:slate")
-            county_gdf.boundary.plot(ax=ax, lw=0.25, color="xkcd:slate")
-            ax.set_xlim(xlim)
-            ax.set_ylim(ylim)
-            sns.despine()
-            plt.show()
 
         # %%
         post_proxy_gdf = eia_mines_gdf
 
+        # get the corrected mine locations and apply it to the proxy data.
+        corrected_loc_gdf = get_corrected_mine_locs(corrected_location_paths, state_gdf)
+
+        """
+        For v3, we have updated the follow mine IDs in the correction file. Based on
+        an external use report and review of the sat imagery, these mines share the
+        same location.
+
+        This mine ID was originally corrected, but we are updating the correction
+        2900097	36.7088905 -108.429525
+        this is the new location
+        2900097	36.7857777 -108.4211064
+
+        for underground:
+        2902170	35.823078 -106.9697623
+        this is the new location
+        2902170	36.7857777 -108.4211064
+        """
         # get the MINE IDs that need to be have location corrected
         ids_need_loc_correction = post_proxy_gdf.index.isin(corrected_loc_gdf.index)
         # split the mines off and join on the new geometry to these MINE IDs
@@ -623,19 +627,6 @@ for _id, kwargs in param_dict.items():
         not_corr_loc_gdf = post_proxy_gdf[~ids_need_loc_correction].copy()
         # bring the corrected locations back into the main msha_gdf
         post_proxy_gdf = pd.concat([not_corr_loc_gdf, corr_loc_gdf])
-
-        """
-        This mine ID was originally corrected, but we are updating the correction
-        2900097	36.7088905 -108.429525
-        this is the new location
-        2900097	36.7857777 -108.4211064
-
-        for underground:
-        2902170	35.823078 -106.9697623
-        this is the new location
-        2902170	36.7857777 -108.4211064
-
-        """
 
         # %%
 
@@ -662,8 +653,12 @@ for _id, kwargs in param_dict.items():
             "county",
             "basin",
         ] + [ug_emi_col]
-        # if we are doing surface mines, we use the same EIA based proxy dataset for
-        # both mining and post.
+        # NOTE:
+        #   -   if we are doing surface mines, we use the same EIA based proxy dataset
+        #       for both mining and post.
+        #   -   if we are doing underground mines, we use the inventory mines list
+        #       from GHGI for underground and the EIA data for post.
+
         if mine_type == "Underground":
             ug_inv_mines_list = []
             for year in tqdm(years, desc="getting underground inventory mines"):
