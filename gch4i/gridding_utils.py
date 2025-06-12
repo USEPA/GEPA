@@ -1,28 +1,32 @@
 """
-Name:                   test_emi_proxy_mapping.py
-Date Last Modified:     2025-01-30
+Name:                   gridding_utils.py
+Date Last Modified:     2025-06-10
 Authors Name:           Nick Kruskamp (RTI International)
-Purpose:                This is a prototype file that would preceed the final gridding.
-                        It is intended to check the data files for the proxies and
-                        emissions to ensure that they are formatted correctly and
-                        contain the necessary columns for the gridding process. This
-                        file will output a csv file that will be used to guide the
-                        gridding process.
+Purpose:                This File contains the standard gridding classes for the
+                        GCH4I project. It is used to grid emissions and proxy data
+                        together to create a gridded methane emissions product.
+                        The classes are used to read in the emissions and proxy data,
+                        check the data for errors, and then grid the data together.
+                        The output is a gridded methane emissions product that can be
+                        used for further analysis.
 
-                        This file could also act as the final QC step before the
-                        gridding process.
-                        TODO: continue to add on checks for emi files and proxy files
-                        especially around the use of time [year, month] and spatial
-                        [state, county] dimensions and alignment between the emi and
-                        proxy pairs.
-                        TODO: finish the checking of netcdf files. I had just begun
-                        that process when I had to stop working on this file.
-                        TODO: below the to_csv that writes out the new emi proxy map
-                        file, I began to work on the QC type steps that would help
-                        identify files that needed to be updated. Almost always this is
-                        going to be proxy files.
-Input Files:            - all emi and proxy files
-Output Files:           - emi_proxy_mapping_output.csv
+                        Two main classes are defined:
+                        -   GriddingInfo: This class is used to prepare the emi/prox
+                            files by checking their attributes (do files exist,
+                            timestep, geographic resolution) and status. It pulls data
+                            from the data guide excel file and creates a new csv that
+                            holds the attributes. It also relies on a database file to
+                            hold the status of each emi/proxy gridding pair.
+                        -   BaseGridder: This class provides common functions for the
+                            EmiProxyGridder and GroupGridder who inherit from it.
+                        -   EmiProxyGridder: This class is used to grid the individual
+                            emissions and proxy data together. It reads in the data,
+                            checks the data for errors, and then grids the data together
+                            with the listed proxy file.
+                        -   GroupGridder: This class is used to grid all the emi/proxy
+                            pairs together for a given GCH4I group. It performs several
+                            QC checks internal to the current version v3, and when
+                            applicable compared the v2 and v3 emissions.
 """
 
 import calendar
@@ -360,7 +364,7 @@ class GriddingInfo:
             subset=["gch4i_name", "emi_id", "proxy_id"]
         )
         self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df.merge(
-            self.status_df, on=["gch4i_name", "emi_id", "proxy_id"]
+            self.status_df, on=["gch4i_name", "emi_id", "proxy_id"], how="left"
         )
 
         # if SKIP:
@@ -2028,6 +2032,11 @@ class GroupGridder(BaseGridder):
         """
 
         # we set 0 and negative values as NA
+      #EEM: The incoming data are in units on molec/cm2/s
+      # we want to plot them in units of Mg/km2/year
+      # Therefore, we need to divide them byt eh following conversion factor:
+      # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
+      # This conversion factor also needs to be applied to the difference plots. 
         plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         fg = plotting_data.plot.imshow(
@@ -2128,7 +2137,7 @@ class GroupGridder(BaseGridder):
         plt.close()
 
     def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
-        """calculate emissions in kt to flux"""
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
         return (
             10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
         )

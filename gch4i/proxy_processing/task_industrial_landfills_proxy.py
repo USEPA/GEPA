@@ -1,12 +1,13 @@
 """
 Name:                   task_industrial_landfills_proxy.py
-Date Last Modified:     2025-04-02
+Date Last Modified:     2025-06-09
 Authors Name:           H. Lohman (RTI International)
 Purpose:                Mapping of industrial landfills reporting and non-reporting
                         food & beverage and pulp & paper proxy emissions
 gch4i_name:             5A_industrial_landfills
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        GHGRP Subpart TT: "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV"
+                        GHGRP Subpart TT: sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv"
+                        GHGRP Facility Info: "landfills/GHGRP_Emitter_Facility_Information.csv"
                         FRS NAICS Codes: global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
                         FRS Facilities: global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
                         Mills OnLine: sector_data_dir_path / "landfills/Mills_OnLine.xlsx"
@@ -40,24 +41,24 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     ghgi_data_dir_path,
+    sector_data_dir_path,
     max_year,
     min_year,
 )
 
 from gch4i.utils import name_formatter
 
-# Change the name of this variable (I believe that this should be mt_to_kt)
 mt_to_kt = 0.001
-year_range = [*range(min_year, max_year+1,1)] #List of emission years
-year_range_str=[str(i) for i in year_range]
+year_range = [*range(min_year, max_year+1,1)]  # List of emission years
+year_range_str = [str(i) for i in year_range]
 num_years = len(year_range)
 
 # %%
 @mark.persist
 @task(id="industrial_landfills_proxy")
 def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
-  # note that this file path is not producing the full list of subpart tt facilities
-    subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
+    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
+    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_r_proxy.parquet",
 ):
@@ -78,64 +79,78 @@ def task_get_reporting_industrial_landfills_pulp_paper_proxy_data(
         .to_crs(4326)
         )
     
-    # Reporting facilities from subpart tt
-    reporting_pulp_paper_df = (
+    # Reporting facility emissions from Subpart TT
+    reporting_pp_emissions = (
         pd.read_csv(
-            subpart_tt_path,
-            usecols=("facility_name",
-                        "facility_id",
-                        "reporting_year",
-                        "ghg_quantity",
-                        "latitude",
-                        "longitude",
-                        "state",
-                        "city",
-                        "zip",
-                        "naics_code"))
+            subpart_tt_emissions_path,
+        )
         .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
+        .astype({"facility_id": int, "year": int})
+        .query("ghg_name == 'METHANE'")
+        .drop(columns="ghg_name")
         .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
         .drop(columns=["ch4_t"])
-        .drop_duplicates(subset=['facility_id', 'year'], keep='last')
-        .astype({"year": int})
-        .query("year.between(@min_year, @max_year)")
-        .astype({"naics_code": str})
-        .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
-        .drop(columns=["naics_code"])
+        .reset_index(drop=True)
+    )
+    # Reporting facility locations from GHGRP
+    reporting_pp_locations = (
+        pd.read_csv(
+            ghgrp_facility_info_path,
+            usecols=("facility_id",
+                     "latitude",
+                     "longitude",
+                     "state",
+                     "city",
+                     "zip",
+                     "primary_naics"))
+        .astype({"facility_id": int, "primary_naics": str})
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
+        .drop_duplicates(subset=['facility_id'], keep='last')
         .query("state_code.isin(@state_gdf['state_code'])")
         .reset_index(drop=True)
     )
 
-    reporting_pulp_paper_df['rel_emi'] = reporting_pulp_paper_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    reporting_pulp_paper_df = reporting_pulp_paper_df.drop(columns='ch4_kt')
+    # Merge the emissions with the facility locations
+    # Query pulp & paper NAICS codes
+    reporting_pp_df = ((
+        reporting_pp_emissions)
+        .merge(reporting_pp_locations, how="left", on="facility_id")
+        .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
+        .drop(columns=["naics_code"])
+        .dropna(subset=["latitude", "longitude"])
+        .reset_index(drop=True)
+    )
 
-    reporting_pulp_paper_gdf = (
+    # Calculate relative emissions
+    reporting_pp_df['rel_emi'] = reporting_pp_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_pp_df = reporting_pp_df.drop(columns='ch4_kt')
+
+    reporting_pp_gdf = (
         gpd.GeoDataFrame(
-            reporting_pulp_paper_df,
+            reporting_pp_df,
             geometry=gpd.points_from_xy(
-                reporting_pulp_paper_df["longitude"],
-                reporting_pulp_paper_df["latitude"],
+                reporting_pp_df["longitude"],
+                reporting_pp_df["latitude"],
                 crs=4326,
             ),
         )
-        .drop(columns=["facility_id", "latitude", "longitude", "city", "zip"])
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
 
-    reporting_pulp_paper_gdf['rel_emi'] = reporting_pulp_paper_gdf.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    reporting_pulp_paper_gdf = reporting_pulp_paper_gdf.drop(columns='ch4_kt')
-
-    reporting_pulp_paper_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
+    reporting_pp_gdf.to_parquet(reporting_pulp_paper_proxy_output_path)
     return None
 
 
 def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
-            state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-            subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
-            frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
-            frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
-            mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
-            nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
+    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
+    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
+    frs_naics_path: Path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
+    frs_facility_path: Path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
+    mills_online_path: Path = V3_DATA_PATH / "sector/landfills/Mills_OnLine.xlsx",
+    nonreporting_pulp_paper_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
 ):
     """
     The Mills OnLine database of facilities is compared against the Subpart TT 
@@ -161,31 +176,46 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .to_crs(4326)
         )
     
-    # Reporting facilities from subpart tt with NAICS codes that start with 321 and 322
-    reporting_pulp_paper_df = (
+    # Reporting facility emissions from Subpart TT
+    reporting_pp_emissions = (
         pd.read_csv(
-            subpart_tt_path,
-            usecols=("facility_name",
-                        "facility_id",
-                        "reporting_year",
-                        "ghg_quantity",
-                        "latitude",
-                        "longitude",
-                        "state",
-                        "city",
-                        "zip",
-                        "naics_code"))
+            subpart_tt_emissions_path,
+        )
         .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
+        .astype({"facility_id": int, "year": int})
+        .query("ghg_name == 'METHANE'")
+        .drop(columns="ghg_name")
         .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
         .drop(columns=["ch4_t"])
-        .drop_duplicates(subset=['facility_id', 'year'], keep='last')
-        .astype({"year": int})
-        .query("year.between(@min_year, @max_year)")
-        .astype({"naics_code": str})
+        .reset_index(drop=True)
+    )
+    # Reporting facility locations from Subpart TT
+    reporting_pp_locations = (
+        pd.read_csv(
+            ghgrp_facility_info_path,
+            usecols=("facility_id",
+                     "latitude",
+                     "longitude",
+                     "state",
+                     "city",
+                     "zip",
+                     "primary_naics"))
+        .astype({"facility_id": int, "primary_naics": str})
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
+        .drop_duplicates(subset=['facility_id'], keep='last')
+        .query("state_code.isin(@state_gdf['state_code'])")
+        .reset_index(drop=True)
+    )
+    # Merge the emissions with the facility locations
+    # Query pulp & paper NAICS codes
+    reporting_pp_df = ((
+        reporting_pp_emissions)
+        .merge(reporting_pp_locations, how="left", on="facility_id")
         .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
         .drop(columns=["naics_code"])
-        .query("state_code.isin(@state_gdf['state_code'])")
+        .dropna(subset=["latitude", "longitude"])
         .reset_index(drop=True)
     )
 
@@ -216,24 +246,24 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
     mills_locs.loc[:, 'lon'] = 0
     mills_locs.loc[:, 'city'] = mills_locs.loc[:, 'city'].str.lower()
 
-    reporting_pulp_paper_df.loc[:, 'found'] = 0
-    reporting_pulp_paper_df.loc[:, 'city'] = reporting_pulp_paper_df.loc[:, 'city'].str.lower()
+    reporting_pp_df.loc[:, 'found'] = 0
+    reporting_pp_df.loc[:, 'city'] = reporting_pp_df.loc[:, 'city'].str.lower()
 
     # try to match facilities to GHGRP based on county and city
     for iyear in np.arange(0, num_years):
         for ifacility in np.arange(0, len(mills_locs)):
-            imatch = np.where((reporting_pulp_paper_df['year'] == year_range[iyear]) &
-                              (reporting_pulp_paper_df['state_code'] == mills_locs.loc[ifacility, 'state_code']) &
-                              (reporting_pulp_paper_df['city'] == mills_locs.loc[ifacility, 'city']))[0]
+            imatch = np.where((reporting_pp_df['year'] == year_range[iyear]) &
+                              (reporting_pp_df['state_code'] == mills_locs.loc[ifacility, 'state_code']) &
+                              (reporting_pp_df['city'] == mills_locs.loc[ifacility, 'city']))[0]
             if len(imatch) > 0:
                 mills_locs.loc[ifacility, 'ghgrp_match'] = 1
-                mills_locs.loc[ifacility, 'lat'] = reporting_pulp_paper_df.loc[imatch[0], 'latitude']
-                mills_locs.loc[ifacility, 'lon'] = reporting_pulp_paper_df.loc[imatch[0], 'longitude']
-                reporting_pulp_paper_df.loc[imatch[0], 'found'] = 1
+                mills_locs.loc[ifacility, 'lat'] = reporting_pp_df.loc[imatch[0], 'latitude']
+                mills_locs.loc[ifacility, 'lon'] = reporting_pp_df.loc[imatch[0], 'longitude']
+                reporting_pp_df.loc[imatch[0], 'found'] = 1
             else:
                 continue
 
-        print('Found (%) Year', year_range[iyear], ':', 100*np.sum(mills_locs['ghgrp_match']/len(reporting_pulp_paper_df)))
+        print('Found (%) Year', year_range[iyear], ':', 100*np.sum(mills_locs['ghgrp_match']/len(reporting_pp_df)))
 
     # FRS facilities with NAICS codes that start with 321 and 322
     frs_main = (
@@ -288,6 +318,7 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
                   .drop(columns=["state_name", "county", "city", "grades", "ghgrp_match", "FRS_match"])
                   .rename(columns={"lat": "latitude", "lon": "longitude"})
                   .dropna()
+                  .dropna(subset=["latitude", "longitude"])
                   )
 
     nonreporting_pulp_paper_gdf = (
@@ -303,19 +334,13 @@ def task_get_nonreporting_industrial_landfills_pulp_paper_proxy_data(
         .loc[:, ["state_code", "geometry"]]
     )
 
-  #does this dataframe have a 'ch4_kt' column? There are no emissions estimated for FRS/MillsOnline facilities, so is this line of code setting all the relative values to 1/num facilities? (e.g., evenly distributing the emissions?)
-  #noting that we can't implement the v2 method where we only assigned the GHGI-GHGRP fraction of emissions to these non-reporting facilities because there are multiple cases
-  # where the GHGRP estiamted emissions for facilities within a state are larger than the GHGI emissions for a state
-    nonreporting_pulp_paper_gdf['rel_emi'] = nonreporting_pulp_paper_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    nonreporting_pulp_paper_gdf = nonreporting_pulp_paper_gdf.drop(columns='ch4_kt')
-
     nonreporting_pulp_paper_gdf.to_parquet(nonreporting_pulp_paper_proxy_output_path)
     return None
 
 
 def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
-  #note that this is not the full list of tt facilities
-    subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
+    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
+    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     reporting_food_beverage_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ind_landfills_fb_r_proxy.parquet",
 ):
@@ -337,61 +362,74 @@ def task_get_reporting_industrial_landfills_food_beverage_proxy_data(
         .to_crs(4326)
         )
     
-    # Reporting facilities from subpart tt
-    reporting_food_beverage_df = (
-    pd.read_csv(
-        subpart_tt_path,
-        usecols=("facility_name",
-                    "facility_id",
-                    "reporting_year",
-                    "ghg_quantity",
-                    "latitude",
-                    "longitude",
-                    "state",
-                    "city",
-                    "zip",
-                    "naics_code"))
-    .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
-    .drop(columns=["ch4_t"])
-    .drop_duplicates(subset=['facility_id', 'year'], keep='first')
-    .astype({"year": int})
-    .query("year.between(@min_year, @max_year)")
-    .astype({"naics_code": int})
-    .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
-    .drop(columns=["naics_code"])
-    .query("state_code.isin(@state_gdf['state_code'])")
-    .reset_index(drop=True)
+    # Reporting facility emissions from Subpart TT
+    reporting_fb_emissions = (
+        pd.read_csv(
+            subpart_tt_emissions_path,
+        )
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
+        .astype({"facility_id": int, "year": int})
+        .query("ghg_name == 'METHANE'")
+        .drop(columns="ghg_name")
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
+        .drop(columns=["ch4_t"])
+        .reset_index(drop=True)
+    )
+    # Reporting facility locations from Subpart TT
+    reporting_fb_locations = (
+        pd.read_csv(
+            ghgrp_facility_info_path,
+            usecols=("facility_id",
+                     "latitude",
+                     "longitude",
+                     "state",
+                     "city",
+                     "zip",
+                     "primary_naics"))
+        .dropna(subset=["latitude", "longitude", "primary_naics"])
+        .astype({"facility_id": int, "primary_naics": int})
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
+        .drop_duplicates(subset=['facility_id'], keep='last')
+        .query("state_code.isin(@state_gdf['state_code'])")
+        .reset_index(drop=True)
     )
 
-    reporting_food_beverage_df['rel_emi'] = reporting_food_beverage_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    reporting_food_beverage_df = reporting_food_beverage_df.drop(columns='ch4_kt')
+    # Merge the emissions with the facility locations
+    # Query food & beverage NAICS codes
+    reporting_fb_df = ((
+        reporting_fb_emissions)
+        .merge(reporting_fb_locations, how="left", on="facility_id")
+        .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
+        .drop(columns=["naics_code"])
+        .dropna(subset=["latitude", "longitude"])
+        .reset_index(drop=True)
+    )
 
-    reporting_food_beverage_gdf = (
+    # Calculate relative emissions
+    reporting_fb_df['rel_emi'] = reporting_fb_df.groupby(["state_code", "year"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+    reporting_fb_df = reporting_fb_df.drop(columns='ch4_kt')
+
+    reporting_fb_gdf = (
         gpd.GeoDataFrame(
-            reporting_food_beverage_df,
+            reporting_fb_df,
             geometry=gpd.points_from_xy(
-                reporting_food_beverage_df["longitude"],
-                reporting_food_beverage_df["latitude"],
+                reporting_fb_df["longitude"],
+                reporting_fb_df["latitude"],
                 crs=4326,
             ),
         )
-        .drop(columns=["latitude", "longitude", "city", "zip"])
         .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
     )
-
-    reporting_food_beverage_gdf['rel_emi'] = reporting_food_beverage_gdf.groupby(["state_code"])['ch4_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    reporting_food_beverage_gdf = reporting_food_beverage_gdf.drop(columns='ch4_kt')
-    
-    reporting_food_beverage_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
+    reporting_fb_gdf.to_parquet(reporting_food_beverage_proxy_output_path)
     return None
 
 
 def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-  #note that this is not the full tt facilities list
-    subpart_tt_path = "https://data.epa.gov/efservice/tt_subpart_ghg_info/pub_dim_facility/ghg_name/=/Methane/CSV",
+    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
+    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
     frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
     frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
     food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
@@ -428,32 +466,49 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
         .to_crs(4326)
         )
 
-    # Reporting facilities from subpart tt
-    reporting_food_beverage_df = (
-    pd.read_csv(
-        subpart_tt_path,
-        usecols=("facility_name",
-                    "facility_id",
-                    "reporting_year",
-                    "ghg_quantity",
-                    "latitude",
-                    "longitude",
-                    "state",
-                    "city",
-                    "zip",
-                    "naics_code"))
-    .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
-    .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
-    .drop(columns=["ch4_t"])
-    .drop_duplicates(subset=['facility_id', 'year'], keep='first')
-    .astype({"year": int})
-    .query("year.between(@min_year, @max_year)")
-    .astype({"naics_code": int})
-    .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
-    .drop(columns=["naics_code"])
-    .query("state_code.isin(@state_gdf['state_code'])")
-    .reset_index(drop=True)
+    # Reporting facility emissions from Subpart TT
+    reporting_fb_emissions = (
+        pd.read_csv(
+            subpart_tt_emissions_path,
+        )
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
+        .astype({"facility_id": int, "year": int})
+        .query("ghg_name == 'METHANE'")
+        .drop(columns="ghg_name")
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
+        .drop(columns=["ch4_t"])
+        .reset_index(drop=True)
+    )
+    # Reporting facility locations from Subpart TT
+    reporting_fb_locations = (
+        pd.read_csv(
+            ghgrp_facility_info_path,
+            usecols=("facility_id",
+                     "latitude",
+                     "longitude",
+                     "state",
+                     "city",
+                     "zip",
+                     "primary_naics"))
+        .dropna(subset=["latitude", "longitude", "primary_naics"])
+        .astype({"facility_id": int, "primary_naics": int})
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
+        .drop_duplicates(subset=['facility_id'], keep='last')
+        .query("state_code.isin(@state_gdf['state_code'])")
+        .reset_index(drop=True)
+    )
+
+    # Merge the emissions with the facility locations
+    # Query food & beverage NAICS codes
+    reporting_fb_df = ((
+        reporting_fb_emissions)
+        .merge(reporting_fb_locations, how="left", on="facility_id")
+        .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
+        .drop(columns=["naics_code"])
+        .dropna(subset=["latitude", "longitude"])
+        .reset_index(drop=True)
     )
 
     # list of food and beverage facilities
@@ -495,24 +550,24 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
     food_beverage_facilities_locs.loc[:,'ghgrp_match'] = 0
     food_beverage_facilities_locs.loc[:,'city'] = food_beverage_facilities_locs.loc[:,'city'].str.lower()
 
-    reporting_food_beverage_df.loc[:,'found'] = 0
-    reporting_food_beverage_df.loc[:,'city'] = reporting_food_beverage_df.loc[:,'city'].str.lower()
+    reporting_fb_df.loc[:,'found'] = 0
+    reporting_fb_df.loc[:,'city'] = reporting_fb_df.loc[:,'city'].str.lower()
 
     for iyear in np.arange(0, num_years):
         for ifacility in np.arange(0,num_facilities):
-            imatch = np.where((reporting_food_beverage_df['year'] == year_range[iyear]) & \
-                            (reporting_food_beverage_df['state_code'] == food_beverage_facilities_locs.loc[ifacility,'state_code']) & \
-                            (reporting_food_beverage_df['city'] == food_beverage_facilities_locs.loc[ifacility,'city']))[0]
+            imatch = np.where((reporting_fb_df['year'] == year_range[iyear]) & \
+                            (reporting_fb_df['state_code'] == food_beverage_facilities_locs.loc[ifacility,'state_code']) & \
+                            (reporting_fb_df['city'] == food_beverage_facilities_locs.loc[ifacility,'city']))[0]
                             # (reporting_pulp_paper_df['city'].str.contains(food_beverage_facilities_locs.loc[ifacility,'city'].upper())))[0]
             if len(imatch) > 0:
                 food_beverage_facilities_locs.loc[ifacility,'ghgrp_match'] = 1
-                food_beverage_facilities_locs.loc[ifacility,'lat'] = reporting_food_beverage_df.loc[imatch[0],'latitude']
-                food_beverage_facilities_locs.loc[ifacility,'lon'] = reporting_food_beverage_df.loc[imatch[0],'longitude']
-                reporting_food_beverage_df.loc[imatch[0],'found'] = 1
+                food_beverage_facilities_locs.loc[ifacility,'lat'] = reporting_fb_df.loc[imatch[0],'latitude']
+                food_beverage_facilities_locs.loc[ifacility,'lon'] = reporting_fb_df.loc[imatch[0],'longitude']
+                reporting_fb_df.loc[imatch[0],'found'] = 1
             else:
                 continue
 
-        print('Found (%) Year',year_range[iyear],':',100*np.sum(food_beverage_facilities_locs['ghgrp_match']/len(reporting_food_beverage_df)))
+        print('Found (%) Year',year_range[iyear],':',100*np.sum(food_beverage_facilities_locs['ghgrp_match']/len(reporting_fb_df)))
     
     # Read in FRS data to get location information for landfills with missing location 
     # information. FRS facilities with NAICS codes: 311612, 311421, 311513, 312140, 311611,
@@ -654,8 +709,6 @@ def task_get_nonreporting_industrial_landfills_food_beverage_proxy_data(
                        "ghgrp_match", "FRS_match", "geo_match"])
         .loc[:, ["state_code", "geometry", "rel_emi"]]
     )
-    nonreporting_food_beverage_gdf['rel_emi'] = nonreporting_food_beverage_gdf.groupby(["state_code", "year"])['avg_waste_t'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    nonreporting_food_beverage_gdf = nonreporting_food_beverage_gdf.drop(columns='avg_waste_t')
 
     nonreporting_food_beverage_gdf.to_parquet(nonreporting_food_beverage_proxy_output_path)
     return None
