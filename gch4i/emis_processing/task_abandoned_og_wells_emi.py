@@ -1,7 +1,7 @@
 """
 Name:                   task_abandoned_og_wells_emi.py
-Date Last Modified:     2024-12-12
-Authors Name:           A. Burnette (RTI International)
+Date Last Modified:     2025-06-10
+Authors Name:           A. Burnette, Nick Kruskamp (RTI International)
 Purpose:                Mapping of wells emissions to State, Year, emissions format
 gch4i_name:             1B2ab_abandoned_og_wells
 Input Files:            - {ghgi_data_dir_path}/1B2ab_abandoned_og_wells/
@@ -121,44 +121,38 @@ proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").quer
 emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
+    print(data)
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
-        "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
+        "input_path": ghgi_data_dir_path / source_path / data.file_name.values[0],
+        "emi_source": data.Subcategory2.str.strip().str.casefold().values[0],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
 emi_parameters_dict
-
-
+# %%
+input_path, emi_source, parameters, output_path = emi_parameters_dict[
+    "aog_gas_wells_emi"
+].values()
+input_path, emi_source, parameters, output_path
+# %%
+emi_df = get_abandoned_og_wells_inv_data(input_path, emi_source, parameters)
+emi_df.query("state_code == 'ID'").head(10)
+emi_df.query("state_code == 'ID'").head(10)
+emi_df.query("state_code == 'ID'").head(10)
 # %% STEP 3. Create Pytask Function and Loop
 
 
 def task_abandoned_og_wells_emi(
-    input_paths: list[Path],
-    source_list: list[str],
+    input_path: Path,
+    emi_source: str,
     parameters: dict,
     output_path: Annotated[Path, Product],
 ) -> None:
 
-    # Initialize the emi_df_list
-    emi_df_list = []
-    # Loop through the input paths and source list to get the emissions data
-    for input_path, ghgi_group in zip(input_paths, source_list):
-        individual_emi_df = get_abandoned_og_wells_inv_data(
-            input_path, ghgi_group, parameters
-        )
-        emi_df_list.append(individual_emi_df)
-
-    # Concatenate the emissions data and group by state and year
-    emission_group_df = (
-        pd.concat(emi_df_list)
-        .groupby(["state_code", "year"])["ghgi_ch4_kt"]
-        .sum()
-        .reset_index()
-    )
+    emi_df = get_abandoned_og_wells_inv_data(input_path, emi_source, parameters)
     # Save the emissions data to the output path
-    emission_group_df.to_csv(output_path)
+    emi_df.to_csv(output_path)
 
 
 # %%

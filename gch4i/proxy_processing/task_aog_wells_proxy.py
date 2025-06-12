@@ -1,10 +1,10 @@
 """
 Name:                   task_aog_wells_proxy.py
-Date Last Modified:     2025-06-05
+Date Last Modified:     2025-06-10
 Authors Name:           A. Burnette, Nick Kruskamp (RTI International)
 Purpose:                Mapping of abandoned wells oil/gas proxy emissions
 Input Files:            - Lat/Lon: NEI_Reference_Grid_LCC_to_WGS84_latlon.shp
-                        - Enverus Path: DIDSK_HEADERS_API10_2019_abandoned_wells.csv
+                        - Enverus Path: abandoned_wells.csv
                         - NEI Input (prefix): CONUS_SA_FILES_
 Output Files:           - aog_gas_wells_proxy.parquet
                         - aog_oil_wells_proxy.parquet
@@ -165,7 +165,7 @@ class AOGWellsProxy:
                     & (self.aban_well_gdf["comp_year"].isna())
                     & (self.aban_well_gdf["spud_year"] < year)
                 )
-            ]
+            ].copy()
             # Group by state and well type, sum producing entity counts
             well_counts = (
                 temp.groupby(["state", "abandoned_well_type"])["producing_entity_count"]
@@ -185,8 +185,7 @@ class AOGWellsProxy:
             ).replace(0, np.nan)
 
             # Reset index to make state a column and add year
-            year_results = well_counts.reset_index()
-            year_results["year"] = year
+            year_results = well_counts.reset_index().assign(year=year)
 
             # Filter to only include states in state_list
             year_results = year_results[
@@ -357,7 +356,9 @@ class AOGWellsProxy:
                 # was not previously throwing an error. So that tells me it was pulling from
                 # the previous path that was already in mem.
                 if report_year == 2020:
-                    path = f"{self.ERG_NEI_input}{report_year}/{self.well_type}_WELL.shp"
+                    path = (
+                        f"{self.ERG_NEI_input}{report_year}/{self.well_type}_WELL.shp"
+                    )
                 elif report_year == 2021:
                     if self.well_type == "GAS":
                         path = f"{self.ERG_NEI_input}{report_year}/_698.shp"
@@ -369,7 +370,9 @@ class AOGWellsProxy:
                     else:
                         path = f"{self.ERG_NEI_input}{report_year}/OilWells.shp"
                 else:
-                    path = f"{self.ERG_NEI_input}{report_year}/{self.well_type}_WELLS.shp"
+                    path = (
+                        f"{self.ERG_NEI_input}{report_year}/{self.well_type}_WELLS.shp"
+                    )
                 print(f"does the path exist:              {Path(path).exists()}")
                 print(f"is the right year in the path:    {str(report_year) in path}")
                 # Read in shapefile
@@ -433,19 +436,8 @@ class AOGWellsProxy:
 
     def prepare_final_proxy(self):
         # Combine base_results and IL_IN_adj
-        prelim_proxy_gdf = pd.concat(
-            [self.base_results, self.IL_IN_adj_gdf], ignore_index=True
-        )
-
-        """
-        Remove empty state/year/well_type combinations.
-        This will prevent division by zero errors in the next step.
-        This will enable checking for missing proxy data for emi data
-        """
-
-        # Remove empty proxies
-        prelim_proxy_gdf = (
-            prelim_proxy_gdf
+        proxy_gdf = (
+            pd.concat([self.base_results, self.IL_IN_adj_gdf], ignore_index=True)
             # Generate group sum for state_code, year, abandoned_well_type
             .assign(
                 group_sum=lambda x: x.groupby(
@@ -456,25 +448,7 @@ class AOGWellsProxy:
             .query("group_sum != 0")
             # Drop group_sum column
             .drop(columns="group_sum")
-        )
-
-        """
-        Emi Data exists, but no proxy data for these:
-        FL, 2012-2022, GAS
-        ID, 2012-2022, OIL
-        MD, 2012-2022, OIL
-        """
-
-        ####################################################################################
-        # STEP 6. Calculate grouped_proxy
-        """
-        Calculate the relative emissions for each state/year/well_type.
-        The rel_emi will be used to allocate emissions to the CONUS region
-
-        rel_emi = geometry[producing_entity_count]  / state_year_sum[producing_entity_count]
-        """
-        proxy_gdf = (
-            prelim_proxy_gdf
+            .query(f"abandoned_well_type == '{self.well_type}'")
             # Sum emissions
             .groupby(
                 ["state_code", "year", "abandoned_well_type", "geometry"],
@@ -496,69 +470,13 @@ class AOGWellsProxy:
         )
 
         ####################################################################################
-        # STEP 7. Check for missing proxy data AND Create alternative proxy data
+        # STEP 6. Calculate grouped_proxy
         """
-        Steps:
-            - Check if Proxy data is missing for a state/year/well_type
-            - Create Alternative Proxy Data: rel_emi = 1, geometry = state polygon
-                - This distributes emissions evenly across the state
+        Calculate the relative emissions for each state/year/well_type.
+        The rel_emi will be used to allocate emissions to the CONUS region
+
+        rel_emi = geometry[producing_entity_count]  / state_year_sum[producing_entity_count]
         """
-        # Build dictionary to map well to well emissions data
-        proxy_dict = {"GAS": "aog_gas_wells_emi", "OIL": "aog_oil_wells_emi"}
-
-        # Filter proxy_gdf to ensure only relevant proxy data
-        filtered_proxy = proxy_gdf.query(f"abandoned_well_type == '{self.well_type}'")
-
-        # Create filtered dictionary
-        # filtered_dict = {well_type: proxy_dict[well_type]}
-
-        # Check if proxy data exists for emissions data
-        # for key, value in filtered_dict.items():
-        emi_df = (
-            pd.read_csv(self.emi_path)
-            .query("ghgi_ch4_kt != 0")
-            .query("state_code != 'AK'")
-            .drop(columns=["Unnamed: 0"])
-        )
-
-        # Retrieve unique state codes for emissions without proxy data
-        # This step is necessary, as not all emissions data excludes emission-less states
-        emi_states = set(
-            emi_df[["state_code", "year"]].itertuples(index=False, name=None)
-        )
-        proxy_states = set(
-            filtered_proxy[["state_code", "year"]].itertuples(index=False, name=None)
-        )
-
-        # Find missing states
-        missing_states = emi_states.difference(proxy_states)
-
-        # Add missing states alternative data to grouped_proxy
-        alt_proxy_list = []
-        if missing_states:
-            # Create alternative proxy from missing states
-            alt_proxy = (
-                pd.DataFrame(missing_states, columns=["state_code", "year"])
-                # Assign well type and make rel_emi = 1
-                .assign(abandoned_well_type=self.well_type, rel_emi=1)
-                # Merge state polygon geometry
-                .merge(
-                    self.state_gdf[["state_code", "geometry"]],
-                    on="state_code",
-                    how="left",
-                )
-            )
-            # Convert to GeoDataFrame
-            alt_proxy = gpd.GeoDataFrame(
-                alt_proxy, geometry="geometry", crs="EPSG:4326"
-            )
-            # Append to grouped_proxy
-            alt_proxy_list.append(alt_proxy)
-
-        missing_state_proxy = pd.concat(alt_proxy_list, ignore_index=True)
-
-        proxy_gdf = pd.concat([proxy_gdf, missing_state_proxy], ignore_index=True)
-
         sum_check = (
             proxy_gdf.groupby(["state_code", "year"])["rel_emi"]
             .sum()
@@ -575,39 +493,37 @@ class AOGWellsProxy:
 
     def _scale_data_plug_status(self):
         """
-        First piece of AOG logic:
-        If state in {KY, NY, OH, PA. TN, WV} and status == plugged -> weight = 0.357
-        If state in {KY, NY, OH, PA. TN, WV} and status == unplugged -> weight = 30.57
-        If other state and status == plugged -> weight = 0.002
-        If other state and status == unplugged -> weight = 10.02
+        Apply the weighting factors that correspond to the emissions factors from the
+        1990-2022 GHGI based on plug status.
         """
-
-        # First piece of AOG logic:
-        # If state in {KY, NY, OH, PA. TN, WV} and status == plugged -> weight = 0.357
-        # If state in {KY, NY, OH, PA. TN, WV} and status == unplugged -> weight = 30.57
-        # If other state and status == plugged -> weight = 0.002
-        # If other state and status == unplugged -> weight = 10.02
-
+        # Define the plug state list
         plug_state_list = ["KY", "NY", "OH", "PA", "TN", "WV"]
 
-        plug_status_1 = (self.base_results.state_code.isin(plug_state_list)) & (
-            self.base_results.plugged_unplugged == "plugged"
-        )
-        plug_status_2 = (self.base_results.state_code.isin(plug_state_list)) & (
-            self.base_results.plugged_unplugged == "unplugged"
-        )
-        plug_status_3 = ~self.base_results.state_code.isin(plug_state_list) & (
-            self.base_results.plugged_unplugged == "plugged"
-        )
-        plug_status_4 = ~self.base_results.state_code.isin(plug_state_list) & (
-            self.base_results.plugged_unplugged == "unplugged"
-        )
+        state_list_plugged_mask = (
+            self.base_results.state_code.isin(plug_state_list)
+        ) & (self.base_results.plugged_unplugged == "plugged")
+        state_list_unplugged_mask = (
+            self.base_results.state_code.isin(plug_state_list)
+        ) & (self.base_results.plugged_unplugged == "unplugged")
+        other_state_plugged_mask = ~self.base_results.state_code.isin(
+            plug_state_list
+        ) & (self.base_results.plugged_unplugged == "plugged")
+        other_state_unplugged_mask = ~self.base_results.state_code.isin(
+            plug_state_list
+        ) & (self.base_results.plugged_unplugged == "unplugged")
+
+        # you can't use a series as a key, so this might look odd but it ensures the
+        # value to mask mapping is correct and clear
+        plugged_dict = {
+            0.357: state_list_plugged_mask,
+            30.57: state_list_unplugged_mask,
+            0.002: other_state_plugged_mask,
+            10.02: other_state_unplugged_mask,
+        }
 
         self.base_results["weight"] = 0.0
-        self.base_results.loc[plug_status_1, "weight"] = 0.357
-        self.base_results.loc[plug_status_2, "weight"] = 30.57
-        self.base_results.loc[plug_status_3, "weight"] = 0.002
-        self.base_results.loc[plug_status_4, "weight"] = 10.02
+        for val, mask in plugged_dict.items():
+            self.base_results.loc[mask, "weight"] = val
 
         self.base_results["orig_producing_entity_count"] = self.base_results[
             "producing_entity_count"
@@ -642,8 +558,6 @@ class AOGWellsProxy:
 
 
 # %% Load Path Files & Repeated Variables
-
-
 sector_path = sector_data_dir_path / "abandoned_aog_wells"
 
 # State Path
@@ -661,8 +575,8 @@ abadonded_wells_path = sector_path / "abandoned_wells.csv"
 ERG_NEI_input = V3_DATA_PATH / "sector" / "nei_og" / "CONUS_SA_FILES_"
 
 # Oil and Gas ERG NEI files (2012-2017)
-# ERG_NEI_gas = "/USA_698_NOFILL.txt"
-# ERG_NEI_oil = "/USA_695_NOFILL.txt"
+ERG_NEI_gas = "/USA_698_NOFILL.txt"
+ERG_NEI_oil = "/USA_695_NOFILL.txt"
 
 param_dict = dict()
 
@@ -673,7 +587,7 @@ param_dict["oil"] = dict(
     nei_grid_path=nei_grid_path,
     well_type="OIL",
     ERG_NEI_input=ERG_NEI_input,
-    file_extension="/USA_695_NOFILL.txt",
+    file_extension=ERG_NEI_oil,
     output_path=proxy_data_dir_path / "aog_oil_wells_proxy.parquet",
 )
 param_dict["gas"] = dict(
@@ -683,7 +597,7 @@ param_dict["gas"] = dict(
     nei_grid_path=nei_grid_path,
     well_type="GAS",
     ERG_NEI_input=ERG_NEI_input,
-    file_extension="/USA_698_NOFILL.txt",
+    file_extension=ERG_NEI_gas,
     output_path=proxy_data_dir_path / "aog_gas_wells_proxy.parquet",
 )
 # %%
@@ -714,7 +628,6 @@ def task_aog_proxy_data(
 
 
 # %%
-
 
 sesh = pytask.build(
     tasks=[task_aog_proxy_data(**kwargs) for _id, kwargs in param_dict.items()]
