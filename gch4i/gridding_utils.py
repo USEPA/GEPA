@@ -53,6 +53,7 @@ from joblib import Parallel, delayed
 from matplotlib.colors import TwoSlopeNorm
 from rasterio.features import rasterize
 from tqdm.auto import tqdm
+from scipy.constants import Avogadro
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -66,7 +67,6 @@ from gch4i.config import (
     years,
 )
 from gch4i.utils import (
-    Avogadro,
     GEPA_spatial_profile,
     Molarch4,
     get_cell_gdf,
@@ -2025,6 +2025,72 @@ class GroupGridder(BaseGridder):
         plt.show()
         plt.close(fig)
 
+    def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> float:
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1)
+
+        """
+        return (
+            10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
+        )
+
+    def calc_year_plot_conv_factor(self, year_days: int) -> float:
+        """calculate conversion factor for plotting in units of Mg/km2/year
+
+        EEM: The incoming data are in units on molec/cm2/s
+        we want to plot them in units of Mg/km2/year
+        Therefore, we need to divide them byt eh following conversion factor:
+        plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] /
+        (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
+        """
+        sec_to_yr = year_days * 24 * 60 * 60  # seconds in a year
+        cm2_to_km2 = 1e10  # cm^2 to km^2 conversion factor
+        g_to_mg = 1e6 # mg to g conversion factor
+        molecCm2s_to_MgKm2yr = (
+            Avogadro * Molarch4 * g_to_mg * cm2_to_km2 * sec_to_yr
+        )
+        return molecCm2s_to_MgKm2yr
+
+    def convert_flux_for_plotting(self, flux_da: xr.DataArray) -> xr.DataArray:
+        """
+        Convert the flux data from molec/cm2/s to Mg/km2/year for plotting.
+        This is a helper function to be used in the plotting methods.
+
+        This required the input data array to have a time dimension repping years.
+        """
+
+        # get the years of the flux data
+        years = flux_da.time.values
+
+        # in the event we have a single year, we need to make it atleast 1 dimensional.
+        years = np.atleast_1d(years)
+
+        # # get the shape of the flux data array
+        # # we will broadcast the conversion factors to this shape for each year
+        # arr_shape = flux_da.y.shape[0], flux_da.x.shape[0]
+
+        days_in_year = [self.get_days_in_year(x) for x in years]
+        conv_factors = [self.calc_year_plot_conv_factor(x) for x in days_in_year]
+
+        conv_ds = xr.DataArray(
+            conv_factors,
+            # np.flip(conv_factors, 1),
+            dims=["time"],
+            coords=[years],
+            name="conversion_factor",
+        )
+        display(conv_ds)
+        # make it 3d. This repeaats the value along the first axis, and matches the
+        # shape of the flux data array in x/y.
+
+        # if len(years) == 1:
+        #     out_da = flux_da / conv_factors[0]
+        # else:
+
+        # divide the flux data by the conversion factors to get the output data
+        out_da = flux_da / conv_ds
+
+        return out_da
+
     def plot_annual_raster_data(self) -> None:
         """
         Function to plot the raster data for each year in the dictionary of rasters that are
@@ -2032,12 +2098,9 @@ class GroupGridder(BaseGridder):
         """
 
         # we set 0 and negative values as NA
-      #EEM: The incoming data are in units on molec/cm2/s
-      # we want to plot them in units of Mg/km2/year
-      # Therefore, we need to divide them byt eh following conversion factor:
-      # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
-      # This conversion factor also needs to be applied to the difference plots. 
-        plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
+
+        # apply the conversion factor to the annual flux data for plotting
+        plotting_data = self.annual_plot_flux_da.where(lambda x: x != 0)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         fg = plotting_data.plot.imshow(
             col="time",
@@ -2073,7 +2136,7 @@ class GroupGridder(BaseGridder):
         # close the plot
         plt.close()
 
-    def plot_raster_data_difference(self) -> None:
+    def plot_map_first_last_year_diff(self) -> None:
         """
         Function to plot the difference between the first and last years of the raster data
         for each sector.
@@ -2081,20 +2144,15 @@ class GroupGridder(BaseGridder):
         # Define the geographic transformation parameters
 
         # Get the first and last years of the data
-        list_of_data_years = list(self.annual_flux_da.time.values)
-
+        list_of_data_years = list(self.annual_plot_flux_da.time.values)
         first_year = np.min(list_of_data_years)
         last_year = np.max(list_of_data_years)
 
-        first_year_data = self.annual_flux_da.sel(time=first_year)
-        last_year_data = self.annual_flux_da.sel(time=last_year)
+        first_year_data = self.annual_plot_flux_da.sel(time=first_year)
+        last_year_data = self.annual_plot_flux_da.sel(time=last_year)
 
         # Calculate the difference between the first and last years
-        self.difference_raster = (last_year_data - first_year_data).where(
-            lambda x: x != 0
-        )
-
-        plotting_data = self.difference_raster / 1e10
+        plotting_data = (last_year_data - first_year_data).where(lambda x: x != 0)
 
         c_map, c_norm = self._get_cmap(plotting_data)
         # Convert from cm^2 to km^2: 1 km^2 = 1e10 cm^2
@@ -2136,11 +2194,15 @@ class GroupGridder(BaseGridder):
         # close the plot
         plt.close()
 
-    def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
-        """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
-        return (
-            10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
-        )
+    def get_days_in_year(self, year):
+        year = int(year)
+        return 366 if calendar.isleap(year) else 365
+
+    def get_days_in_month(self, year_month):
+        year, month = year_month.split("-")
+        year = int(year)
+        month = int(month)
+        return calendar.monthrange(year, month)[1]
 
     def calculate_flux(self, in_ds, timestep, direction):
         """calculates flux for dictionary of total emissions year/array pairs"""
@@ -2157,18 +2219,8 @@ class GroupGridder(BaseGridder):
 
         times = in_ds.time.values
 
-        def get_days_in_year(year):
-            year = int(year)
-            return 366 if calendar.isleap(year) else 365
-
-        def get_days_in_month(year_month):
-            year, month = year_month.split("-")
-            year = int(year)
-            month = int(month)
-            return calendar.monthrange(year, month)[1]
-
         if timestep == "year_month":
-            days_in_months = [get_days_in_month(x) for x in times]
+            days_in_months = [self.get_days_in_month(x) for x in times]
             conv_factors = [
                 self.calc_conversion_factor(x, self.area_matrix) for x in days_in_months
             ]
@@ -2185,7 +2237,7 @@ class GroupGridder(BaseGridder):
             elif direction == "flux2mass":
                 self.monthly_flux_da = in_ds / conv_ds
         elif timestep == "year":
-            days_in_year = [get_days_in_year(x) for x in times]
+            days_in_year = [self.get_days_in_year(x) for x in times]
             conv_factors = [
                 self.calc_conversion_factor(x, self.area_matrix) for x in days_in_year
             ]
@@ -2321,7 +2373,7 @@ class GroupGridder(BaseGridder):
 
             self._plot_percent_dif_fig()
             self._plot_difference_histogram()
-            self._plot_difference_map()
+            self.plot_map_version_difference()
 
     def _plot_percent_dif_fig(self):
         g = sns.relplot(
@@ -2338,8 +2390,8 @@ class GroupGridder(BaseGridder):
         plt.show()
         plt.close()
 
-    def _plot_difference_map(self):
-        plotting_data = self.flux_diff_da / 1e10
+    def plot_map_version_difference(self):
+        plotting_data = self.convert_flux_for_plotting(self.flux_diff_da)
         c_map, c_norm = self._get_cmap(plotting_data)
         fg = plotting_data.plot.imshow(
             col="time",
@@ -2504,7 +2556,8 @@ class GroupGridder(BaseGridder):
             self.annual_mass_da, "year", "mass2flux"
         )
         self.QC_flux_emis()
-        self.plot_raster_data_difference()
+        self.annual_plot_flux_da = self.convert_flux_for_plotting(self.annual_flux_da)
+        self.plot_map_first_last_year_diff()
         self.plot_annual_raster_data()
         if self.monthly_source_count > 0:
             self.calculate_monthly_scaling()

@@ -42,7 +42,8 @@ from gch4i.config import (
     years,
 )
 
-Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
+# NOTE use scipy import
+# Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (
