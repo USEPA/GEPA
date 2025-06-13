@@ -170,10 +170,17 @@ def get_petro_production_inv_data(in_path, src, params):
     # Overwrite parameters if Emi group is made up of mutliple srcs
     # If source is in this list, then params must be overwritten, as it contributes
     # to a combined emission group.
+  #EEM: does it matter whether these are capitalized or not? For instance, will all the tanks sources be processed if the source name includes "Tanks' and not 'tanks'?
+  # This list is missing the source 'Malfunctioning Separator Dump Valves' (which should be added to the oil_pro_emi group
+  # EEM: in the v3 data guide, tanks, dump valves, sales areas, heaters, pressure relief values are all assigned to the 'oil_prod_emi' and use the 'oil_all_well_count_proxy'
+  # EEM: in the v3 data guide, blowdows, pipelines, battery pumps, chemical injection pumps, pneumatic devices, wellheads, separators, heater/treaters, headers are all assigned the 'oil_well_prod_emi' and all use the 'oil_well_count_proxy'
+  # EEM: Therefore, should all of these sources be combined here if they are using different proxies?
+  # EEM: in addition, the oil_well_prod_emi data (sum of blowdows, pipelines, battery pumps, chemical injection pumps, pneumatic devices, wellheads, separators, heater/treaters, headers) only appears to include pneumatic controllers and chemical injection pumps. The other sources are missing from the total emissions
+  #EEM: updated to 'heaters/treaters' and just 'pnuematic devices'
     if src in (['sales areas, heaters, pressure relief valves', 'tanks',
                 'blowdowns, pipelines, battery pumps',
-                'wellheads, separators, headers, heaters',
-                'chemical injection pumps', 'pneumatic devices - total']):
+                'wellheads, separators, headers, heaters/treaters',
+                'chemical injection pumps', 'pneumatic devices']):
         # Directly overwrite the params dictionary
         params = read_excel_params2(proxy_file_path,
                                     source_name,
@@ -272,6 +279,8 @@ def get_petro_production_inv_data(in_path, src, params):
             make_up = ["Offshore Pacific Federal and State Waters, Flare",
                        "Offshore Pacific Federal and State Waters, Vent/Leak"]
         # If True, 'make_up' list for querying emission_source
+        # EEM - only the GOM federal flaring emissions are being processed in the emission totals. It might be because the major and minor complexes have an empty space character at the end of the 
+                 # name string in the GHGI input file. 
         elif src == "offshore gom federal waters":
             make_up = ["Offshore GoM Federal Waters: Major Complexes",
                        "Offshore GoM Federal Waters: Minor Complexes",
