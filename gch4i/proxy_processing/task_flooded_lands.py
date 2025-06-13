@@ -95,7 +95,7 @@ def get_stack_params(years, q_dict):
         for the_year in years:
             # if the the year is 2021 or 2022, use 2020 data
                 
-            if the_year > 2020:
+            if the_year >= 2020:
                 # NOTE: for flooded land coverted other, the 2020 data are missing a
                 # state (ME), so instead of replicating 2020 into 2021 and 2022, we use
                 # the 2019 data, which is the last year that has data for all states.
