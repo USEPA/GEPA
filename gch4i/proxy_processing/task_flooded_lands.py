@@ -94,8 +94,16 @@ def get_stack_params(years, q_dict):
         input_paths = []
         for the_year in years:
             # if the the year is 2021 or 2022, use 2020 data
+                
             if the_year > 2020:
-                input_paths.append(intermediate_dir / f"{key}_2020.tif")
+                # NOTE: for flooded land coverted other, the 2020 data are missing a
+                # state (ME), so instead of replicating 2020 into 2021 and 2022, we use
+                # the 2019 data, which is the last year that has data for all states.
+                # we otherwise replicate 2020 into 2021 and 2022 for the other proxies.
+                if key == "fl_conv_other":
+                    input_paths.append(intermediate_dir / f"{key}_2019.tif")
+                else:
+                    input_paths.append(intermediate_dir / f"{key}_2020.tif")
             else:
                 input_paths.append(intermediate_dir / f"{key}_{the_year}.tif")
         arg_dict[f"{key}_stack"] = {
