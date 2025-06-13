@@ -107,8 +107,6 @@ file. The parameters are used to create the pytask task for the emi.
 """
 # gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
 source_name = "1B2ab_abandoned_og_wells"
-# Directory name for GHGI data
-source_path = "1B2ab_abandoned_og_wells"  # Changed from abandoned_og_wells
 
 # Data Guide Directory
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
@@ -123,23 +121,13 @@ emi_parameters_dict = {}
 for emi_name, data in proxy_data.groupby("emi_id"):
     print(data)
     emi_parameters_dict[emi_name] = {
-        "input_path": ghgi_data_dir_path / source_path / data.file_name.values[0],
+        "input_path": ghgi_data_dir_path / source_name / data.file_name.values[0],
         "emi_source": data.Subcategory2.str.strip().str.casefold().values[0],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
         "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
 emi_parameters_dict
-# %%
-input_path, emi_source, parameters, output_path = emi_parameters_dict[
-    "aog_gas_wells_emi"
-].values()
-input_path, emi_source, parameters, output_path
-# %%
-emi_df = get_abandoned_og_wells_inv_data(input_path, emi_source, parameters)
-emi_df.query("state_code == 'ID'").head(10)
-emi_df.query("state_code == 'ID'").head(10)
-emi_df.query("state_code == 'ID'").head(10)
 # %% STEP 3. Create Pytask Function and Loop
 
 
