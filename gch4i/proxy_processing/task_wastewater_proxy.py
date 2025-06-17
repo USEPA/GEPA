@@ -1003,7 +1003,7 @@ def create_wastewater_proxy_files(
     naics_codes = {
         'pp': '3221',
         'mp': '3116',
-        'fv': ['3114', '311991', '311340', '312130'],
+        'fv': ['3114', '311991'],
         'ethanol': '325193',
         'brew': '312120',
         'petrref': '32411'
@@ -1221,7 +1221,7 @@ def create_wastewater_proxy_files(
     facility_info = facility_info.rename(columns={
         'primary_naics': 'NAICS Code',
         'state_name': 'State',
-        'year': 'Year',
+        'year': 'Year'
     })
 
     facility_emis = facility_emis.rename(columns={'reporting_year': 'Year'})
