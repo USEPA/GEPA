@@ -1,6 +1,6 @@
 """
 Name:                   task_wastewater_proxy.py
-Date Last Modified:     2025-01-24
+Date Last Modified:     2025-06-18
 Authors Name:           C. Coxen (RTI International)
 Purpose:                Mapping of wastewater proxy emissions
 Input Files:            - ww_dom_nonseptic_emi.csv
@@ -15,6 +15,7 @@ Input Files:            - ww_dom_nonseptic_emi.csv
                         - NATIONAL_NAICS_FILE.csv
                         - NATIONAL_FACILITY_FILE.csv
                         - openbrewerydb_geolocated.csv
+                        - combined_echo_data.csv
 Output Files:           - ww_pp_proxy.parquet
                         - ww_mp_proxy.parquet
                         - ww_fv_proxy.parquet
@@ -136,8 +137,10 @@ def create_wastewater_proxy_files(
         print('Combined ECHO data already created and file has been read in.')
         return pd.read_csv(file_path, low_memory=False)
 
+
     def read_and_combine_csv_files(directory):
         """Reads and combines all ECHO .csv files in the given directory, excluding the combined file if it exists."""
+        print("No existing combined ECHO file found. Combining ECHO data from multiple CSV files...")
         dataframes = []
         for file in os.listdir(directory):
             if file.endswith('.csv') and not file.startswith("combined_echo_data"):
@@ -149,7 +152,8 @@ def create_wastewater_proxy_files(
         combined_df = combined_df[[
             "Year", "NPDES Permit Number", "FRS ID", "CWNS ID(s)", "Facility Type Indicator", 
             "SIC Code", "NAICS Code", "City", "State", "County", "Facility Latitude", 
-            "Facility Longitude", "Wastewater Flow (MGal/yr)", "Average Daily Flow (MGD)"
+            "Facility Longitude", "Wastewater Flow (MGal/yr)", "Average Daily Flow (MGD)", 
+            "Total Facility Design Flow (MGD)", 'Actual Average Facility Flow (MGD)'
         ]].fillna(0)
       # in step 2.1.1 of the v2 code, there was a process to attempt to fill in missing flow rate data using other variables like Facility Design Flow and 
       # Actual average daily flow. Since missing echo data seems to be an issue later on in the process, have we attempted to fill in any of that missing flow rate data here? 
@@ -425,7 +429,7 @@ def create_wastewater_proxy_files(
                     year_state_echo_no_ghgrp.loc[:, 'emis_kt'] = (
                         year_state_echo_no_ghgrp['flow_proportion'] * state_ghgi_emis_value
                     )
-
+                
                     # Drop the flow proportion column
                     year_state_echo_no_ghgrp = year_state_echo_no_ghgrp.drop(columns=['flow_proportion'])
 
@@ -502,6 +506,7 @@ def create_wastewater_proxy_files(
         # Some GHGRP data are empty after trying to join the GHGRP emi and facility data and have len == 0. Only look for spatial matches if there is GHGRP data.
         if len(ghgrp_df) != 0:
             # Check for very extreme outliers in ghgrp and drop them. This specifically targets a facility in ethanol that had over 500 times the IQR and alone had an order of magnitude more emis than the entire country in 2014.
+            # Note: there is code added to address ethanol facilities for ghgrp_eth based on direction provided by EPA and implemented in V2. Leaving this code in to catch additional outliers.
             iqr = ghgrp_df['emis_kt'].quantile(0.75) - ghgrp_df['emis_kt'].quantile(0.25)
             ghgrp_df = ghgrp_df[ghgrp_df['emis_kt'] < 500 * iqr].copy()
 
@@ -553,7 +558,7 @@ def create_wastewater_proxy_files(
     def clean_and_group_echo_data(df, facility_type):
         """Filters, groups, and adjusts flow values based on facility type."""
         # Filter the DataFrame based on facility type and whether flows are greater than 0
-        df_filtered = df[(df['Facility Type Indicator'] == facility_type) & (df['Wastewater Flow (MGal/yr)']>0)].copy()
+        df_filtered = df[df['Facility Type Indicator'] == facility_type].copy()
 
         # Group by 'Year' and 'NPDES Permit Number', aggregating necessary columns
         grouped_df = df_filtered.groupby(['Year', 'NPDES Permit Number'], as_index=False).agg({
@@ -565,7 +570,10 @@ def create_wastewater_proxy_files(
             'County': 'first',
             'Facility Latitude': 'max',
             'Facility Longitude': 'max',
-            'Wastewater Flow (MGal/yr)': 'max'
+            'Wastewater Flow (MGal/yr)': 'max',
+            'Total Facility Design Flow (MGD)': 'max',
+            'Average Daily Flow (MGD)': 'max',
+            'Actual Average Facility Flow (MGD)':'max'
         })
 
         grouped_df.reset_index(inplace=True, drop=True)
@@ -891,13 +899,115 @@ def create_wastewater_proxy_files(
         print(f"  Rows updated: {mask.sum()}")
         
         return df_copy
+
+
+    def process_wastewater_flow_data(df):
+        """
+        Process and optimize wastewater flow data with unit corrections and flow imputation.
+        This function mirrors the process used in the V2 GEPA code release to impute missing flow values and correct units.
+        
+        This function:
+        1. Corrects units for flows >= 1000 (divides by 1e6)
+        2. Calculates national ratios between different flow measurements
+        3. Imputes missing flow values using calculated ratios
+        4. Filters out facilities with no usable flow data
+        
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            DataFrame containing wastewater facility data with flow columns
+            
+        Returns:
+        --------
+        pd.DataFrame
+            Processed DataFrame with corrected flows and filtered facilities
+        """
+        # Create a copy to avoid modifying the original
+        df_processed = df.copy()
+        
+        # Step 1: Correct units for flows >= 1000 (assume incorrect units, divide by 1e6)
+        flow_columns = [
+            'Average Daily Flow (MGD)',
+            'Total Facility Design Flow (MGD)', 
+            'Actual Average Facility Flow (MGD)'
+        ]
+        
+        for col in flow_columns:
+            if col in df_processed.columns:
+                mask = df_processed[col] >= 1000
+                df_processed.loc[mask, col] = df_processed.loc[mask, col] / 1e6
+        
+        # Step 2: Calculate national ratios for flow imputation
+        # Ratio 1: Actual Average Flow / Total Design Flow (where actual < design)
+        ratio1_subset = df_processed[
+            (df_processed['Actual Average Facility Flow (MGD)'] > 0) & 
+            (df_processed['Total Facility Design Flow (MGD)'] > 0) &
+            (df_processed['Actual Average Facility Flow (MGD)'] < df_processed['Total Facility Design Flow (MGD)'])
+        ].copy()
+        
+        if len(ratio1_subset) > 0:
+            ratio1_subset['ratio1'] = (
+                ratio1_subset['Actual Average Facility Flow (MGD)'] / 
+                ratio1_subset['Total Facility Design Flow (MGD)']
+            )
+            potw_ratio1 = np.mean(ratio1_subset['ratio1'])
+        
+        # Ratio 2: Actual Average Flow / Average Daily Flow
+        ratio2_subset = df_processed[
+            (df_processed['Actual Average Facility Flow (MGD)'] > 0) & 
+            (df_processed['Average Daily Flow (MGD)'] > 0)
+        ].copy()
+        
+        if len(ratio2_subset) > 0:
+            ratio2_subset['ratio2'] = (
+                ratio2_subset['Actual Average Facility Flow (MGD)'] / 
+                ratio2_subset['Average Daily Flow (MGD)']
+            )
+            potw_ratio2 = np.median(ratio2_subset['ratio2'])
+        
+        # Step 3: Impute missing or invalid flow values using calculated ratios
+        # Replace flows <= 0 or flows > design capacity with scaled design flow
+        design_flow_mask = (
+            (df_processed['Wastewater Flow (MGal/yr)'] <= 0) | 
+            (df_processed['Wastewater Flow (MGal/yr)'] > df_processed['Total Facility Design Flow (MGD)'])
+        )
+        
+        df_processed.loc[design_flow_mask, 'Wastewater Flow (MGal/yr)'] = (
+            df_processed.loc[design_flow_mask, 'Total Facility Design Flow (MGD)'] * potw_ratio1
+        )
+        
+        # If still no design flow, replace with scaled average daily flow
+        daily_flow_mask = df_processed['Wastewater Flow (MGal/yr)'] <= 0
+        df_processed.loc[daily_flow_mask, 'Wastewater Flow (MGal/yr)'] = (
+            df_processed.loc[daily_flow_mask, 'Average Daily Flow (MGD)'] * potw_ratio2
+        )
+        
+        # Step 4: Report facilities with no flow/capacity data and filter them out
+        no_data_mask = (
+            (df_processed['Actual Average Facility Flow (MGD)'] == 0) & 
+            (df_processed['Total Facility Design Flow (MGD)'] == 0) & 
+            (df_processed['Average Daily Flow (MGD)'] == 0)
+        )
+        
+        facilities_with_no_data = df_processed[no_data_mask].shape[0]
+        total_facilities = df_processed.shape[0]
+        
+        print(f"{facilities_with_no_data} of {total_facilities} facilities have no flow/capacity data")
+        
+        # Filter out facilities with no usable flow data
+        df_processed = df_processed[df_processed['Wastewater Flow (MGal/yr)'] > 0].copy()
+        df_processed.reset_index(inplace=True, drop=True)
+        
+        return df_processed
+
+
     # %% Step 2.1 Read in and process FRS data
 
     # Subset the FRS data to only those sectors we need 
     naics_codes = {
         'pp': '3221',
         'mp': '3116',
-        'fv': ['3114', '311421', '311991', '311340', '312130'],
+        'fv': ['3114', '311991'],
         'ethanol': '325193',
         'brew': '312120',
         'petrref': '32411'
@@ -907,7 +1017,6 @@ def create_wastewater_proxy_files(
     for sector_name, naics_prefix in naics_codes.items():
         sector_df = subset_industrial_sector(frs_facility_path, frs_naics_path, sector_name, naics_prefix)
         sector_dataframes[sector_name] = sector_df
-
 
     # Access individual sector dataframes
     frs_pp = sector_dataframes['pp']
@@ -1073,6 +1182,12 @@ def create_wastewater_proxy_files(
     # Process NON-POTW facilities
     echo_nonpotw = clean_and_group_echo_data(echo_full, 'NON-POTW')
 
+    # Process POTW wastewater flow data using the methodology from the V2 GEPA code release
+    echo_potw = process_wastewater_flow_data(echo_potw)
+    
+    # Apply the same flow processing to NON-POTW facilities
+    echo_nonpotw = process_wastewater_flow_data(echo_nonpotw)
+
     # %% Step 2.3.2 Create dataframes for each non-potw industry
 
     echo_nonpotw['NAICS Code'] = echo_nonpotw['NAICS Code'].astype(str)
@@ -1082,7 +1197,7 @@ def create_wastewater_proxy_files(
     industries = {
         'pp': ('3221', ['2611', '2621', '2631']),
         'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
-        'fv': (['3114', '311421', '311991', '311340', '312130'], ['2037', '2038', '2033', '2035', '2032', '2034', '2099']),
+        'fv': (['3114'], ['2037', '2038', '2035', '2032', '2034']),
         'eth': ('325193', ['2869']),
         'brew': ('312120', ['2082']),
         'petrref': ('32411', ['2911'])
@@ -1110,7 +1225,7 @@ def create_wastewater_proxy_files(
     facility_info = facility_info.rename(columns={
         'primary_naics': 'NAICS Code',
         'state_name': 'State',
-        'year': 'Year',
+        'year': 'Year'
     })
 
     facility_emis = facility_emis.rename(columns={'reporting_year': 'Year'})
@@ -1124,7 +1239,7 @@ def create_wastewater_proxy_files(
     industry_filters = {
         'pp': '322',      # Pulp and paper
         'mp': '3116',     # Red meat and poultry
-        'fv': ['3114', '311421', '311991', '311340', '312130'],     # Fruits and vegetables
+        'fv': ['3114', '311421'],     # Fruits and vegetables
         'eth': '325193',  # Ethanol production
         'brew': '312120', # Breweries
         'ref': '324121'   # Petroleum refining
@@ -1139,6 +1254,10 @@ def create_wastewater_proxy_files(
     ghgrp_eth = ghgrp_industries['eth']
     ghgrp_brew = ghgrp_industries['brew']
     ghgrp_ref = ghgrp_industries['ref']
+
+    # Clean up a data issue in the ethanol data
+    ghgrp_eth.loc[(ghgrp_eth['Year'] == 2014) & (ghgrp_eth['facility_name'] == 'Hub City Energy'), 'emis_kt_tot'] /= 100
+    ghgrp_eth.loc[:,'emis_kt_tot'] = abs(ghgrp_eth.loc[:,'emis_kt_tot'])
 
     # %% Step 2.7 Join GHGRP, ECHO, and emi data
 
@@ -1169,6 +1288,6 @@ def create_wastewater_proxy_files(
     final_eth.to_parquet(ethanol_output_file, index=False)
     final_brew.to_parquet(brew_output_file, index=False)
     final_ref.to_parquet(petrref_output_file, index=False)
+
     final_nonseptic.to_parquet(nonseptic_output_file, index=False)
 
-# %%
