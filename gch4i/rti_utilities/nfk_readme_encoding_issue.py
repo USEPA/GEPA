@@ -9,10 +9,10 @@ Purpose:    To identify non-ASCII characters in a file and print their positions
 
 # %%
 import re
-from pathlib import Path
+from pyprojroot import here
 
 # Define the path to the file
-file_path = Path().cwd() / "README.md"
+file_path = here() / "README.md"
 
 # Read the content of the file
 with open(file_path, "r", encoding="utf-8") as file:
@@ -34,4 +34,14 @@ for line_num, line in enumerate(lines, start=1):
         print(
             f"Non-ASCII character '{char}' found at line {line_num}, column {col_num}"
         )
+# %%
+py_files = list(here().rglob("*/emis_processing/*.py"))
+line_counts = 0
+for file_path in py_files:
+    with open(file_path, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+        line_counts += len(lines)
+line_counts
+# %%
+len(py_files)
 # %%

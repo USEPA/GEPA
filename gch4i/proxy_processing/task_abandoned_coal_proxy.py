@@ -32,7 +32,7 @@ from gch4i.config import (
     sector_data_dir_path,
     max_year,
     min_year,
-    proxy_data_dir_path
+    proxy_data_dir_path,
 )
 from gch4i.utils import name_formatter
 
@@ -48,7 +48,7 @@ def task_get_abd_coal_proxy_data(
         ghgi_data_dir_path / "1B1a_abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx"
     ),
     msha_path: Path = sector_data_dir_path / "abandoned_mines/Mines.zip",
-    county_path: str = global_data_dir_path / "tl_2020_us_county.zip",
+    county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = (
         proxy_data_dir_path / "abd_coal_proxy.parquet"
@@ -99,6 +99,11 @@ def task_get_abd_coal_proxy_data(
         "Piceance": 4,
         "Western Basins": 4,
     }
+
+    # previously year days were recalculated for every year to calculate the fraction
+    # of years a mine way closed. I think a better approach would be to assign a
+    # constant that roughly equals the number of days in a year.
+    year_days = 365.25
 
     # https://www.epa.gov/sites/default/files/2016-03/documents/amm_final_report.pdf
     # basin coefficients pulled from v2
@@ -222,7 +227,7 @@ def task_get_abd_coal_proxy_data(
                     encoding="ISO-8859-1",
                     # usecols=["MINE_ID", "LATITUDE", "LONGITUDE"],
                 )
-                # XXX: what does this do? (from v2 notebook)
+                # EEM: this identifies whether the mine was a coal mine (C) or metal/non-metal mine
                 .query("COAL_METAL_IND == 'C'")
                 .dropna(subset=["LATITUDE", "LONGITUDE"])
                 .assign(
@@ -400,12 +405,12 @@ def task_get_abd_coal_proxy_data(
                 "operating_status",
             ],
         ]
-    )
+    ).reset_index(drop=True)
     all_mines_df
 
     # carrying over the guidance from v2, we will remove mines that are listed as active
     #       NOTES:
-    # 1)    Mines reopened in 2020 will not affect this notebook run for 2012-2018.
+    # 1)    Mines reopened in 2020 will not affect this notebook run for 2012-2018. #EEM: edit text
     # 2)    MSHA says mine 3600840 is active, but it is not in active mine GHGI
     #       workbook. It is in the abandoned mine workbook. abandoned in 1994.
     #       We keep it here.
@@ -424,40 +429,223 @@ def task_get_abd_coal_proxy_data(
     # So we filter the active mines that closed in 2020 or later to handle in the yearly
     # emissions calculations.
 
-    active_mines_df = all_mines_df.query(
-        # "(operating_status == 'Active')"
-        "(operating_status == 'Active') & (reopen_date.dt.year >= 2020)"
-    ).sort_values("reopen_date")
-    print(
-        "mines that are in the abandoned workbook but "
-        f"listed as active in the mine db: {len(active_mines_df)}"
-    )
-    active_mines_df
-
-    # questionable mines are those that have a reopen date after the date of
-    # abandonment, regardless of their status. There are 52 mines total that fall into
-    # this grey zone, include the 6 that are listed as active.
-    # questionable_mines = all_mines_df.query(
-    #     "reopen_date > date_abd"
-    # ).sort_values("MINE_ID")
-
-    # remove the active mines from the abandoned mines
-    abandoned_mines_df = all_mines_df.drop(index=active_mines_df.index)
+    all_mines_df.sort_values("reopen_date", ascending=False)
 
     # %%
-    # previously year days were recalculated for every year to calculate the fraction
-    # of years a mine way closed. I think a better approach would be to assign a
-    # constant that roughly equals the number of days in a year.
-    year_days = 365.25
+    # # actives mines are those that are listed as active and have a reopen date before
+    # # the study period. We will remove these from the abandoned mines list.
+    # active_mines_df = all_mines_df.query(
+    #     # "(operating_status == 'Active')"
+    #     "(operating_status == 'Active') & (reopen_date.dt.year < 2012)"
+    #     # EEM - why is the re-open date set to 2020 and not a different year? Check
+    #     # that this isn't a hold-over from v2
+    #     # NFK: if we adjust this to 2012, then we assume the have reopened and are truly
+    #     # active during this time period.
+    # ).sort_values("reopen_date")
+    # print(
+    #     "mines that are in the abandoned workbook but "
+    #     f"listed as active in the mine db: {len(active_mines_df)}"
+    # )
+    # active_mines_df
+    # %%
 
-    # Ensure active_mines_df has a datetime object for reopen_date
-    active_mines_df["reopen_date"] = pd.to_datetime(active_mines_df["reopen_date"], errors="coerce")
+    # remove the active mines from the abandoned mines
+    # %%
+    reference_mines_df = all_mines_df.copy()
+    # reference_mines_df = all_mines_df.drop(index=active_mines_df.index).reset_index(
+    #     drop=True
+    # )
+    reference_mine_count = len(reference_mines_df)
 
+    # questionable mines are those that have a reopen date after the date of
+    # abandonment and were reopened prior to the study period.
+    # We are gong to assume these were are abandoned during the entire study period
+    # dating back to the reported date of abandonment.
+    questionable_mines_df = reference_mines_df.query(
+        "(reopen_date >= date_abd)"
+        "& (date_abd.dt.year < @min_year)"
+        "& (reopen_date.dt.year < @min_year)"
+    ).sort_values("reopen_date")
+    reference_mines_df = reference_mines_df.drop(index=questionable_mines_df.index)
+    questionable_mines_df
+
+    # now closed minse are those that have a reopen date before the date of
+    # abandonment and closed prior to the study period.
+    now_closed_mines_df = reference_mines_df.query(
+        "(reopen_date <= date_abd)"
+        "& (date_abd.dt.year < @min_year)"
+        "& (reopen_date.dt.year < @min_year)"
+    ).sort_values("reopen_date")
+    reference_mines_df = reference_mines_df.drop(index=now_closed_mines_df.index)
+    now_closed_mines_df
+
+    # We also have mines that have an abandoned date but no reopen date, so we assume
+    # they are always abandoned.
+    never_reopened_mines_df = reference_mines_df.query(
+        "date_abd.dt.year < @min_year" "& (reopen_date.isna())"
+    )
+    reference_mines_df = reference_mines_df.drop(index=never_reopened_mines_df.index)
+    never_reopened_mines_df
+
+    # We have mines that were abandoned during the entire study period and have reopened
+    # after the study period. We will assume were abandoned
+    # during the study period.
+    abandoned_during_study_df = reference_mines_df.query(
+        "(date_abd.dt.year < @min_year) & (reopen_date.dt.year > @max_year)"
+    ).sort_values("date_abd")
+    reference_mines_df = reference_mines_df.drop(index=abandoned_during_study_df.index)
+    abandoned_during_study_df
+
+    # for all intents and purposes, these mines are always abandoned and we will
+    # calculate emissions based on the date of abandonment. These is the core dataset
+    # that does not need any further processing during the calculation of emissions.
+    always_abandoned_mines_df = pd.concat(
+        [
+            questionable_mines_df,
+            now_closed_mines_df,
+            never_reopened_mines_df,
+            abandoned_during_study_df,
+        ]
+    ).assign(gepa_status="abandoned")
+    always_abandoned_mines_df.sort_values("date_abd")
+    print(
+        f"number of mines that are always abandoned: {len(always_abandoned_mines_df)}"
+    )
+
+    # %%
+
+    # We also have mines that have status changes during the study period. These mines
+    # could have several different changes and require attention during the calculation
+    # of emissions.
+
+    # we have mines whos status changes during the study period. These are the ones that
+    # have to be dealth with the most during the calculations.
+    has_status_change_df = reference_mines_df.query(
+        "date_abd.dt.year.between(@min_year, @max_year) | "
+        "reopen_date.dt.year.between(@min_year, @max_year)"
+    )
+
+    print(
+        f"mines with status changes during the study period: {len(has_status_change_df)}"
+    )
+    has_status_change_count = len(has_status_change_df)
+
+    # Some mines report 2 status changes during the study period.
+    has_2_status_change_df = has_status_change_df.query(
+        "date_abd.dt.year.between(@min_year, @max_year)"
+        "& reopen_date.dt.year.between(@min_year, @max_year)"
+    )
+    has_status_change_df = has_status_change_df.drop(index=has_2_status_change_df.index)
+
+    print(
+        f"mines with 2 changes during the study period: {len(has_2_status_change_df)}"
+    )
+    # of the mines with 1 status change, these can either close or reopen during the
+    # study period. We will separate these into two categories:
+    has_status_change_df["gepa_status"] = np.where(
+        has_status_change_df["reopen_date"] <= has_status_change_df["date_abd"],
+        "open",
+        "abandoned",
+    )
+    reopens_during_study_df = has_status_change_df.query("reopen_date > date_abd")
+    print(f"mines that reopen during the study period: {len(reopens_during_study_df)}")
+    closes_during_study_df = has_status_change_df.query("reopen_date <= date_abd")
+    print(f"mines that close during the study period: {len(closes_during_study_df)}")
+
+    # if there are two dates during the study period, these can fall into two
+    # categories:
+    # 1) mines that were abandoned, reopened, and then abandoned again
+    # 2) mines that were open, abandoned, and then reopened
+    open_aban_open_df = has_2_status_change_df.query("reopen_date > date_abd")
+    aban_open_aban_df = has_2_status_change_df.query("reopen_date <= date_abd")
+
+    prepped_2_status_df = has_2_status_change_df.assign(
+        reopen_date=np.nan,
+        gepa_status=lambda df: np.where(
+            datetime.datetime(year=2012, month=12, day=31) < df["date_abd"], "open", "abandoned"
+        ),
+    )
+
+
+    # reference_mines_df = reference_mines_df.drop(index=has_status_change_df.index)
+    # has_status_change_df.sort_values("date_abd")
+    status_change_count_check = (
+        len(has_2_status_change_df)
+        + len(reopens_during_study_df)
+        + len(closes_during_study_df)
+    ) == has_status_change_count
+
+    print(f"do our numbers for status change add up? {status_change_count_check}")
+    # %%
+    count_check = (
+        len(always_abandoned_mines_df) + has_status_change_count
+    ) == reference_mine_count
+    print(
+        f"""
+        {len(always_abandoned_mines_df)} + {has_status_change_count} = {reference_mine_count}
+        do our total numbers add up: {count_check}
+        """
+    )
+    # %%
+    always_abandoned_mines_df["date_abd"].dt.year.value_counts().sort_index().plot(
+        kind="bar"
+    )
+    # %%
+    closes_during_study_df["date_abd"].dt.year.value_counts().sort_index().plot(
+        kind="bar"
+    )
+    # %%
+    reopens_during_study_df["reopen_date"].dt.year.value_counts().sort_index().plot(
+        kind="bar"
+    )
+    # %%
+    """
+    Here we are now holding the following dataframes for processing:
+    -   core_mines_df
+        -   always_abandoned_mines_df:
+            -   mines that were abandoned prior to the study period and have not reopened.
+            -   These are assumed to be abandoned and we calculate emissions based on the
+                date of abandonment regardless of the reopen date.
+    -   processing_mines_df == has_status_change_df + has_2_status_change_df
+        - reopens_during_study_df:
+            -   mines that have reopened during the study period. These mines will be
+                calculated based on the date of abandonment up to the date of reopen.
+        - closes_during_study_df:
+            -   mines that have closed during the study period. These mines will be be added
+                to the abandoned mines list and calculated based on the date of abandonment.
+        - has_2_status_change_df:
+            -   Since we have to make some assumptions about the time that any of these
+                mines were abandoned, we will calculate the emissions based on the date of
+                abandonment only, ignoring the reopen date.
+            -   mines that have a status change during the study period and have reopened
+                during the study period.
+            -   These mines can follow these patterns:
+                -   abandoned - reopen - abandoned
+                    -   mine emissions are calculated with the period of reopen removed in
+                        the calculation.
+                -   open - abandonded - repoen
+    """
+
+    # %%
     result_list = []
-    # for each year we have mine data, calculate emissions based on the basin, mine
-    # status, and the number of years closed.
-    for year in range(min_year, max_year + 1):
 
+    core_mines_df = always_abandoned_mines_df.copy()
+    # for the mines with 2 status changes, we are going to remove the reopen date so
+    # that we are only using the date of abandonment for the calculations.
+    # NOTE: we can ignore the FutreWarning here. It does not like setting the col as
+    # np.nan, but we are doing this to remove the reopen date from the calculations.
+    processing_mines_df = pd.concat(
+        [has_status_change_df, prepped_2_status_df]
+    ).copy()
+    print(f"starting with {len(core_mines_df)} core mines...")
+    print(f"{len(processing_mines_df)} open/close during time...")
+    print()
+    for year in range(min_year, max_year + 1):
+        # if year == 2014:
+        #     break
+        print("=" * 50)
+        print(f"Processing year: {year}")
+        print("=" * 50)
         # get the normalized ratios of mine status by year
         yearly_ratios_normed_df = ratios_normed_df.loc[year].droplevel(-1)
 
@@ -469,67 +657,101 @@ def task_get_abd_coal_proxy_data(
         ):
             raise ValueError("Ratios do not sum to 1")
 
-        # # get the number of days in the year
-        # month_days = [calendar.monthrange(year, x)[1] for x in range(1, 13)]
-        # year_days = np.sum(month_days)
-
         # this year date to calc relative emissions
         # NOTE: this is different from the v2 notebook where the date was 07/02
         # We can calculate the actual fraction of emissions for a given year.
         calc_date = datetime.datetime(year=year, month=12, day=31)
 
-        # calculate the number of days closed relative to 07/02 of this year?
-        # XXX: why not calculate the entire year?
-        # if the mine closed this year, give it special treatment where the
-        # number of days closed is 1/2 of the number of days closed relative to
-        # our date of 07/02 the logic here is: if the mine closed in this year,
-        # the number of days closed is equal to 1/2 the days closed relative to
-        # 07/02.
-        # calc_date = datetime.datetime(year=year, month=7, day=2)
-
-        # get the mines that are abandoned this year or earlier
-        year_abandoned_mines_df = abandoned_mines_df.query(
-            "date_abd <= @calc_date"
-        ).assign(
+        # get the mines that are always abandoned and have not changed status
+        # calculate emissions
+        year_aban_df = core_mines_df.copy().assign(
             # assign the current year for calculations
             year=year,
             days_closed=lambda df: (calc_date - df["date_abd"]),
-            # days_closed=lambda df: np.where(
-            #     df["date_abd"].dt.year == year,
-            #     -((calc_date - df["date_abd"]) / 2),
-            #     calc_date - df["date_abd"],
-            # ),
             # calculate the number of years closed
             years_closed=lambda df: (df["days_closed"].dt.days / year_days),
             # create an empty column to hold the results
             mine_emi=0,
         )
 
-        # these are mines that are listed as active, but were reopened this year
-        # so we take these mines and calculate the days closed as the difference
-        # of days from when it when it was abandoned to the day it reopened this year.
-        # if the mine was opened this year, we subtract out the number of days it was
-        # operational from the days closed
-        year_active_mines_df = active_mines_df.query(
-            "(date_abd < @calc_date) & (reopen_date.dt.year >= @calc_date.year)"
+        change_this_year_query = (
+            "((date_abd.dt.year == @calc_date.year)"
+            "| (reopen_date.dt.year == @calc_date.year))"
+        )
+        # these mines change status at some point, but are currently open and are
+        # not changing this year.
+        open_right_now_df = processing_mines_df.query(
+            f"(gepa_status == 'open') & ~{change_this_year_query}"
+        )
+        # these mines change status at some point, but are currently closed and are
+        # not changing this year.
+        closed_right_now_df = processing_mines_df.query(
+            f"(gepa_status == 'abandoned') & ~{change_this_year_query}"
         ).assign(
+            # assign the current year for calculations
             year=year,
-            operating_days=lambda df: np.where(
-                df["reopen_date"].dt.year.eq(year),
-                (calc_date - df["reopen_date"]).dt.days,
-                0
-            ),
-            days_closed=lambda df: (calc_date - df["date_abd"]).dt.days - df["operating_days"],
-            years_closed=lambda df: df["days_closed"] / year_days,
+            days_closed=lambda df: (calc_date - df["date_abd"]),
+            # calculate the number of years closed
+            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
+            # create an empty column to hold the results
+            mine_emi=0,
+        )
+        # get the mines that change status this year.
+        change_this_year_df = processing_mines_df.query(change_this_year_query)
+
+        # if a mine is abandoned this year, we will calculate the emissions based on
+        # the date of abandonment up to the end of the year.
+        aban_this_year_df = change_this_year_df.query(
+            "(date_abd.dt.year == @calc_date.year)"
+        ).assign(
+            # assign the current year for calculations
+            year=year,
+            days_closed=lambda df: (calc_date - df["date_abd"]),
+            # calculate the number of years closed
+            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
             # create an empty column to hold the results
             mine_emi=0,
         )
 
+        # if a mine is reopened this year, we will calculate the emissions based on
+        # the date of abandonment up to the date of reopen. NOTE: this is different than
+        # the other mines.
+        reopen_this_year_df = change_this_year_df.query(
+            "(reopen_date.dt.year == @calc_date.year)"
+        ).assign(
+            # assign the current year for calculations
+            year=year,
+            days_closed=lambda df: (df["reopen_date"] - df["date_abd"]),
+            # calculate the number of years closed
+            years_closed=lambda df: (df["days_closed"].dt.days / year_days),
+            # create an empty column to hold the results
+            mine_emi=0,
+        )
+
+        sum_check = (
+            len(closed_right_now_df)
+            + len(aban_this_year_df)
+            + len(reopen_this_year_df)
+            + len(open_right_now_df)
+        ) == len(processing_mines_df)
+        # print(f"total mines abandoned {year}: {len(year_aban_df)}")
+        print(f"mines closed:                         {len(closed_right_now_df)}")
+        print(f"mines open:                           {len(open_right_now_df)}")
+        print(f"mines abandoned:                      {len(aban_this_year_df)}")
+        print(f"mines reopen:                         {len(reopen_this_year_df)}")
+        print(f"do the numbers add up?                {sum_check}")
+        print("-" * 50)
+
         # combine the abandoned and newly reopened mines for this year
-        year_mines_df = pd.concat([year_abandoned_mines_df, year_active_mines_df])
+        year_mines_df = pd.concat(
+            [year_aban_df, closed_right_now_df, aban_this_year_df, reopen_this_year_df]
+        )
+
+        print(f"total mines:                          {len(year_mines_df)}")
 
         # we now calculate the emissions for each mine based on the status of the mine
         # and the basin it is in.
+
         data_list = []
         for (basin, status), data in year_mines_df.groupby(
             ["basin_nr", "simple status"]
@@ -552,6 +774,17 @@ def task_get_abd_coal_proxy_data(
         res_df.loc[res_df["recovering"].eq(1), "mine_emi"] = 0
         result_list.append(res_df)
 
+        # update the status of mines that changed this year.
+        processing_mines_df.loc[
+            processing_mines_df["date_abd"].dt.year == year, "gepa_status"
+        ] = "abandoned"
+
+        processing_mines_df.loc[
+            processing_mines_df["reopen_date"].dt.year == year, "gepa_status"
+        ] = "open"
+
+        print()
+
     result_df = pd.concat(result_list, ignore_index=True)
 
     # QC all recovering mines have 0 emissions
@@ -564,9 +797,8 @@ def task_get_abd_coal_proxy_data(
     ):
         raise ValueError("Recovering mines should have 0 emissions")
 
-    # result_df.head()
-
     # %%
+
     # some visuals to check the data
     sns.relplot(data=result_df, y="mine_emi", x="year", hue="state_code", kind="line")
     # sns.relplot(data=result_df, y="mine_emi", x="year", kind="line")
@@ -584,7 +816,6 @@ def task_get_abd_coal_proxy_data(
     # result_df.groupby(["state_code", "year", "basin_nr", "simple status"])[
     #     "mine_emi"
     # ].sum().reset_index()
-
     # %%
 
     # format the final proxy data by getting only the columns we need.
@@ -616,3 +847,5 @@ def task_get_abd_coal_proxy_data(
     # %%
     # save the final proxy data
     proxy_gdf.to_parquet(output_path)
+
+# %%

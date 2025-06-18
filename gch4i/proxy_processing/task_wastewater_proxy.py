@@ -1,6 +1,6 @@
 """
 Name:                   task_wastewater_proxy.py
-Date Last Modified:     2025-01-24
+Date Last Modified:     2025-06-18
 Authors Name:           C. Coxen (RTI International)
 Purpose:                Mapping of wastewater proxy emissions
 Input Files:            - ww_dom_nonseptic_emi.csv
@@ -15,6 +15,7 @@ Input Files:            - ww_dom_nonseptic_emi.csv
                         - NATIONAL_NAICS_FILE.csv
                         - NATIONAL_FACILITY_FILE.csv
                         - openbrewerydb_geolocated.csv
+                        - combined_echo_data.csv
 Output Files:           - ww_pp_proxy.parquet
                         - ww_mp_proxy.parquet
                         - ww_fv_proxy.parquet
@@ -154,6 +155,9 @@ def create_wastewater_proxy_files(
             "Facility Longitude", "Wastewater Flow (MGal/yr)", "Average Daily Flow (MGD)", 
             "Total Facility Design Flow (MGD)", 'Actual Average Facility Flow (MGD)'
         ]].fillna(0)
+      # in step 2.1.1 of the v2 code, there was a process to attempt to fill in missing flow rate data using other variables like Facility Design Flow and 
+      # Actual average daily flow. Since missing echo data seems to be an issue later on in the process, have we attempted to fill in any of that missing flow rate data here? 
+      # if not, can we add that here?
         # Write the combined data to a CSV file
         combined_df.to_csv(combined_echo_file_path, index=False)
         return combined_df
@@ -1284,4 +1288,6 @@ def create_wastewater_proxy_files(
     final_eth.to_parquet(ethanol_output_file, index=False)
     final_brew.to_parquet(brew_output_file, index=False)
     final_ref.to_parquet(petrref_output_file, index=False)
+
     final_nonseptic.to_parquet(nonseptic_output_file, index=False)
+
