@@ -1,7 +1,7 @@
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 
 import logging
@@ -41,9 +41,9 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 # display the overall status of emi/proxy pairs
 g_info.display_all_pair_statuses()
 # %%
+# gch4i_name = "3C_rice_cultivation"
+# gch4i_name = "1B1a_abandoned_coal"
 # gch4i_name = "3A_enteric_fermentation"
-gch4i_name = "3C_rice_cultivation"
-
 gch4i_name = "1B2ab_abandoned_og_wells"
 
 gridding_rows = g_info.pairs_ready_for_gridding_df.query(
@@ -54,7 +54,7 @@ gridding_rows
 for emi_proxy_data in tqdm(
     gridding_rows.itertuples(index=False),
     total=len(gridding_rows),
-    desc="gridding emi/proxy pairs"
+    desc="gridding emi/proxy pairs",
 ):
 
     epg = EmiProxyGridder(emi_proxy_data)

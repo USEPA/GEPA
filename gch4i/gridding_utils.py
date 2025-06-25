@@ -1817,8 +1817,11 @@ class GroupGridder(BaseGridder):
         qc_files = []
         for row in self.data_df.itertuples():
             base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
-            result = list(self.qc_dir.glob(f"{base_name}_emi_grid_qc.csv"))
-            qc_files.extend(result)
+            result = self.qc_dir / f"{base_name}_emi_grid_qc.csv"
+            if not result.exists():
+                print("FILE NOT FOUND")
+            else:
+                qc_files.append(result)
 
         qc_files = [x for x in qc_files if "monthly" not in x.name]
         if len(qc_files) != self.annual_source_count:
@@ -2026,29 +2029,20 @@ class GroupGridder(BaseGridder):
         plt.close(fig)
 
     def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> float:
-        """calculate emissions in kt to flux (in units of molec. cm-2 s-1)
-
-        """
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1)"""
         return (
             10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
         )
 
-    def calc_year_plot_conv_factor(self, year_days: int) -> float:
-        """calculate conversion factor for plotting in units of Mg/km2/year
-
-        EEM: The incoming data are in units on molec/cm2/s
-        we want to plot them in units of Mg/km2/year
-        Therefore, we need to divide them byt eh following conversion factor:
-        plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] /
-        (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
-        """
-        sec_to_yr = year_days * 24 * 60 * 60  # seconds in a year
-        cm2_to_km2 = 1e10  # cm^2 to km^2 conversion factor
-        g_to_mg = 1e6 # mg to g conversion factor
-        molecCm2s_to_MgKm2yr = (
-            Avogadro * Molarch4 * g_to_mg * cm2_to_km2 * sec_to_yr
+    def calc_year_plot_conv_factor(self, year):
+        year_days = self.get_days_in_year(year)
+        conv_factor = (
+            10**6 * Avogadro
+            * (year_days * 24 * 60 * 60)
+            * Molarch4
+            * float(1e10)
         )
-        return molecCm2s_to_MgKm2yr
+        return conv_factor
 
     def convert_flux_for_plotting(self, flux_da: xr.DataArray) -> xr.DataArray:
         """
@@ -2058,38 +2052,22 @@ class GroupGridder(BaseGridder):
         This required the input data array to have a time dimension repping years.
         """
 
-        # get the years of the flux data
-        years = flux_da.time.values
+        res_list = []
+        for i, time in enumerate(flux_da.time.values):
+            year = pd.to_datetime(time).year
+            year_days = self.get_days_in_year(year)
+            res = (
+                flux_da.sel(time=time)
+                / float(10**6 * Avogadro)
+                * (year_days * 24 * 60 * 60)
+                * Molarch4
+                * float(1e10)
+            )
+            res_list.append(res)
 
-        # in the event we have a single year, we need to make it atleast 1 dimensional.
-        years = np.atleast_1d(years)
+        out_ds = xr.concat(res_list, dim="time")
 
-        # # get the shape of the flux data array
-        # # we will broadcast the conversion factors to this shape for each year
-        # arr_shape = flux_da.y.shape[0], flux_da.x.shape[0]
-
-        days_in_year = [self.get_days_in_year(x) for x in years]
-        conv_factors = [self.calc_year_plot_conv_factor(x) for x in days_in_year]
-
-        conv_ds = xr.DataArray(
-            conv_factors,
-            # np.flip(conv_factors, 1),
-            dims=["time"],
-            coords=[years],
-            name="conversion_factor",
-        )
-        display(conv_ds)
-        # make it 3d. This repeaats the value along the first axis, and matches the
-        # shape of the flux data array in x/y.
-
-        # if len(years) == 1:
-        #     out_da = flux_da / conv_factors[0]
-        # else:
-
-        # divide the flux data by the conversion factors to get the output data
-        out_da = flux_da / conv_ds
-
-        return out_da
+        return out_ds
 
     def plot_annual_raster_data(self) -> None:
         """
@@ -2101,13 +2079,18 @@ class GroupGridder(BaseGridder):
 
         # apply the conversion factor to the annual flux data for plotting
         plotting_data = self.annual_plot_flux_da.where(lambda x: x != 0)
+        print(plotting_data.groupby("time").max(dim=...).values)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
+        print(plotting_data.groupby("time").max(dim=...).values)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=self.emi_custom_colormap,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            # interpolation=None,
+            vmin=0,
+            vmax=10,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2118,6 +2101,7 @@ class GroupGridder(BaseGridder):
             robust=True,
             figsize=(20, 20),
         )
+
         for ax in fg.axs.ravel():
             ax.add_feature(cfeature.LAND)
             ax.add_feature(cfeature.OCEAN)
@@ -2340,10 +2324,10 @@ class GroupGridder(BaseGridder):
             v3_mass_da = self.calculate_flux(
                 v3_time_match_da, timestep="year", direction="flux2mass"
             )
-            v2_mass_da = self.calculate_flux(
+            self.v2_mass_da = self.calculate_flux(
                 self.v2_flux_da, timestep="year", direction="flux2mass"
             )
-            self.mass_diff_da = (v3_mass_da - v2_mass_da).where(lambda x: x != 0)
+            self.mass_diff_da = (v3_mass_da - self.v2_mass_da).where(lambda x: x != 0)
             self.write_tif_output(
                 self.mass_diff_da,
                 self.qc_dir / f"{self.group_name}_ch4_v3_v2_mass_diff.tif",
@@ -2353,7 +2337,7 @@ class GroupGridder(BaseGridder):
                 self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_diff.tif",
             )
 
-            v2_mass_yearly_sums = np.nansum(v2_mass_da.values, axis=(1, 2))
+            v2_mass_yearly_sums = np.nansum(self.v2_mass_da.values, axis=(1, 2))
             v3_mass_yearly_sums = np.nansum(v3_mass_da.values, axis=(1, 2))
 
             mass_dif_df = pd.DataFrame(
@@ -2389,6 +2373,52 @@ class GroupGridder(BaseGridder):
         g.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_percent_difference.png")
         plt.show()
         plt.close()
+
+    def plot_timeseries_comparison(self, var="flux"):
+
+        if var not in ["flux", "mass"]:
+            raise ValueError(
+                f"var must be either 'flux' or 'mass', not {var}. "
+                "This is used to determine which variable to plot."
+            )
+        if var == "flux":
+            v3_data = self.annual_flux_da
+            v2_data = self.v2_flux_da
+        elif var == "mass":
+            v3_data = self.annual_mass_da
+            v2_data = self.v2_mass_da
+
+        tmp_v3_df = (
+            v3_data.rename(var)
+            .to_dataframe()
+            .reset_index()
+            .drop(columns=["x", "y"])
+            .assign(version="v3")
+            .query(f"{var} != 0")
+            .dropna(subset=[var])
+        )
+        tmp_v2_df = (
+            v2_data.rename(var)
+            .to_dataframe()
+            .reset_index()
+            .drop(columns=["x", "y"])
+            .assign(version="v2")
+            .query(f"{var} != 0")
+            .dropna(subset=[var])
+        )
+        compare_df = pd.concat([tmp_v2_df, tmp_v3_df], ignore_index=True)
+        g = sns.relplot(
+            data=compare_df,
+            x="time",
+            y=var,
+            hue="version",
+            kind="line",
+            height=5,
+            aspect=2,
+        )
+        g.figure.suptitle(
+            f"{self.group_name} v2 vs v3 {var} timeseries",
+        )
 
     def plot_map_version_difference(self):
         plotting_data = self.convert_flux_for_plotting(self.flux_diff_da)
