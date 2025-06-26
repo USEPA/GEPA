@@ -1737,6 +1737,7 @@ class GroupGridder(BaseGridder):
     emi_custom_colormap = colors.LinearSegmentedColormap.from_list(
         name="emi_cmap",
         colors=[
+            "#FFFFFF00",
             "#6F4C9B",
             "#6059A9",
             "#5568B8",
@@ -2037,10 +2038,7 @@ class GroupGridder(BaseGridder):
     def calc_year_plot_conv_factor(self, year):
         year_days = self.get_days_in_year(year)
         conv_factor = (
-            10**6 * Avogadro
-            * (year_days * 24 * 60 * 60)
-            * Molarch4
-            * float(1e10)
+            10**6 * Avogadro * (year_days * 24 * 60 * 60) * Molarch4 * float(1e10)
         )
         return conv_factor
 
@@ -2089,7 +2087,7 @@ class GroupGridder(BaseGridder):
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
             # interpolation=None,
-            vmin=0,
+            vmin=10**-15,
             vmax=10,
             cbar_kwargs={
                 "orientation": "horizontal",

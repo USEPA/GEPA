@@ -43,3 +43,6 @@ gridding_group_data = g_info.ready_groups_df.query(f"gch4i_name == '{gch4i_name}
 gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
 gg.run_gridding()
 # %%
+gg.plot_timeseries_comparison()
+gg.plot_timeseries_comparison("mass")
+# %%
