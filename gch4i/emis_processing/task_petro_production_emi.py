@@ -1,6 +1,6 @@
 """
 Name:                   task_petro_production_emi.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-06-25
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of petroleum production systems emissions
                         to State, Year, emissions format
@@ -170,17 +170,10 @@ def get_petro_production_inv_data(in_path, src, params):
     # Overwrite parameters if Emi group is made up of mutliple srcs
     # If source is in this list, then params must be overwritten, as it contributes
     # to a combined emission group.
-  #EEM: does it matter whether these are capitalized or not? For instance, will all the tanks sources be processed if the source name includes "Tanks' and not 'tanks'?
-  # This list is missing the source 'Malfunctioning Separator Dump Valves' (which should be added to the oil_pro_emi group
-  # EEM: in the v3 data guide, tanks, dump valves, sales areas, heaters, pressure relief values are all assigned to the 'oil_prod_emi' and use the 'oil_all_well_count_proxy'
-  # EEM: in the v3 data guide, blowdows, pipelines, battery pumps, chemical injection pumps, pneumatic devices, wellheads, separators, heater/treaters, headers are all assigned the 'oil_well_prod_emi' and all use the 'oil_well_count_proxy'
-  # EEM: Therefore, should all of these sources be combined here if they are using different proxies?
-  # EEM: in addition, the oil_well_prod_emi data (sum of blowdows, pipelines, battery pumps, chemical injection pumps, pneumatic devices, wellheads, separators, heater/treaters, headers) only appears to include pneumatic controllers and chemical injection pumps. The other sources are missing from the total emissions
-  #EEM: updated to 'heaters/treaters' and just 'pnuematic devices'
     if src in (['sales areas, heaters, pressure relief valves', 'tanks',
                 'blowdowns, pipelines, battery pumps',
-                'wellheads, separators, headers, heaters/treaters',
-                'chemical injection pumps', 'pneumatic devices']):
+                'wellheads, separators, headers, heaters',
+                'chemical injection pumps', 'pneumatic devices - total']):
         # Directly overwrite the params dictionary
         params = read_excel_params2(proxy_file_path,
                                     source_name,
@@ -272,19 +265,17 @@ def get_petro_production_inv_data(in_path, src, params):
                "offshore alaska state waters"]:
         # If True, 'make_up' list for querying emission_source
         if src == "offshore alaska state waters":
-            make_up = ["Offshore Alaska State Waters, Vent/Leak",
-                       "Offshore Alaska State Waters, Flare"]
+            make_up = ["offshore alaska state waters, vent/leak",
+                       "offshore alaska state waters, flare"]
         # If True, 'make_up' list for querying emission_source
         elif src == "offshore pacific federal and state waters":
-            make_up = ["Offshore Pacific Federal and State Waters, Flare",
-                       "Offshore Pacific Federal and State Waters, Vent/Leak"]
+            make_up = ["offshore pacific federal and state waters, flare",
+                       "offshore pacific federal and state waters, vent/leak"]
         # If True, 'make_up' list for querying emission_source
-        # EEM - only the GOM federal flaring emissions are being processed in the emission totals. It might be because the major and minor complexes have an empty space character at the end of the 
-                 # name string in the GHGI input file. 
         elif src == "offshore gom federal waters":
-            make_up = ["Offshore GoM Federal Waters: Major Complexes",
-                       "Offshore GoM Federal Waters: Minor Complexes",
-                       "Offshore GoM Federal Waters: Flaring"]
+            make_up = ["offshore gom federal waters: major complexes",
+                       "offshore gom federal waters: minor complexes",
+                       "offshore gom federal waters: flaring"]
             # state_name = "ALL"  # I assume GOM (Gulf of Mexico)
         emi_df = (
             # Rename columns
@@ -293,6 +284,10 @@ def get_petro_production_inv_data(in_path, src, params):
             .filter(items=["emission source"] + year_list, axis=1)
             # Add '_' to emission source
             .rename(columns={"emission source": "emission_source"})
+            # lowercase and remove leading/trailing whitespace
+            .assign(
+                emission_source=lambda d: d['emission_source'].str.strip().str.casefold()
+                )
             # Query for 'make_up' in emissions_source
             .query("emission_source in @make_up")
             )
@@ -348,8 +343,10 @@ def get_petro_production_inv_data(in_path, src, params):
         .fillna(0)
         .reset_index()
     )
+    # If source emissions are in MT, convert to KT
     # If-else statement: if source is in the list, then follow this path
-    if src in ["tanks", "wellheads, separators, headers, heaters"]:
+    if src in ["tanks", "wellheads, separators, headers, heaters",
+               "chemical injection pumps", "pneumatic devices - total"]:
         emi_df = (
             # Melt the data: unique state/year
             emi_df.melt(id_vars="state_code", var_name="year", value_name="ch4_mt")
@@ -444,19 +441,4 @@ for _id, _kwargs in emi_parameters_dict.items():
         group_cols = [col for col in df.columns if col != "ghgi_ch4_kt"]
         emission_group_df = df.groupby(group_cols)["ghgi_ch4_kt"].sum().reset_index()
 
-        # if 'state_code' in individual_emi_df.columns:
-        #     emission_group_df = (
-        #         pd.concat(emi_df_list)
-        #         .groupby(["year"])["ghgi_ch4_kt"]
-        #         .sum()
-        #         .reset_index()
-        #     )
-        # else:
-        #     emission_group_df = (
-        #         pd.concat(emi_df_list)
-        #         .groupby(["state_code", "year"])["ghgi_ch4_kt"]
-        #         .sum()
-        #         .reset_index()
-        #     )
-        # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)

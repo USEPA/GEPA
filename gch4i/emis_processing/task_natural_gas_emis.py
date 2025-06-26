@@ -1,11 +1,66 @@
 """
-Name:                   task_iron_steel_emi.py
-Date Last Modified:     2024-12-12
+Name:                   task_natural_gas_emis.py
+Date Last Modified:     2024-06-25
 Authors Name:           Nick Kruskamp
-Purpose:                Mapping of Grassland emissions to State, Year, emissions format
+Purpose:                Mapping of Natural Gas emissions to State, Year,
+                            emissions format
 gch4i_name:             - 1B2bii_ng_production, 1B2biv_ng_transmission_storage
-Input Files:            -
-Output Files:           -
+Input Files:            - ghgi_data_dir_path/1B2biv_ng_transmission_storage/
+                            NaturalGasSystems_90-22_FR.xlsx
+                        - ghgi_data_dir_path/1B2bii_ng_production/
+                            ChemicalInjectionPumps_StateEstimates_2024.xlsx
+                            Completions+Workovers_StateEstimates_2024.xlsx
+                            EquipLeaks_StateEstimates_2024.xlsx
+                            Liquids Unloading_StateEstimates_2024.xlsx
+                            NG_GB_StateEstimates.xlsx
+                            NG_PROD_FedOffshore.xlsx
+                            NG_PROD_StateEstimates_AKstateoffshore.xlsx
+                            NG_PROD_StateEstimates_All Wells.xlsx
+                            NG_PROD_StateEstimates_Basin220.xlsx
+                            NG_PROD_StateEstimates_Basin395.xlsx
+                            NG_PROD_StateEstimates_Basin430.xlsx
+                            NG_PROD_StateEstimates_BasinOther.xlsx
+                            NG_PROD_StateEstimates_NonAssocConv.xlsx
+                            NG_PROD_StateEstimates_NonAssocHF.xlsx
+                            NG_PROD_StateEstimates_ProdWater.xlsx
+                            NG_PROD_StateEstimates_StateGOMoffshore.xlsx
+                            PneumaticControllers_StateEstimates_2024.xlsx
+                            Tanks_State_Estimates.xlsx
+Output Files:           - emi_data_dir_path/
+                            allwell_prod_emi
+                            tank_vent_emi
+                            non_assoc_exp_hf_comp_emi
+                            non_assoc_exp_conv_comp_emi
+                            basin_220_emi
+                            basin_395_emi
+                            basin_430_emi
+                            basin_other_emi
+                            gas_well_drilled_emi
+                            gb_stations_emi
+                            non_assoc_conv_emi
+                            non_assoc_exp_well_emi
+                            non_assoc_hf_emi
+                            not_mapped_emi
+                            prod_water_emi
+                            state_gom_offshore_emi
+                            well_blowout_emi
+                            dist_emi
+                            processing_em
+                            export_terminals_emi
+                            farm_pipelines_emi
+                            generators_emi
+                            import_terminals_emi
+                            lng_storage_emi
+                            storage_comp_station_emi
+                            storage_wells_emi
+                            storage_wells_blowout_emi
+                            trans_comp_station_emi
+                            trans_pipelines_emi
+                            postmeter_vehicles_emi
+                            postmeter_resi_emi"
+                            postmeter_ind_egu_emi
+                            postmeter_comm_emi
+                            federal_gom_offshore_emi
 Notes:                  -
 """
 
@@ -109,7 +164,25 @@ def read_exp_term_data(in_path, sheet_name, src):
         .assign(
             ghgi_source=lambda df: df["source"].astype(str).str.strip().str.casefold()
         )
-        .query(f"ghgi_source == '{src}'")
+    )
+    # Rename storage/transmission station total emissions to match src
+    # If src is Station Total Emissions (Transmission)
+    if src == 'station total emissions (transmission)':
+        match_idx = df[df['ghgi_source'] == 'station total emissions'].index
+        df.loc[match_idx[0], 'ghgi_source'] = src
+    # If src is Station Total Emission (Storage)
+    elif src == 'station total emissions (storage)':
+        match_idx = df[df['ghgi_source'] == 'station total emissions'].index
+        df.loc[match_idx[1], 'ghgi_source'] = src
+    # If src is Wells (Storage) (Blowout)
+    elif src == 'wells (storage) (blowout)':
+        match_idx = df[df['ghgi_source'] == 'wells (storage)'].index
+        df.loc[match_idx, 'ghgi_source'] = src
+    # Otherwise change nothing
+    else:
+        pass
+    df = (
+        df.query(f"ghgi_source == '{src}'")
         .filter(
             items=year_list,
             axis=1,
@@ -120,6 +193,16 @@ def read_exp_term_data(in_path, sheet_name, src):
         # drop the old units
         .drop(columns=["ch4_tg"])
     )
+    # If src is Wells (Storage) (Blowout), minus blowout years & zero non-blowout years
+    if src == 'wells (storage)':
+        df['year'] = df['year'].astype(int)
+        df.loc[df['year'] == 2015, 'ghgi_ch4_kt'] -= 78.350
+        df.loc[df['year'] == 2016, 'ghgi_ch4_kt'] -= 21.288
+    elif src == 'wells (storage) (blowout)':
+        df['year'] = df['year'].astype(int)
+        df.loc[df['year'] == 2015, 'ghgi_ch4_kt'] = 78.350
+        df.loc[df['year'] == 2016, 'ghgi_ch4_kt'] = 21.288
+        df.loc[~df['year'].isin([2015, 2016]), 'ghgi_ch4_kt'] = 0
     return df
 
 
@@ -284,6 +367,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             "lng_storage_emi",
             "storage_comp_station_emi",
             "storage_wells_emi",
+            "storage_wells_blowout_emi",
             "trans_comp_station_emi",
             "trans_pipelines_emi",
         ]:
@@ -327,5 +411,4 @@ for _id, _kwargs in emi_parameters_dict.items():
         # save the emi file.
         emission_group_df.to_csv(output_path)
 
-
-# %%
+#
