@@ -346,7 +346,8 @@ def get_petro_production_inv_data(in_path, src, params):
     # If source emissions are in MT, convert to KT
     # If-else statement: if source is in the list, then follow this path
     if src in ["tanks", "wellheads, separators, headers, heaters",
-               "chemical injection pumps", "pneumatic devices - total"]:
+               "chemical injection pumps", "pneumatic devices - total",
+               "hf workovers - total"]:
         emi_df = (
             # Melt the data: unique state/year
             emi_df.melt(id_vars="state_code", var_name="year", value_name="ch4_mt")
