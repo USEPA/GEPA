@@ -74,7 +74,7 @@ logging.basicConfig(
 )
 # %%
 g_info = GriddingInfo(update_mapping=True, save_file=True)
-g_info.display_pair_status()
+g_info.display_all_pair_statuses()
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
@@ -98,20 +98,20 @@ SKIP_THESE = [
 ]
 
 # %%
-gch4i_name = "3C_rice_cultivation"
-gridding_rows = g_info.pairs_ready_for_gridding_df.query(
-    f"gch4i_name == '{gch4i_name}'"
-)
-gridding_rows
+# gch4i_name = "3C_rice_cultivation"
+# gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+#     f"gch4i_name == '{gch4i_name}'"
+# )
+# gridding_rows
 # %%
 # example for running all emi/proxy pairs
 for row in tqdm(
-    gridding_rows.itertuples(index=False),
-    total=len(gridding_rows),
+    g_info.pairs_ready_for_gridding_df.itertuples(index=False),
+    total=len(g_info.pairs_ready_for_gridding_df),
 ):
     out_qc_dir = logging_dir / row.gch4i_name
     try:
-        epg = EmiProxyGridder(row, out_qc_dir)
+        epg = EmiProxyGridder(row)
         epg.run_gridding()
         print(epg.base_name, epg.status)
     except Exception as e:

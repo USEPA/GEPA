@@ -59,6 +59,7 @@ from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
     global_data_dir_path,
+    prelim_gridded_dir,
     logging_dir,
     max_year,
     min_year,
@@ -180,6 +181,7 @@ class GriddingInfo:
                     right_index=True,
                     how="left",
                 )
+                .astype({"proxy_has_file": bool})
                 .fillna({"proxy_has_file": False})
             )
             if self.save_file:
@@ -372,8 +374,12 @@ class GriddingInfo:
         #         ~self.pairs_ready_for_gridding_df["status"].isin(SKIP_THESE)
         #     ]
 
-    def display_group_emi_proxy_statuses(self):
-        pass
+    def display_group_emi_proxy_statuses(self, group_name):
+        self.get_ready_pairs()
+        group_statuses_df = self.pairs_ready_for_gridding_df.query(
+            f"gch4i_name == '{group_name}'"
+        )
+        display(group_statuses_df[["emi_id", "proxy_id", "status"]])
 
     def get_ready_groups(self):
         # get the status of each gridding group
@@ -402,6 +408,8 @@ class GriddingInfo:
             .multiply(100)
             .round(2)
         )
+        print("groups not ready for gridding")
+        display(self.group_ready_status.query("status == False"))
 
     def display_all_pair_statuses(self):
         # display the progress of the emi/proxy pairs
@@ -485,7 +493,6 @@ class EmiProxyGridder(BaseGridder):
         self.emi_id = emi_proxy_in_data.emi_id
         self.proxy_id = emi_proxy_in_data.proxy_id
         self.proxy_time_step = emi_proxy_in_data.proxy_time_step
-        self.proxy_time_step = emi_proxy_in_data.proxy_time_step
         self.proxy_has_year_col = emi_proxy_in_data.proxy_has_year_col
         self.proxy_has_month_col = emi_proxy_in_data.proxy_has_month_col
         self.proxy_has_year_month_col = emi_proxy_in_data.proxy_has_year_month_col
@@ -501,8 +508,6 @@ class EmiProxyGridder(BaseGridder):
             self.status = "not started"
             self.update_status()
         self.base_name = f"{self.gch4i_name}-{self.emi_id}-{self.proxy_id}"
-        self.emi_input_path = list(emi_data_dir_path.glob(f"{self.emi_id}.csv"))[0]
-        self.proxy_input_path = list(proxy_data_dir_path.glob(f"{self.proxy_id}.*"))[0]
         self.annual_output_path = self.qc_dir / f"{self.base_name}.tif"
         self.has_monthly = (
             self.emi_time_step == "monthly" or self.proxy_time_step == "monthly"
@@ -524,6 +529,24 @@ class EmiProxyGridder(BaseGridder):
         logging.info(
             f"{self.proxy_id} is at {self.proxy_geo_level}/{self.proxy_time_step} level."
         )
+        self.emi_input_path = self.get_path(self.emi_id, emi_data_dir_path)
+        self.proxy_input_path = self.get_path(self.proxy_id, proxy_data_dir_path)
+
+    def get_path(self, file_name, file_path):
+        try:
+            in_path = list(file_path.glob(f"{file_name}.*"))[0]
+            if not in_path.exists():
+                self.status = "emi file not found"
+                self.update_status()
+                logging.critical(self.status)
+                raise FileNotFoundError(self.status)
+        except IndexError:
+            self.status = f"{file_name} file not found"
+            self.update_status()
+            logging.critical(self.status)
+            raise FileNotFoundError(self.status)
+
+        return in_path
 
     def get_status(self):
         self.cursor.execute(
@@ -2533,6 +2556,7 @@ class GroupGridder(BaseGridder):
 
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
+        print(f"DEBUG plotting values: {c_min}, {c_max}")
         if c_min >= 0:
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
             c_map = "Reds"
@@ -2591,3 +2615,37 @@ class GroupGridder(BaseGridder):
             self.calculate_monthly_scaling()
         self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
         self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
+
+
+def run_whole_group(gch4i_name, g_info):
+    gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+        f"gch4i_name == '{gch4i_name}'"
+    )
+    gridding_rows
+    for emi_proxy_data in tqdm(
+        gridding_rows.itertuples(index=False),
+        total=len(gridding_rows),
+        desc="gridding emi/proxy pairs",
+    ):
+        try:
+            epg = EmiProxyGridder(emi_proxy_data)
+            epg.run_gridding()
+            print(epg.base_name, epg.status)
+        except Exception as e:
+            print(
+                f"Error gridding {emi_proxy_data.emi_id} and "
+                f"{emi_proxy_data.proxy_id}: {e}"
+            )
+            continue
+
+    g_info.get_ready_groups()
+    g_info.display_group_emi_proxy_statuses(gch4i_name)
+
+    if g_info.group_ready_status.loc[gch4i_name].iloc[0]:
+        gridding_group_data = g_info.ready_groups_df.query(
+            f"gch4i_name == '{gch4i_name}'"
+        )
+        gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
+        gg.run_gridding()
+    else:
+        print("one or more emi/proxy pairs are not ready for gridding.")
