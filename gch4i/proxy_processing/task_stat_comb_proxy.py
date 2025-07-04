@@ -1,15 +1,15 @@
 """
 Name:                   task_stat_comb_proxy.py
-Date Last Modified:     2025-04-15
+Date Last Modified:     2025-07-04
 Authors Name:           H. Lohman (RTI International); A. Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
 Input Files:            - State Geo: global_data_dir_path / "tl_2020_us_state.zip"
                         - EIA 923 Heat Input: sector_data_dir_path / "eia/EIA-923"
                         - EIA Plant Locations: sector_data_dir_path / "eia/EIA-923/Power_Plants.csv"
                         - Oregon Plant: https://ghgdata.epa.gov/ghgp/service/facilityDetail/2012?id=1007940&ds=E&et=FC_CL&popup=true
-                        - GHGRP Subpart C: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
-                        - GHGRP Subpart D: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
-                        - GHGRP Subpart D Locations: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+                        - GHGRP Subpart C: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
+                        - GHGRP Subpart D: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
+                        - GHGRP Subpart D Locations: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
 
 Output Files:           - {proxy_data_dir_path} / elec_coal_proxy.parquet
                         - {proxy_data_dir_path} / elec_gas_proxy.parquet
@@ -48,7 +48,7 @@ from gch4i.config import (
 # %% Load Path Files
 
 # Pathways
-GEPA_Stat_Path = V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Combustion_Stationary"
+# GEPA_Stat_Path = V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Combustion_Stationary"
 Global_Func_Path = V3_DATA_PATH.parent / "Global_Functions" / "Global_Functions"
 
 # State
@@ -76,13 +76,13 @@ EIA_923_plant_locs_path: Path = sector_data_dir_path / "eia/EIA-923/Power_Plants
 
 # GHGRP Data (reporting format changed in 2015)
 GHGRP_subC_inputfile = (
-    GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
+    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
 )  # subpart C facility IDs and emissions (locations not available)
 GHGRP_subD_inputfile = (
-    GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
+    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
 )  # subpart D facility IDs and emissions
 GHGRP_subDfacility_loc_inputfile = (
-    GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
 )  # subpart D facility info (for all years, with ID & lat and lons)
 # EEM: I believe that the HGGRP facility info is not only subpart D facilities, but a master list of all emitting facilities. Therefore, we want to only include the
 # facilities that report to subpart C (that are not also in subpart D). The logic here is that Subpart C is all stationary fuel combustion sources, where subpart D
@@ -711,8 +711,6 @@ def create_raw_indu_proxy(
     )
 
     # Merge C_Only with Facility Info
-    # EEM: I can't quite find an issue in the code, but there weren't any industrial facilities offshore in the GULF in v2. Double check the facility list
-    # and this merge to make sure that only SubpartC facilities and their locations are being used as the proxy.
     proxy_gdf = (
         GHGRP_C_Only.merge(GHGRP_Facilities, on="facility_id")
         .sort_values(by=["facility_id", "reporting_year"])
