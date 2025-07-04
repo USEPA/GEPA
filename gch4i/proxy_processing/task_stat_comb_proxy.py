@@ -711,6 +711,7 @@ def create_raw_indu_proxy(
     )
 
     # Merge C_Only with Facility Info
+    # EEM: I can't quite find an issue in the code, but there weren't any industrial facilities offshore in the GULF in v2. Double check the facility list
     proxy_gdf = (
         GHGRP_C_Only.merge(GHGRP_Facilities, on="facility_id")
         .sort_values(by=["facility_id", "reporting_year"])
