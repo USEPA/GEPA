@@ -1,11 +1,11 @@
 """
-Name:                   task_stat_comb_proxy.py
-Date Last Modified:     2025-06-10
+Name:                   task_ng_indu_proxy.py
+Date Last Modified:     2025-07-04
 Authors Name:           J. Bollenbacher (RTI International)
 Purpose:                Mapping industrial ng emissions within the continental US
-Input Files:            - GHGRP Subpart C: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
-                        - GHGRP Subpart D: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
-                        - GHGRP Subpart D Locations: GEPA_Stat_Path / "InputData/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+Input Files:            - GHGRP Subpart C: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
+                        - GHGRP Subpart D: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
+                        - GHGRP Subpart D Locations: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
 
 Output Files:           - {proxy_data_dir_path} / ng_indu_proxy.parquet
 Notes:                  -
