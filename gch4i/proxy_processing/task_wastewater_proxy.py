@@ -1007,7 +1007,7 @@ def create_wastewater_proxy_files(
     naics_codes = {
         'pp': '3221',
         'mp': '3116',
-        'fv': ['3114', '311991'],
+        'fv': ['3114','311421'],
         'ethanol': '325193',
         'brew': '312120',
         'petrref': '32411'
@@ -1109,7 +1109,7 @@ def create_wastewater_proxy_files(
         brewery_df.to_csv(brewery_file, index=False)
 
 
-    # %% Step 2.2.2 Deduplicate brewery facilities by latitude and longitude - breweries will be removed if they occur within 0.25 km of each other
+    # %% Step 2.2.2 Duplicate brewery facilities by latitude and longitude - breweries will be removed if they occur within 0.25 km of each other
     filter_distance = 0.25 # 0.25 km
 
     # Extract coordinates
@@ -1197,7 +1197,7 @@ def create_wastewater_proxy_files(
     industries = {
         'pp': ('3221', ['2611', '2621', '2631']),
         'mp': ('3116', ['0751', '2011', '2048', '2013', '5147', '2077', '2015']),
-        'fv': (['3114'], ['2037', '2038', '2035', '2032', '2034']),
+        'fv': (['3114','311421'], ['2037', '2035', '2032', '2034']),
         'eth': ('325193', ['2869']),
         'brew': ('312120', ['2082']),
         'petrref': ('32411', ['2911'])
@@ -1291,3 +1291,4 @@ def create_wastewater_proxy_files(
 
     final_nonseptic.to_parquet(nonseptic_output_file, index=False)
 
+# %%
