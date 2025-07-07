@@ -1,7 +1,7 @@
 """
 Name:                   task_wetlands_rem_wet_emi.py
-Date Last Modified:     2025-01-30
-Authors Name:           Andrew Burnette (RTI International)
+Date Last Modified:     2025-06-13
+Authors Name:           Andrew Burnette, Nick Kruskamp (RTI International)
 Purpose:                Mapping of wetlands remaining wetlands emissions to State, Year,
                             emissions format
 gch4i_name:             4D1_wetlands_remaining_wetlands
@@ -15,6 +15,7 @@ Emis/Output Files:      - {emi_data_dir_path}/
                             peatlands_emi.csv
                             rem_coastal_wetlands_emi.csv
 """
+
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 from pathlib import Path
 from typing import Annotated
@@ -28,14 +29,14 @@ from gch4i.config import (
     emi_data_dir_path,
     ghgi_data_dir_path,
     max_year,
-    min_year
+    min_year,
 )
 from gch4i.utils import tg_to_kt
 
 # %% Step 1. Create Function
 
 
-def get_wetlands_rem_wet_inv_data(in_path, src, params):
+def get_wetlands_rem_wet_inv_data(in_path, params):
     """read in the ch4_kt values for each state
     User is required to specify the subcategory of interest:
     - Flooded Land Remaining Flooded Land: Reservoir
@@ -47,8 +48,6 @@ def get_wetlands_rem_wet_inv_data(in_path, src, params):
     ----------
     in_path : str
         path to the input file
-    src : str
-        subcategory of interest
     params : dict
         additional parameters
     """
@@ -58,14 +57,18 @@ def get_wetlands_rem_wet_inv_data(in_path, src, params):
         in_path,
         sheet_name=params["arguments"][0],  # Sheet name
         skiprows=params["arguments"][1],  # Skip rows
-        )
+    )
     # Specify years to keep
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
     # Create state_list to filter states
     state_list = emi_df["GeoRef"].unique().tolist()
-    state_list = [state for state in state_list if state not in ["AS", "GU", "MP", "PR",
-                                                                 "VI", "AK", "HI",
-                                                                 "National"]]
+    state_list = [
+        state
+        for state in state_list
+        if state not in ["AS", "GU", "MP", "PR", "VI", "AK", "HI", "National"]
+    ]
+
+    cat, subcat_1, subcat_2 = params['substrings']
 
     # Clean and format the data
     emi_df = (
@@ -81,9 +84,13 @@ def get_wetlands_rem_wet_inv_data(in_path, src, params):
         # Query for states in state_list
         .query("state_code in @state_list")
         # Query for CH4 emissions and the source of interest
-        .query(f"(ghg == 'CH4') & (ghgi_source == '{src}')")
+        .query(f"(ghg == 'CH4')")
         # Query for the subcategory combinations needed
-        .query(f"(category == '{params['substrings'][0]}') & (subcategory1 == '{params['substrings'][1]}') & (subcategory2.isin({params['substrings'][2]}))", engine="python")
+        .query(
+            f"(category == '{cat}')"
+            f"& (subcategory1 == '{subcat_1}')"
+            # f"& (subcategory2.isin({subcat_2}))",
+        )
         # Filter state code and years
         .filter(items=["state_code"] + year_list, axis=1)
         .set_index("state_code")
@@ -106,7 +113,9 @@ def get_wetlands_rem_wet_inv_data(in_path, src, params):
         .groupby(["state_code", "year"])["ghgi_ch4_kt"]
         .sum()
         .reset_index()
-        )
+    )
+    emi_df
+
     return emi_df
 
 
@@ -118,60 +127,60 @@ emi_parameters_dict.
 The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
 file. The parameters are used to create the pytask task for the emi.
 """
-# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
-source_name = "4D1_wetlands_remaining_wetlands"
-# Directory name for GHGI data
-source_path = "4D1_wetlands_remaining_wetlands"
+# %% STEP 2. Initialize Parameters
+"""
+This section initializes the parameters for the task and stores them in the
+emi_parameters_dict.
 
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+file. The parameters are used to create the pytask task for the emi.
+"""
+# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
+source_name_1 = "4D1_wetlands_remaining_wetlands"
+source_name_2 = "4D2_land_converted_to_wetlands"
 # Data Guide Directory
 proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
 # Read and query for the source name (ghch4i_name)
 proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
-    f"gch4i_name == '{source_name}'"
+    f"(gch4i_name == '{source_name_1}') | (gch4i_name == '{source_name_2}')"
 )
 
 # Initialize the emi_parameters_dict
 emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
+    print(data)
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
-        "source_list": [x.strip().casefold() for x in data.gch4i_source.to_list()],
+        "input_path": ghgi_data_dir_path
+        / data.gch4i_name.values[0]
+        / data.file_name.values[0],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": emi_data_dir_path / f"{emi_name}.csv",
     }
 
 emi_parameters_dict
-
-
 # %% STEP 3. Create Pytask Function and Loop
 
-for _id, _kwargs in emi_parameters_dict.items():
+def task_flooded_lands_emis(
+    input_path: Path,
+    parameters: dict,
+    output_path: Annotated[Path, Product],
+) -> None:
 
-    @mark.persist
-    @task(id=_id, kwargs=_kwargs)
-    def task_wetlands_rem_wetlands_emi(
-        input_paths: list[Path],
-        source_list: list[str],
-        parameters: dict,
-        output_path: Annotated[Path, Product],
-    ) -> None:
+    emi_df = get_wetlands_rem_wet_inv_data(input_path, parameters)
+    # Save the emissions data to the output path
+    emi_df.to_csv(output_path)
 
-        # Initialize the emi_df_list
-        emi_df_list = []
-        # Loop through the input paths and source list to get the emissions data
-        for input_path, ghgi_group in zip(input_paths, source_list):
-            individual_emi_df = get_wetlands_rem_wet_inv_data(input_path,
-                                                              ghgi_group,
-                                                              parameters)
-            emi_df_list.append(individual_emi_df)
 
-        # Concatenate the emissions data and group by state and year
-        emission_group_df = (
-            pd.concat(emi_df_list)
-            .groupby(["state_code", "year"])["ghgi_ch4_kt"]
-            .sum()
-            .reset_index()
-        )
-        # Save the emissions data to the output path
-        emission_group_df.to_csv(output_path)
+# %%
+import pytask
+
+sesh = pytask.build(
+    tasks=[
+        task_flooded_lands_emis(**kwargs)
+        for _id, kwargs in emi_parameters_dict.items()
+    ]
+)
+sesh
+
+# %%

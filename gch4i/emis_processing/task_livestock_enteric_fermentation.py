@@ -27,6 +27,7 @@ from pytask import Product, mark, task
 
 import pandas as pd
 import ast
+import re
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -45,24 +46,24 @@ def get_livestock_enteric_fermentation_inv_data(in_path, src, params):
     User is required to specify the subcategory of interest:
     - Beef
         - beef_NOF_bull
-        - beef_NOF_cow
+        - beef_NOF_cow #the beef emi file only contains emissions from beef_NOF_bull, not cow or calf
         - calf_NOF_beef
     - Cattle
         - beef_NOF_steer
-        - beef_NOF_heifers
+        - beef_NOF_heifers #the resulting cattle emi file only includes emissions from beef_NOF_steer (~400 kt) and does not inlcude those from heifers
     - Dairy
         - dairy_cow
-        - dairy_heifers
+        - dairy_heifers #the dairy emi file only contains emissions from dairy_cow, not heifers or calf
         - calf_NOF_dairy
     - OnFeed
         - beef_OF_heifers
-        - beef_OF_steer
+        - beef_OF_steer # the on feed emi file only contains emissions from OF heifers, not steer
     - Bison
     - Goats
     - Horses
     - Mules
     - Sheep
-    - Swine
+    - Swine #these emissions look correct
         - swine_50
         - swine_50_119
         - swine_120_179
@@ -86,6 +87,10 @@ def get_livestock_enteric_fermentation_inv_data(in_path, src, params):
         skiprows=params["arguments"][1],  # Skip Rows
     )
 
+    # Establish query pattern
+    substrings = params["substrings"]
+    pattern = "|".join(re.escape(s) for s in substrings)
+
     # Fix year column names
     emi_df = emi_df.drop(emi_df.columns[0], axis=1)
     emi_df.columns.values[5:] = list(range(min_year, max_year + 1))
@@ -96,8 +101,8 @@ def get_livestock_enteric_fermentation_inv_data(in_path, src, params):
         emi_df.rename(columns=lambda x: str(x).lower())
         .rename(columns={"state": "state_code"})
         # Filter for specific animal category
-        .query(f'animal.str.contains("{params["substrings"][0]}", regex=True)',
-               engine='python')  # param
+        .query(f'animal.str.contains(r"{pattern}", regex=True, na=False)',
+               engine='python')
         .drop(columns=['animal'])
         .set_index(["state_code", "county", "fips", "month"])
         # Convert NA to 0 & Drop states with no data

@@ -33,6 +33,7 @@ from gch4i.config import (
 
 @mark.persist
 @task(id="enverus_di_prism_data_processing")
+# EEM: Update this file to use the 2023 version that is in the O&G Data Drop folder (2022-Coverage tab). This should require fewer state-year corrections
 def task_get_enverus_di_prism_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",

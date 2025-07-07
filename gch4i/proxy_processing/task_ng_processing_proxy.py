@@ -501,6 +501,12 @@ def task_get_ng_processing_proxy_data(
                 iproxy['rel_emi'] = 1.0/ifacility_count
                 alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
             else:
+              # EEM: in this section, can  we make a few additions...
+              # 1. for states that have a proxy in any year, use those plant locations (relative emissions can be 1 at each plant) (this should take care of ID and MO)
+              # 2. For Nebraska, the O&G journal lists one processing plant in Huntsman NE, in Cheyenne county. Can we allocate all emissions to that county rather than the entire state?
+              # 3. For the remaining states, I think that there are likely no processing plants in those states. However, since the state GHGI allocated emissions to states based on the "national onshore marketed natural gas production occurring in each state (EIA 2023)",
+              #    the state GHGI is incorrectly allocating the emissions. Rather than allocate evenly across the state, we should try to use the GHGRP data, but for LNG storage instead of processing, and evenly assign across those locations. So filter the 
+              #    EF emissions source w data for Industry_Segment = "Liquefied natural gas (LNG) storage [98.230(a)(6)]" to see if this helps allocate emissions across facilities in this missing states
                 # Create alternative proxy from missing states
                 iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
                 iproxy.columns = ['state_code', 'year']

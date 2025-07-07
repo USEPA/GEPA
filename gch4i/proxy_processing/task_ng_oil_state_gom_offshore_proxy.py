@@ -144,7 +144,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
         del Prism_data
 
     # Correct Enverus Data for Select States
-
+# EEM: update this to use the 2023 version of the file (in the O&G Data Drop folder)
     # 1) Read In Coverage Table from State Well Counts File from ERG
     # (specifies the first year with bad data and which years need to be corrected; 
     # all years including and after the first bad year of data need to be corrected)

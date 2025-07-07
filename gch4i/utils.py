@@ -5,6 +5,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
+import re
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -431,10 +432,16 @@ def vector_to_gepa_grid():
 def stack_rasters(input_paths: list[Path], output_path: Path):
     profile = GEPA_spatial_profile().profile
     raster_list = []
-    years = [int(x.name.split("_")[2]) for x in input_paths]
+    years = []
+    year_pattern = re.compile(r'(\d{4})')
     for in_file in input_paths:
         if not in_file.exists():
             continue
+        match = year_pattern.search(in_file.name)
+        if match:
+            years.append(int(match.group(1)))
+        else:
+            years.append(None)
         with rasterio.open(in_file) as src:
             raster_list.append(src.read(1))
 
