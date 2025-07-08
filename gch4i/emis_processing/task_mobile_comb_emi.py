@@ -164,6 +164,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
     ####################################################################################
 
     # Read in the second file - Mobile Dataframe
+  # EEM: you don't need to calculate the proportions for non-highway farm, construction, and other emissions, because these are explicitly provided in the InvDB xlsx. 
     emi_df2 = (
         pd.read_excel(
             in_path[1],
@@ -180,7 +181,12 @@ def get_comb_mobile_inv_data(in_path, src, params):
         .rename(columns={'state code': 'state_code'})
         # Remove CO2 from sector and get emissions for specific subcategory
         .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
-        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
+      #EEM: I think we want to change this line from: 
+        #.query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
+      # to:
+        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True))
+      #EEM: the rows that end in 'Non-Highway' are the sums of the other Non-Highway categories, so you would be counting the emissions twice. 
+      # EEM: the emissions for non-highway aircraft, trains, and waterways are all too high compared to the InvDB xlsx, and this might be the reason why.
         # Melt the data: unique state/sector
         .melt(id_vars=["state_code", "sector"],
               var_name="year",
