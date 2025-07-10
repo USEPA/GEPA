@@ -1,13 +1,13 @@
 """
 Name:                   task_enverus_di_prism_data_processing.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-06-16
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Processes and cleans the Enverus DI and Prism data stored on
                             disk and read into natural gas and petroleum proxies. This
                             script should be run before any other proxies are created.
 Input Files:            Enverus DI: sector_data_dir_path / "enverus/production/didsk_monthly_{iyear}.csv"
                         Enverus Prism: sector_data_dir_path / "enverus/production/prism_monthly_{iyear}.csv"
-                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx"
+                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/Enverus DrillingInfo Processing - Well Counts_2023-11-14_Gridding.xlsx"
 Output Files:           Formatted and Corrected Enverus DI and Prism Data: sector_data_dir_path / "enverus/production/intermediate_outputs/formatted_raw_enverus_tempoutput_{iyear}.csv"
 """
 
@@ -33,12 +33,11 @@ from gch4i.config import (
 
 @mark.persist
 @task(id="enverus_di_prism_data_processing")
-# EEM: Update this file to use the 2023 version that is in the O&G Data Drop folder (2022-Coverage tab). This should require fewer state-year corrections
 def task_get_enverus_di_prism_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
-    enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx"
+    enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/Enverus DrillingInfo Processing - Well Counts_2023-11-14_Gridding.xlsx"
 ):
     """
     Data come from Enverus, both Drilling Info and Prism
@@ -280,10 +279,11 @@ def task_get_enverus_di_prism_data(
     ERG_StateWellCounts_LastGoodDataYear = (
         pd.read_excel(
             enverus_well_counts_path,
-            sheet_name="2021 - Coverage",
+            sheet_name="2022 - Coverage",
             usecols={"State", "Last Good Year"},
             skiprows=2,
             nrows=40)
+        .rename(columns={"State": "state_code", "Last Good Year": "last_good_year"})   
         )
 
     # 2) Loops through the each state and year in Enverus to determine if the data for that particualar year needs to 
@@ -291,10 +291,11 @@ def task_get_enverus_di_prism_data(
     # is no new Enverus data reportd for that state. If a particular state is not included for any years in the Enverus
     # dataset, then a row of zeros is added to the Enverus table for that year.
 
-    for istate in np.arange(0, len(state_gdf)):
+    states_to_correct = ERG_StateWellCounts_LastGoodDataYear.query(f"last_good_year < {max_year}")['state_code'].unique()
+    for istate in np.arange(0, len(states_to_correct)):
         correctdata = 0
-        istate_code = state_gdf['state_code'][istate]
-        lastgoodyear = ERG_StateWellCounts_LastGoodDataYear['Last Good Year'][ERG_StateWellCounts_LastGoodDataYear['State'] == istate_code].values
+        istate_code = states_to_correct[istate]
+        lastgoodyear = ERG_StateWellCounts_LastGoodDataYear['last_good_year'][ERG_StateWellCounts_LastGoodDataYear['state_code'] == istate_code].values
         if lastgoodyear == max_year:
             # if state isn't included in correction list, don't correct any data
             lastgoodyear = max_year+5

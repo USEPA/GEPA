@@ -1,6 +1,6 @@
 """
 Name:                   task_ng_drilled_well_proxy.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-07-08
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas drilled well proxy emissions.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -51,6 +51,7 @@ def task_get_ng_drilled_well_proxy_data(
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     ng_drilled_well_emi_path: Path = emi_data_dir_path / "gas_well_drilled_emi.csv",
+    ng_all_well_count_proxy_path: Path = proxy_data_dir_path / "ng_all_well_count_proxy.parquet",
     drilled_well_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_drilled_well_proxy.parquet",
 ):
     """
@@ -198,9 +199,12 @@ def task_get_ng_drilled_well_proxy_data(
 
     # Correct for missing proxy data
     # 1. Find missing state_code-year pairs
-    # 2. Check to see if proxy data exists for state in another year
-    #   2a. If the data exists, use proxy data from the closest year
-    #   2b. If the data does not exist, assign emissions uniformly across the state
+    # 2. Check to see if proxy data exists for state in another year - if the data
+    #    exists, use proxy data from the closest year.
+    # 3. Assign proxy data from the ng_all_well_count_proxy to the remaining state-year
+    #    combinations with missing data.
+    # 4. If state-year combinations are still missing data, assign emissions uniformly
+    #    across the state.
 
     # Read in emissions data and drop states with 0 emissions
     emi_df = (pd.read_csv(ng_drilled_well_emi_path)
@@ -218,6 +222,30 @@ def task_get_ng_drilled_well_proxy_data(
 
     # Add missing states alternative data to grouped_proxy
     proxy_gdf_final = create_alt_proxy(missing_states, drilled_well_df)
+
+    # Check for missing states after applying the closest year data to states with proxy data in 2012-2022
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = pd.DataFrame(emi_states.difference(proxy_states))
+
+    # Add in ng_all_well_count_proxy data to cover the remaining missing state-year combinations
+    ng_all_well_count_proxy = gpd.read_parquet(ng_all_well_count_proxy_path)
+    for istate_year in range(0, len(missing_states)):
+        istate = missing_states.iloc[istate_year, 0]
+        iyear = missing_states.iloc[istate_year, 1]
+        iproxy_data = ng_all_well_count_proxy.query("state_code == @istate").query("year == @iyear")
+        proxy_gdf_final = pd.concat([proxy_gdf_final, iproxy_data]).reset_index(drop=True)
+
+    # Re-check for missing states after applying the closest year data to states with proxy data in 2012-2022
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = emi_states.difference(proxy_states)
+
+    # Check that annual relative emissions sum to 1.0 each state/year combination
+    sums_annual = proxy_gdf_final.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
+
+    # Check that monthly relative emissions sum to 1.0 each state/year_month combination
+    sums_monthly = proxy_gdf_final.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Monthly relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
 
     # Output Proxy Parquet Files
     proxy_gdf_final.to_parquet(drilled_well_output_path)

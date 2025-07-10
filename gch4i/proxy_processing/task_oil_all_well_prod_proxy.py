@@ -1,6 +1,6 @@
 """
 Name:                   task_oil_all_well_prod_proxy.py
-Date Last Modified:     2025-03-21
+Date Last Modified:     2025-07-10
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of oil well production proxy emissions
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -192,13 +192,6 @@ def task_get_oil_all_well_prod_proxy_data(
     # 2. Check to see if proxy data exists for state in another year
     #   2a. If the data exists, use proxy data from the closest year
     #   2b. If the data does not exist, assign emissions uniformly across the state
-
-    # Function to find the closest year (for step 2a approach)
-    # arr is the array of all years with data and target is the year missing data
-    def find_closest(arr, target):
-        arr = np.array(arr)
-        idx = (np.abs(arr - target)).argmin()
-        return arr[idx]
 
     # Read in emissions data and drop states with 0 emissions
     oil_prod_emi_df = (pd.read_csv(oil_prod_emi_path)

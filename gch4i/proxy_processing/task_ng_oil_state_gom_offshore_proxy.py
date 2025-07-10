@@ -1,6 +1,6 @@
 """
 Name:                   task_ng_oil_state_gom_offshore_proxy.py
-Date Last Modified:     2025-03-21
+Date Last Modified:     2025-07-10
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas and oil state GOM and federal pacific proxies.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -46,7 +46,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
 @task(id="ng_oil_state_gom_offshore_proxy")
 def task_get_ng_oil_state_gom_offshore_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx",
+    enverus_well_counts_path: Path = sector_data_dir_path / "enverus/production/Enverus DrillingInfo Processing - Well Counts_2023-11-14_Gridding.xlsx",
     enverus_production_path: Path = sector_data_dir_path / "enverus/production",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     oil_gom_state_emi_path: Path = emi_data_dir_path / "oil_gom_state_emi.csv",
@@ -151,7 +151,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
 
     ERG_StateWellCounts_LastGoodDataYear = (pd.read_excel(
         enverus_well_counts_path,
-        sheet_name = "2021 - Coverage",
+        sheet_name = "2022 - Coverage",
         usecols = {"State","Last Good Year"},
         skiprows = 2,
         nrows = 40)
@@ -307,7 +307,7 @@ def task_get_ng_oil_state_gom_offshore_proxy_data(
         oil_pac_fed_state_df.groupby(["year_month"])['proxy_data']
         .transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
     )
-    oil_pac_fed_state_df = oil_pac_fed_state_df.drop(columns='proxy_data')
+    oil_pac_fed_state_df = oil_pac_fed_state_df.drop(columns={'proxy_data', 'state_code'})
     oil_pac_fed_state_df = enverus_df_to_gdf(oil_pac_fed_state_df)
     oil_pac_fed_state_df = oil_pac_fed_state_df.astype({'year': int})
 

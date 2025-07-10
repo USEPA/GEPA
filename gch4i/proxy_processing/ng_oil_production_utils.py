@@ -1,6 +1,6 @@
 """
 Name:                   ng_oil_production_utils.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-07-08
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Generates functions used in the processing of natural gas and
                             petroleum production proxy data.
@@ -354,21 +354,26 @@ def create_alt_proxy(missing_states, original_proxy_df):
                     iproxy.loc[ifacility, 'year_month'] = iyear_month_str
                     iproxy.loc[ifacility, 'month'] = int(imonth_str)
                 alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
-            else:
-                # Create alternative proxy from missing states
-                iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
-                iproxy.columns = ['state_code', 'year']
-                iproxy['annual_rel_emi'] = 1/12  # Assign emissions evenly across the state for a given year
-                iproxy['rel_emi'] = 1.0  # Assign emissions evenly across the state for a given month in the year
-                iproxy = iproxy.merge(
-                    state_gdf[['state_code', 'geometry']],
-                    on='state_code',
-                    how='left')
-                for imonth in range(1, 13):
-                    imonth_str = f"{imonth:02}"  # convert to 2-digit months
-                    year_month_str = str(iyear)+'-'+imonth_str
-                    imonth_proxy = iproxy.copy().assign(year_month=year_month_str).assign(month=imonth)
-                    alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, imonth_proxy], ignore_index=True))
+            # The following lines of code are used in cases where emissions are uniformly
+            # assigned across an entire state for state-year combinations with
+            # missing emissions. The code is commented out for v3, because data is filled
+            # in with other proxies (e.g., using ng_all_well_count data for a specific
+            # state-year combination missing in another another proxy)
+            # else:
+            #     # Create alternative proxy from missing states
+            #     iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
+            #     iproxy.columns = ['state_code', 'year']
+            #     iproxy['annual_rel_emi'] = 1/12  # Assign emissions evenly across the state for a given year
+            #     iproxy['rel_emi'] = 1.0  # Assign emissions evenly across the state for a given month in the year
+            #     iproxy = iproxy.merge(
+            #         state_gdf[['state_code', 'geometry']],
+            #         on='state_code',
+            #         how='left')
+            #     for imonth in range(1, 13):
+            #         imonth_str = f"{imonth:02}"  # convert to 2-digit months
+            #         year_month_str = str(iyear)+'-'+imonth_str
+            #         imonth_proxy = iproxy.copy().assign(year_month=year_month_str).assign(month=imonth)
+            #         alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, imonth_proxy], ignore_index=True))
         # Add missing proxy to original proxy
         proxy_gdf_final = gpd.GeoDataFrame(pd.concat([original_proxy_df, alt_proxy], ignore_index=True).reset_index(drop=True))
         # Delete unused temp data
