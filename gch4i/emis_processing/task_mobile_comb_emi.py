@@ -1,6 +1,6 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-07-10
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 gch4i_name:             1A_mobile_combustion
@@ -20,6 +20,14 @@ Output Files:           - {emi_data_dir_path}/
                             emi_other.csv
 Notes:                  - Relative proportions come from "Mobile Dataframe" data.
                         - Emissions numbers from come from "Mobile non-CO2 InvDB" data.
+                        - Final emissions are calculated by multiplying the Subcategory1
+                            state/year emissions by their Subcategory2 relative
+                            relative proportions.
+                        - emi_allroads, emi_equip, emi_farm, and emi_other
+                            are all calculated directly from the InvDB data (no prop).
+                        - Non-Hwy Subcategory2 proportions are calculated from
+                            Aircraft, Boats, and Locomotives Subcategory2, normalized
+                            to == 1.
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -150,21 +158,21 @@ def get_comb_mobile_inv_data(in_path, src, params):
         .sort_values(["state_code", "year"])
     )
     ####################################################################################
-    # End the function here if the source is in the list
+    # Report out Emissions for Non-Highway: emi_alllroads, emi_equip, emi_farm,
+    # emi_other:
     if src in (["alternative fuel highway", "farm equipment",
                 "construction equipment", "other", "diesel highway"]):
 
         emi_df = emi_df.rename(columns={"ch4_kt": "ghgi_ch4_kt"})
 
-        # Quick Dirty Fix: Remove HI and AK state_codes
+        # Remove HI and AK state_codes
         emi_df = emi_df.query("state_code != 'HI' and state_code != 'AK'")
 
         return emi_df
 
     ####################################################################################
 
-    # Read in the second file - Mobile Dataframe
-  # EEM: you don't need to calculate the proportions for non-highway farm, construction, and other emissions, because these are explicitly provided in the InvDB xlsx. 
+    # Read in the second file - Mobile Dataframe, to calculation proportions
     emi_df2 = (
         pd.read_excel(
             in_path[1],
@@ -173,54 +181,92 @@ def get_comb_mobile_inv_data(in_path, src, params):
         )
     )
 
-    # Clean and format the data
-    emi_df2 = (
-        # Rename columns
-        emi_df2.rename(columns=lambda x: str(x).lower())
-        .drop(columns=["state"])
-        .rename(columns={'state code': 'state_code'})
-        # Remove CO2 from sector and get emissions for specific subcategory
-        .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
-      #EEM: I think we want to change this line from: 
-        #.query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
-      # to:
-        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True))
-      #EEM: the rows that end in 'Non-Highway' are the sums of the other Non-Highway categories, so you would be counting the emissions twice. 
-      # EEM: the emissions for non-highway aircraft, trains, and waterways are all too high compared to the InvDB xlsx, and this might be the reason why.
-        # Melt the data: unique state/sector
-        .melt(id_vars=["state_code", "sector"],
-              var_name="year",
-              value_name="ch4_metric")
-        .astype({"year": int})
-        # Ensure only years between min_year and max_year are included
-        .query("year.between(@min_year, @max_year)")
-        # Pivot the data: unique state/year
-        .pivot_table(index=["state_code", "year"],
-                     columns="sector",
-                     values="ch4_metric")
-    )
+    # If-else: Non-Highway vs All Others
+    # emi_waterways, emi_aircraft, and emi_railroads are calculated separately
+    # as they do not include farm, construction, or other Non-Hwy emissions when
+    # calculating the relative proportions.
+    if src in (["boats", "aircraft", "locomotives"]):
+        emi_df2 = (
+            # Rename columns
+            emi_df2.rename(columns=lambda x: str(x).lower())
+            .drop(columns=["state"])
+            .rename(columns={'state code': 'state_code'})
+            # Only include CH4 emissions and sectors containing relative Non-Hwy srcs
+            .query('sector.str.contains("CH4") and sector.str.contains("Boats|Locomotives|Aircraft", regex=True)', engine='python')
+            # Split sector to retain src (last section)
+            .assign(sector=lambda d: d['sector'].str.split(' - ').str[-1])
+            # Melt dataframe
+            .melt(
+                id_vars=["state_code", "sector"],
+                var_name="year",
+                value_name="ch4_metric")
+            .astype({"year": int})
+            # Ensure only years between min_year and max_year are included
+            .query("year.between(@min_year, @max_year)")
+            # Pivot the data: unique state/year
+            .pivot_table(
+                index=["state_code", "year"],
+                columns="sector",
+                values="ch4_metric")
+            # Calculate total emissions to normalize proportions
+            .assign(Total=lambda x: x.sum(axis=1))
+            # Keep only the Total emissions & src to be calculated
+            .loc[:, ['Total', f'{params["substrings"][2]}']]
+        )
+    # Calculate (Non)Non-Highway emissions regularly
+    else:
+        # Clean and format the data
+        emi_df2 = (
+            # Rename columns
+            emi_df2.rename(columns=lambda x: str(x).lower())
+            .drop(columns=["state"])
+            .rename(columns={'state code': 'state_code'})
+            # Keep CH4 emissions and Subcategory1 groups
+            .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
+            # Keep relevant Subcategory2 src & Subcategory1 Total src columns
+            .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
+            # Melt the data: unique state/sector
+            .melt(
+                id_vars=["state_code", "sector"],
+                var_name="year",
+                value_name="ch4_metric")
+            .astype({"year": int})
+            # Ensure only years between min_year and max_year are included
+            .query("year.between(@min_year, @max_year)")
+            # Pivot the data: unique state/year
+            .pivot_table(
+                index=["state_code", "year"],
+                columns="sector",
+                values="ch4_metric")
+        )
 
+    ####################################################################################
     # Calculate the relative proportion of emissions
     emi_df2 = (
+        # Divide each column by the Total column
         emi_df2.div(emi_df2.iloc[:, 0], axis=0)
+        # Drop the Total column
         .drop(columns=emi_df2.columns[0])
+        # Create the proportion column
         .assign(proportion=lambda df: df.sum(axis=1))
+        # Keep only the proportion column and state/year
         .iloc[:, -1]
         .reset_index()
     )
 
     ####################################################################################
 
-    # Merge the two dataframes
+    # Merge Subcategory1 emissions df with Subcategory2 proportions df
     emi_df3 = (
         pd.merge(emi_df, emi_df2, on=["state_code", "year"], how="left")
+        # Calculate the final emissions in kt: subcategory1 emissions * proportion
         .assign(ghgi_ch4_kt=lambda df: df.iloc[:, 2] * df["proportion"])
     )
 
     # Drop unnecessary columns
     emi_df3 = emi_df3.drop(columns=["proportion", emi_df3.columns[2]])
 
-    # Quick Dirty Fix: Remove HI and AK state_codes
+    # Remove HI and AK state_codes
     emi_df3 = emi_df3.query("state_code != 'HI' and state_code != 'AK'")
 
     return emi_df3
