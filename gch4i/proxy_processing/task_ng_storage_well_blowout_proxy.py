@@ -48,7 +48,7 @@ def task_get_ng_storage_well_blowout_proxy_data(
         1. CA in 2015
            state_code: CA; year: 2015; emi: 78.350 kt; lat: 34.31307; lon: -118.56462
         2. CA in 2016
-           state_code: CA; year: 2015; emi: 78.350 kt; lat: 34.31307; lon: -118.56462
+           state_code: CA; year: 2015; emi: 21.288 kt; lat: 34.31307; lon: -118.56462
     """
 
     storage_well_blowout_df = pd.DataFrame(
