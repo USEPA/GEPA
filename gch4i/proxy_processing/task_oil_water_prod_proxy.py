@@ -1,6 +1,6 @@
 """
 Name:                   task_oil_water_prod_proxy.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-07-09
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of oil water production proxy emissions.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -41,6 +41,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_nei_file_name,
     oil_water_prod_file_names,
     get_raw_NEI_data,
+    find_closest_year,
     create_alt_proxy,
 )
 
@@ -52,6 +53,7 @@ def task_get_oil_water_prod_proxy_data(
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
     prod_water_emi_path: Path = emi_data_dir_path / "prod_water_emi.csv",
+    oil_all_well_prod_proxy_path: Path = proxy_data_dir_path / "oil_all_well_prod_proxy.parquet",
     water_prod_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_water_prod_proxy.parquet",
     ):
     """
@@ -207,17 +209,27 @@ def task_get_oil_water_prod_proxy_data(
     nei_df = nei_df.to_crs(4326)
     
     # Add NEI Data to Enverus Data
-    water_prod_df = pd.concat([water_prod_df, nei_df]).astype({'year': int}).query("rel_emi > 0.0").reset_index(drop=True)
+    water_prod_df = pd.concat([water_prod_df, nei_df]).astype({'year': int}).reset_index(drop=True)
+
+    # Separate out wells with zero and non-zero water production with location data
+    proxy_gdf_final = water_prod_df.query("rel_emi > 0.0").reset_index(drop=True)
+    water_prod_df_zero = water_prod_df.query("rel_emi == 0.0").reset_index(drop=True)
 
     # Delete unused temp data
+    del water_prod_df
     del nei_iyear
     del nei_df
 
     # Correct for missing proxy data
     # 1. Find missing state_code-year pairs
-    # 2. Check to see if proxy data exists for state in another year
-    #   2a. If the data exists, use proxy data from the closest year
-    #   2b. If the data does not exist, assign emissions uniformly across the state
+    # 2. Check to see if proxy data exists for state in another year - if the data
+    #    exists, use proxy data from the closest year.
+    # 3. Check to see if the proxy data exists for the state but is just 0. Use the
+    #    the location information and uniformly assign emissions across the locations.
+    # 4. Assign proxy data from a different natural gas proxy to the remaining state-year
+    #    combinations with missing data (not needed in v3).
+    # 5. If state-year combinations are still missing data, assign emissions uniformly
+    #    across the state (not needed in v3).
 
     # Read in emissions data and drop states with 0 emissions
     emi_df = (pd.read_csv(prod_water_emi_path)
@@ -228,13 +240,72 @@ def task_get_oil_water_prod_proxy_data(
     # Retrieve unique state codes for emissions without proxy data
     # This step is necessary, as not all emissions data excludes emission-less states
     emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
-    proxy_states = set(water_prod_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = list(emi_states.difference(proxy_states))
 
-    # Find missing states
+    if missing_states:
+        # List of state-year combinations with 0 water production reported with locations
+        zero_water_states = list(set(water_prod_df_zero[['state_code', 'year']].itertuples(index=False, name=None)))  # state codes with 0 water production in at least one location
+        proxy_unique_states = proxy_gdf_final['state_code'].unique()  # state codes covered in proxy
+        missing_states_unique = pd.DataFrame(emi_states.difference(proxy_states))[0].unique()  # state codes with at least one year of missing data
+        oil_all_well_prod_proxy = gpd.read_parquet(oil_all_well_prod_proxy_path).query("state_code.isin(@missing_states_unique)")
+        for imissing_state in range(0, len(missing_states)):
+            istate_year = missing_states[imissing_state]
+            istate = missing_states[imissing_state][0]
+            iyear = missing_states[imissing_state][1]
+            # If the state-year combination appears in the list of states that have
+            # locations for wells with 0 water production, uniformly assign the emissions
+            # across these facilities.
+            if istate_year in list(zero_water_states):
+                iproxy_data = water_prod_df_zero.query("state_code == @istate").query("year == @iyear").assign(water = 1)
+                iproxy_data['rel_emi'] = iproxy_data.groupby(["state_code", "year_month"])['water'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+                iproxy_data['annual_rel_emi'] = iproxy_data.groupby(["state_code", "year"])['water'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+                iproxy_data = iproxy_data.drop(columns='water')
+                proxy_gdf_final = pd.concat([proxy_gdf_final, iproxy_data]).reset_index(drop=True)
+                print(f"({istate}, {iyear}) has been updated with locations with 0 water production in state and year.")
+            # If the missing state code-year pair has data for another year, assign
+            # the proxy data for the next available previous year
+            elif istate in proxy_unique_states:
+                # Get proxy data for the state for all years
+                iproxy_data = (proxy_gdf_final
+                               .query("state_code == @istate")
+                               .reset_index(drop=True)
+                               )
+                # Get years that have proxy data
+                iproxy_unique_years = iproxy_data['year'].unique()
+                # Find the closest year to the missing proxy year
+                iyear_closest = find_closest_year(iproxy_unique_years, iyear)
+                # Assign proxy data of the closest year to the missing proxy year
+                iproxy_data = (iproxy_data
+                          .query("year == @iyear_closest")
+                          .assign(year=iyear)
+                          .reset_index(drop=True)
+                          )
+                # Update year_month column to be the correct year
+                for ifacility in np.arange(0, len(iproxy_data)):
+                    imonth_str = str(iproxy_data['year_month'][ifacility][5:8])
+                    iyear_month_str = str(iyear)+'-'+imonth_str
+                    iproxy_data.loc[ifacility, 'year_month'] = iyear_month_str
+                    iproxy_data.loc[ifacility, 'month'] = int(imonth_str)
+                proxy_gdf_final = gpd.GeoDataFrame(pd.concat([proxy_gdf_final, iproxy_data], ignore_index=True))
+                print(f"({istate}, {iyear}) has been updated with {iyear_closest} data.")
+            # Use proxy data from oil_all_well_prod_proxy
+            else:
+                iproxy_data = oil_all_well_prod_proxy.query("state_code == @istate").query("year == @iyear")
+                proxy_gdf_final = gpd.GeoDataFrame(pd.concat([proxy_gdf_final, iproxy_data], ignore_index=True))
+                print(f"({istate}, {iyear}) emissions have been assigned using oil_all_well_prod_proxy.")
+          
+    # Check for missing states after applying the closest year data to states with proxy data in 2012-2022
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
     missing_states = emi_states.difference(proxy_states)
 
-    # Add missing states alternative data to grouped_proxy
-    proxy_gdf_final = create_alt_proxy(missing_states, water_prod_df)
+    # Check that annual relative emissions sum to 1.0 each state/year combination
+    sums_annual = proxy_gdf_final.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
+
+    # Check that monthly relative emissions sum to 1.0 each state/year_month combination
+    sums_monthly = proxy_gdf_final.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Monthly relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
 
     # Output Proxy Parquet Files
     proxy_gdf_final.to_parquet(water_prod_output_path)

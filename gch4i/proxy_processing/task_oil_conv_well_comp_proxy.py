@@ -1,6 +1,6 @@
 """
 Name:                   task_oil_conv_well_comp_proxy.py
-Date Last Modified:     2025-03-21
+Date Last Modified:     2025-07-10
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of oil conventional well completions proxy emissions.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
@@ -26,6 +26,7 @@ from gch4i.config import (
     proxy_data_dir_path,
     global_data_dir_path,
     sector_data_dir_path,
+    emi_data_dir_path,
     max_year,
     min_year,
     years,
@@ -39,6 +40,7 @@ from gch4i.proxy_processing.ng_oil_production_utils import (
     get_nei_file_name,
     oil_comp_count_file_names,
     get_raw_NEI_data,
+    create_alt_proxy,
 )
 
 # %%
@@ -48,6 +50,9 @@ def task_get_oil_conv_well_comp_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     intermediate_outputs_path: Path = sector_data_dir_path / "enverus/production/intermediate_outputs",
     nei_path: Path = sector_data_dir_path / "nei_og",
+    emi_path: Path = emi_data_dir_path / "non_assoc_exp_conv_comp_emi.csv",
+    oil_conv_well_count_proxy_path: Path = proxy_data_dir_path / "oil_conv_well_count_proxy.parquet",
+    ng_all_well_count_proxy_path: Path = proxy_data_dir_path / "ng_all_well_count_proxy.parquet",
     conv_well_comp_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_conv_well_comp_proxy.parquet",
     ):
     """
@@ -194,17 +199,74 @@ def task_get_oil_conv_well_comp_proxy_data(
     del nei_iyear
     del nei_df
 
-    # Check that annual relative emissions sum to 1.0 each state/year combination
-    sums = conv_well_comp_df.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums}"  # assert that the sums are close to 1
+    # Correct for missing proxy data
+    # 1. Find missing state_code-year pairs
+    # 2. Check to see if proxy data exists for state in another year - if the data
+    #    exists, use proxy data from the closest year.
+    # 3. Assign proxy data from the oil_conv_well_count_proxy to the remaining state-year
+    #    combinations with missing data.
+    # 4. ** OR has no oil well data, so ng_all_well_count proxy will be used to fill
+    #    in the missing data for OR.
 
-    # Check that relative emissions sum to 1.0 each state/year combination
-    sums = conv_well_comp_df.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
-    assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year_month and state; {sums}"  # assert that the sums are close to 1
+    # Read in emissions data and drop states with 0 emissions
+    emi_df = (pd.read_csv(emi_path)
+                          .query("state_code.isin(@state_gdf['state_code'])")
+                          .query("ghgi_ch4_kt > 0.0")
+                          )
+
+    # Retrieve unique state codes for emissions without proxy data
+    # This step is necessary, as not all emissions data excludes emission-less states
+    emi_states = set(emi_df[['state_code', 'year']].itertuples(index=False, name=None))
+    proxy_states = set(conv_well_comp_df[['state_code', 'year']].itertuples(index=False, name=None))
+
+    # Find missing states
+    missing_states = emi_states.difference(proxy_states)
+
+    # Add missing states alternative data to grouped_proxy
+    proxy_gdf_final = create_alt_proxy(missing_states, conv_well_comp_df)
+
+    # Check for missing states after applying the closest year data to states with proxy data in 2012-2022
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = pd.DataFrame(emi_states.difference(proxy_states))
+    missing_states_unique = missing_states[0].unique()
+
+    # Add in oil_conv_well_count_proxy data to cover the remaining missing state-year combinations
+    oil_conv_well_count_proxy = gpd.read_parquet(oil_conv_well_count_proxy_path).query("state_code.isin(@missing_states_unique)")
+    for istate_year in range(0, len(missing_states)):
+        istate = missing_states.iloc[istate_year, 0]
+        iyear = missing_states.iloc[istate_year, 1]
+        iproxy_data = oil_conv_well_count_proxy.query("state_code == @istate").query("year == @iyear")
+        proxy_gdf_final = pd.concat([proxy_gdf_final, iproxy_data]).reset_index(drop=True)
+        print(f"({istate}, {iyear}) has been updated with oil_conv_well_count_proxy data.")
+
+    # Re-check for missing states after applying oil_conv_well_count_proxy data
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = pd.DataFrame(emi_states.difference(proxy_states))
+    missing_states_unique = missing_states[0].unique()
+
+    # Add in ng_all_well_count_proxy data to cover the remaining missing data for OR
+    ng_all_well_count_proxy = gpd.read_parquet(ng_all_well_count_proxy_path).query("state_code.isin(@missing_states_unique)")
+    for istate_year in range(0, len(missing_states)):
+        istate = missing_states.iloc[istate_year, 0]
+        iyear = missing_states.iloc[istate_year, 1]
+        iproxy_data = ng_all_well_count_proxy.query("state_code == @istate").query("year == @iyear")
+        proxy_gdf_final = pd.concat([proxy_gdf_final, iproxy_data]).reset_index(drop=True)
+        print(f"({istate}, {iyear}) has been updated with all_well_count_proxy data.")
+
+    # Re-check for missing states after applying ng_all_well_count_proxy_data
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = emi_states.difference(proxy_states)
+
+    # Check that annual relative emissions sum to 1.0 each state/year combination
+    sums_annual = proxy_gdf_final.groupby(["state_code", "year"])["annual_rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_annual, 1.0, atol=1e-8).all(), f"Annual relative emissions do not sum to 1 for each year and state; {sums_annual}"  # assert that the sums are close to 1
+
+    # Check that monthly relative emissions sum to 1.0 each state/year_month combination
+    sums_monthly = proxy_gdf_final.groupby(["state_code", "year_month"])["rel_emi"].sum()  # get sums to check normalization
+    assert np.isclose(sums_monthly, 1.0, atol=1e-8).all(), f"Monthly relative emissions do not sum to 1 for each year_month and state; {sums_monthly}"  # assert that the sums are close to 1
 
     # Output Proxy Parquet Files
-    conv_well_comp_df = conv_well_comp_df.astype({'year':str})
-    conv_well_comp_df.to_parquet(conv_well_comp_output_path)
+    proxy_gdf_final.to_parquet(conv_well_comp_output_path)
 
     return None
 
