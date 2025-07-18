@@ -1,10 +1,10 @@
 """
 Name:                   task_ng_oil_state_gom_offshore_proxy.py
-Date Last Modified:     2025-07-10
+Date Last Modified:     2025-07-18
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas and oil state GOM and federal pacific proxies.
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/temp_data_v2/Enverus DrillingInfo Processing - Well Counts_2021-03-17.xlsx"
+                        Enverus Data Coverage: sector_data_dir_path / "enverus/production/Enverus DrillingInfo Processing - Well Counts_2023-11-14_Gridding.xlsx"
                         Enverus Prism: sector_data_dir_path / "enverus/production/prism_monthly_wells_offshore_{iyear}.xlsx"
                         Oil State GOM GHGI Emissions: emi_data_dir_path / "oil_gom_state_emi.csv"
                         Oil Federal Pacific States GHGI Emissions: emi_data_dir_path / "oil_pac_federal_state_emi.csv"
