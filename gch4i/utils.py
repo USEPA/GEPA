@@ -29,6 +29,9 @@ from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
 from tqdm.auto import tqdm
+from datetime import datetime
+
+from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,

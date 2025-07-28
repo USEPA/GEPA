@@ -48,11 +48,12 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 g_info.display_all_pair_statuses()
 # %%
 run_these_groups = [
-    # "5A_industrial_landfills",
-    "1B2bii_ng_production",
-    "1B2ai_petroleum_exploration",
-    "1B2aii_petroleum_production",
-    "1B2aiii_petroleum_transport",
+    # "1A_mobile_combustion",
+    "3F4_fbar"
+    # "1B2bii_ng_production",
+    # "1B2ai_petroleum_exploration",
+    # "1B2aii_petroleum_production",
+    # "1B2aiii_petroleum_transport",
 ]
 
 # %%

@@ -2569,16 +2569,35 @@ class GroupGridder(BaseGridder):
 
         return c_map, c_norm
 
+    # TODO: fix this code because it is writing the scaling data upside down.
     def calculate_monthly_scaling(self):
         """read all the monthly data, calculate a 3d array of monthly emissions
         and normalized it by year to sum to 12 for each year"""
         monthly_raster_ds_list = []
         for monthly_raster in self.monthly_raster_list:
-            monthly_raster_ds_list.append(xr.open_dataset(monthly_raster))
+            with rasterio.open(monthly_raster) as src:
+                arr_data = src.read()
+                monthly_raster_ds_list.append(arr_data)
+            # monthly_raster_ds_list.append(xr.open_dataset(monthly_raster))
+
+        if len(monthly_raster_ds_list) > 1:
+            self.monthly_group_arr = np.nansum(monthly_raster_ds_list, axis=0)
+        else:
+            self.annual_group_arr = monthly_raster_ds_list[0]
+
+        self.monthly_scale_arr = np.flip(self.annual_group_arr, axis=1)
 
         self.month_scale_ds = (
-            xr.concat(monthly_raster_ds_list, dim="source")
-            .sum(dim="source")
+            xr.DataArray(
+                ("monthly_scaling", self.monthly_scale_arr),
+                dims=["band", "y", "x"],
+                coords={
+                    "band": np.arange(len(years) * 12),
+                    "y": self.gepa_profile.y,
+                    "x": self.gepa_profile.x,
+                },
+                name=self.group_name,
+            )
             .assign_coords(year=("band", np.repeat(np.arange(2012, 2023), 12)))
             .groupby(["year"])
             .apply(lambda x: (x / x.sum(dim="band")) * 12)
@@ -2598,6 +2617,39 @@ class GroupGridder(BaseGridder):
             self.month_scale_ds["band_data"], self.monthly_scale_output_path
         )
 
+    def plot_monthly_scaling(self):
+        tmp_ds = self.month_scale_ds["band_data"].copy()
+        tmp_ds = tmp_ds.assign_coords(
+            month=("band", np.tile(np.arange(1, 13), 11))
+        ).drop_vars(["spatial_ref"])
+        month_plot_df = (
+            tmp_ds.to_dataframe()
+            .reset_index()
+            .drop(columns=["band", "x", "y"])
+            # .assign(month=np.tile(np.arange(1, 13), 11))
+            .dropna(subset=["band_data"])
+            .assign(
+                year_month=lambda x: x["year"].astype(str)
+                + "-"
+                + x["month"].astype(str).str.zfill(2)
+            )
+        )
+        month_plot_df
+        g = sns.relplot(
+            kind="line",
+            data=month_plot_df,
+            x="month",
+            y="band_data",
+            hue="year",
+            palette="tab20",
+            height=6,
+            aspect=2,
+        )
+        g.figure.suptitle(f"{self.group_name} v3 Monthly Scaling", fontsize=16)
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_monthly_scaling.png")
+        plt.show()
+        plt.close()
+
     def run_gridding(self):
         self.get_source_QC_df()
         self.get_group_emi_df()
@@ -2613,6 +2665,7 @@ class GroupGridder(BaseGridder):
         self.plot_annual_raster_data()
         if self.monthly_source_count > 0:
             self.calculate_monthly_scaling()
+            self.plot_monthly_scaling()
         self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
         self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
 
