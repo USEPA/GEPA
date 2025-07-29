@@ -1,6 +1,6 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2025-07-10
+Date Last Modified:     2025-07-23
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 gch4i_name:             1A_mobile_combustion
@@ -23,11 +23,11 @@ Notes:                  - Relative proportions come from "Mobile Dataframe" data
                         - Final emissions are calculated by multiplying the Subcategory1
                             state/year emissions by their Subcategory2 relative
                             relative proportions.
-                        - emi_allroads, emi_equip, emi_farm, and emi_other
-                            are all calculated directly from the InvDB data (no prop).
-                        - Non-Hwy Subcategory2 proportions are calculated from
-                            Aircraft, Boats, and Locomotives Subcategory2, normalized
-                            to == 1.
+                        - emi_allroads is all calculated directly from the InvDB data
+                            (no prop).
+                        - Non-Hwy farm, construction, and other proportions are
+                            calculated from SIT/proportions excel doc, instead of taken
+                            directly from InvDB.
 """
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
@@ -160,8 +160,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
     ####################################################################################
     # Report out Emissions for Non-Highway: emi_alllroads, emi_equip, emi_farm,
     # emi_other:
-    if src in (["alternative fuel highway", "farm equipment",
-                "construction equipment", "other", "diesel highway"]):
+    if src in (["alternative fuel highway", "diesel highway"]):
 
         emi_df = emi_df.rename(columns={"ch4_kt": "ghgi_ch4_kt"})
 
@@ -181,64 +180,30 @@ def get_comb_mobile_inv_data(in_path, src, params):
         )
     )
 
-    # If-else: Non-Highway vs All Others
-    # emi_waterways, emi_aircraft, and emi_railroads are calculated separately
-    # as they do not include farm, construction, or other Non-Hwy emissions when
-    # calculating the relative proportions.
-    if src in (["boats", "aircraft", "locomotives"]):
-        emi_df2 = (
-            # Rename columns
-            emi_df2.rename(columns=lambda x: str(x).lower())
-            .drop(columns=["state"])
-            .rename(columns={'state code': 'state_code'})
-            # Only include CH4 emissions and sectors containing relative Non-Hwy srcs
-            .query('sector.str.contains("CH4") and sector.str.contains("Boats|Locomotives|Aircraft", regex=True)', engine='python')
-            # Split sector to retain src (last section)
-            .assign(sector=lambda d: d['sector'].str.split(' - ').str[-1])
-            # Melt dataframe
-            .melt(
-                id_vars=["state_code", "sector"],
-                var_name="year",
-                value_name="ch4_metric")
-            .astype({"year": int})
-            # Ensure only years between min_year and max_year are included
-            .query("year.between(@min_year, @max_year)")
-            # Pivot the data: unique state/year
-            .pivot_table(
-                index=["state_code", "year"],
-                columns="sector",
-                values="ch4_metric")
-            # Calculate total emissions to normalize proportions
-            .assign(Total=lambda x: x.sum(axis=1))
-            # Keep only the Total emissions & src to be calculated
-            .loc[:, ['Total', f'{params["substrings"][2]}']]
-        )
-    # Calculate (Non)Non-Highway emissions regularly
-    else:
-        # Clean and format the data
-        emi_df2 = (
-            # Rename columns
-            emi_df2.rename(columns=lambda x: str(x).lower())
-            .drop(columns=["state"])
-            .rename(columns={'state code': 'state_code'})
-            # Keep CH4 emissions and Subcategory1 groups
-            .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
-            # Keep relevant Subcategory2 src & Subcategory1 Total src columns
-            .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
-            # Melt the data: unique state/sector
-            .melt(
-                id_vars=["state_code", "sector"],
-                var_name="year",
-                value_name="ch4_metric")
-            .astype({"year": int})
-            # Ensure only years between min_year and max_year are included
-            .query("year.between(@min_year, @max_year)")
-            # Pivot the data: unique state/year
-            .pivot_table(
-                index=["state_code", "year"],
-                columns="sector",
-                values="ch4_metric")
-        )
+    # Clean and format the data
+    emi_df2 = (
+        # Rename columns
+        emi_df2.rename(columns=lambda x: str(x).lower())
+        .drop(columns=["state"])
+        .rename(columns={'state code': 'state_code'})
+        # Keep CH4 emissions and Subcategory1 groups
+        .query(f'sector.str.contains("CH4") and sector.str.contains("{params["substrings"][1]}", regex=True)', engine='python')
+        # Keep relevant Subcategory2 src & Subcategory1 Total src columns
+        .query(f'sector.str.contains("{params["substrings"][2]}", regex=True) or sector.str.endswith("{params["substrings"][1]}")')
+        # Melt the data: unique state/sector
+        .melt(
+            id_vars=["state_code", "sector"],
+            var_name="year",
+            value_name="ch4_metric")
+        .astype({"year": int})
+        # Ensure only years between min_year and max_year are included
+        .query("year.between(@min_year, @max_year)")
+        # Pivot the data: unique state/year
+        .pivot_table(
+            index=["state_code", "year"],
+            columns="sector",
+            values="ch4_metric")
+    )
 
     ####################################################################################
     # Calculate the relative proportion of emissions
