@@ -285,7 +285,8 @@ class GriddingInfo:
         xr_ds = xr.open_dataset(input_path, chunks="auto")
         coords = list(xr_ds.coords.keys())
         data_vars = list(xr_ds.data_vars.keys())
-        data_vars.remove("spatial_ref")
+        if "spatial_ref" in data_vars:
+            data_vars.remove("spatial_ref")
         if data_vars:
             if len(data_vars) > 1:
                 warnings.warn(
@@ -608,7 +609,9 @@ class EmiProxyGridder(BaseGridder):
         match self.emi_geo_level:
             case "national":
                 self.emi_cols = self.emi_time_cols + ["ghgi_ch4_kt"]
-                self.emi_df = pd.read_csv(self.emi_input_path, usecols=self.emi_cols)
+                self.emi_df = pd.read_csv(
+                    self.emi_input_path, usecols=self.emi_cols
+                ).query("(ghgi_ch4_kt > 0)")
             case "state":
                 self.emi_cols = self.emi_time_cols + ["state_code", "ghgi_ch4_kt"]
                 self.emi_df = pd.read_csv(
@@ -1159,7 +1162,7 @@ class EmiProxyGridder(BaseGridder):
                                     "allocated_ch4_kt"
                                 ].transform(lambda x: x / len(x)),
                             )
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             .reset_index()
                             .assign(
                                 geometry=lambda df: df.centroid,
@@ -1277,6 +1280,11 @@ class EmiProxyGridder(BaseGridder):
                 fill=0,
                 transform=self.gepa_profile.profile["transform"],
                 dtype=np.float64,
+                # NOTE: setting this parameter to True may more closely align our
+                # emissions grids with v2. This will allow emissions to be allocated to
+                # cells that are not fully covered by the proxy geometry. False would
+                # limit emissions to only those cells that are fully covered.
+                all_touched=True,
                 merge_alg=rasterio.enums.MergeAlg.add,
             )
             ch4_kt_result_rasters[time_var] = ch4_kt_raster
@@ -1344,9 +1352,17 @@ class EmiProxyGridder(BaseGridder):
                     for geom, value in zip(emi_gdf.geometry, emi_gdf.ghgi_ch4_kt)
                 ],
                 out_shape=out_shape,
-                transform=transform,
                 fill=0,
-                dtype="float32",
+                transform=transform,
+                dtype=np.float64,
+                # NOTE: setting this parameter to True may more closely align our
+                # emissions grids with v2. This will allow emissions to be allocated to
+                # cells that are not fully covered by the proxy geometry. False would
+                # limit emissions to only those cells that are fully covered.
+                # XXX: this fails the emissions checks, I assume data are leaking
+                # outside the county and state boundaries and adding emissions to the
+                # wrong areas.
+                # all_touched=True,
                 # merge_alg=rasterio.enums.MergeAlg.add,
             )
             return year, emi_raster
@@ -1892,12 +1908,13 @@ class GroupGridder(BaseGridder):
         emi_results_list = []
         for row in self.data_df.itertuples():
             emi_df = pd.read_csv(emi_data_dir_path / f"{row.emi_id}.csv")
-            try:
+            if "state_code" in emi_df.columns:
                 emi_df = emi_df.query(
                     f"(state_code.isin({self.geo_filter})) & (ghgi_ch4_kt > 0)"
                 )
-            except:
-                print("national emissions")
+            else:
+                # print("national emissions")
+                emi_df = emi_df.query("(ghgi_ch4_kt > 0)")
             emi_results_list.append(emi_df)
         self.all_emi_results_df = pd.concat(emi_results_list, axis=0)
         self.emi_group_year_df = (
@@ -2100,9 +2117,9 @@ class GroupGridder(BaseGridder):
 
         # apply the conversion factor to the annual flux data for plotting
         plotting_data = self.annual_plot_flux_da.where(lambda x: x != 0)
-        print(plotting_data.groupby("time").max(dim=...).values)
+        # print(plotting_data.groupby("time").max(dim=...).values)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
-        print(plotting_data.groupby("time").max(dim=...).values)
+        # print(plotting_data.groupby("time").max(dim=...).values)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
@@ -2557,15 +2574,16 @@ class GroupGridder(BaseGridder):
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
         print(f"DEBUG plotting values: {c_min}, {c_max}")
-        if c_min >= 0:
+        if (c_min >= 0) and (c_max > 0):
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
             c_map = "Reds"
-        elif c_max <= 0:
+        elif (c_max <= 0) and (c_min < 0):
             c_norm = colors.Normalize(vmin=c_min, vmax=0)
             c_map = "Blues_r"
         else:
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
             c_map = "bwr"
+        print(f"c_map: {c_map}, c_norm: {c_norm}")
 
         return c_map, c_norm
 
@@ -2583,20 +2601,18 @@ class GroupGridder(BaseGridder):
         if len(monthly_raster_ds_list) > 1:
             self.monthly_group_arr = np.nansum(monthly_raster_ds_list, axis=0)
         else:
-            self.annual_group_arr = monthly_raster_ds_list[0]
+            self.monthly_group_arr = monthly_raster_ds_list[0]
 
-        self.monthly_scale_arr = np.flip(self.annual_group_arr, axis=1)
+        self.monthly_scale_arr = np.flip(self.monthly_group_arr, axis=1)
 
         self.month_scale_ds = (
-            xr.DataArray(
-                ("monthly_scaling", self.monthly_scale_arr),
-                dims=["band", "y", "x"],
+            xr.Dataset(
+                {"monthly_scaling": (("band", "y", "x"), self.monthly_scale_arr)},
                 coords={
                     "band": np.arange(len(years) * 12),
                     "y": self.gepa_profile.y,
                     "x": self.gepa_profile.x,
                 },
-                name=self.group_name,
             )
             .assign_coords(year=("band", np.repeat(np.arange(2012, 2023), 12)))
             .groupby(["year"])
@@ -2609,25 +2625,25 @@ class GroupGridder(BaseGridder):
             .where(lambda x: x > 0)
             .to_dataframe()
             .reset_index()
-            .dropna(subset="band_data")
-            .assign(sum_check=lambda df: np.isclose(df.band_data, 12, rtol=0.1))
+            .dropna(subset="monthly_scaling")
+            .assign(
+                sum_check=lambda df: np.isclose(df["monthly_scaling"], 12, rtol=0.1)
+            )
         )
         self.month_scale_check["sum_check"].all()
         self.write_tif_output(
-            self.month_scale_ds["band_data"], self.monthly_scale_output_path
+            self.month_scale_ds["monthly_scaling"], self.monthly_scale_output_path
         )
 
     def plot_monthly_scaling(self):
-        tmp_ds = self.month_scale_ds["band_data"].copy()
-        tmp_ds = tmp_ds.assign_coords(
-            month=("band", np.tile(np.arange(1, 13), 11))
-        ).drop_vars(["spatial_ref"])
+        tmp_ds = self.month_scale_ds["monthly_scaling"].copy()
+        tmp_ds = tmp_ds.assign_coords(month=("band", np.tile(np.arange(1, 13), 11)))
         month_plot_df = (
             tmp_ds.to_dataframe()
             .reset_index()
             .drop(columns=["band", "x", "y"])
             # .assign(month=np.tile(np.arange(1, 13), 11))
-            .dropna(subset=["band_data"])
+            .dropna(subset=["monthly_scaling"])
             .assign(
                 year_month=lambda x: x["year"].astype(str)
                 + "-"
@@ -2639,7 +2655,7 @@ class GroupGridder(BaseGridder):
             kind="line",
             data=month_plot_df,
             x="month",
-            y="band_data",
+            y="monthly_scaling",
             hue="year",
             palette="tab20",
             height=6,
@@ -2671,9 +2687,7 @@ class GroupGridder(BaseGridder):
 
 
 def run_whole_group(gch4i_name, g_info):
-    gridding_rows = g_info.pairs_ready_for_gridding_df.query(
-        f"gch4i_name == '{gch4i_name}'"
-    )
+    gridding_rows = g_info.mapping_df.query(f"gch4i_name == '{gch4i_name}'")
     gridding_rows
     for emi_proxy_data in tqdm(
         gridding_rows.itertuples(index=False),
