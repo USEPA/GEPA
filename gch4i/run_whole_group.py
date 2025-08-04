@@ -49,7 +49,8 @@ g_info.display_all_pair_statuses()
 # %%
 run_these_groups = [
     # "1A_mobile_combustion",
-    "3A_enteric_fermentation",
+    "1B2biv_ng_transmission_storage",
+    # "3A_enteric_fermentation",
     # "4A1_4A2_Forest_land_remaining_forest_land",
     # "1B2biv_ng_transmission_storage",
     # "4C1_4C2_Grassland_remaining_grassland",

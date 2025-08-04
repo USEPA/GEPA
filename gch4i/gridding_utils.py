@@ -1635,19 +1635,19 @@ class EmiProxyGridder(BaseGridder):
 
         if missing_year_months:
             logging.info(f"Filling missing year_months: {missing_year_months}")
-            empty_array = np.zeros_like(
-                self.proxy_ds["results"].isel(year_month=0).values
-            )
             if self.time_col == "year":
+                empty_array = np.zeros_like(
+                    self.proxy_ds["results"].isel(year=0).values
+                )
                 for year in missing_year_months:
-                    if isinstance(self.proxy_ds.indexes["year_month"], pd.MultiIndex):
+                    if isinstance(self.proxy_ds.indexes["year"], pd.MultiIndex):
                         fill_value = (year, 1)
                     else:
                         fill_value = year
                     missing_da = xr.Dataset(
                         {"results": (["y", "x"], empty_array)},
                         coords={
-                            "year_month": [fill_value],
+                            "year": [fill_value],
                             "year": year,
                             "y": self.proxy_ds["y"],
                             "x": self.proxy_ds["x"],
@@ -1658,10 +1658,13 @@ class EmiProxyGridder(BaseGridder):
                             self.proxy_ds,
                             missing_da,
                         ],
-                        dim="year_month",
+                        dim="year",
                     )
                 self.proxy_ds = self.proxy_ds.sortby("year")
             elif self.time_col == "year_month":
+                empty_array = np.zeros_like(
+                    self.proxy_ds["results"].isel(year_month=0).values
+                )
                 for year_month in missing_year_months:
                     year, month = map(int, year_month.split("-"))
                     if isinstance(self.proxy_ds.indexes["year_month"], pd.MultiIndex):
@@ -1851,6 +1854,7 @@ class GroupGridder(BaseGridder):
             .any(axis=1)
             .sum()
         )
+        # self.no_monthly_source_count =
 
     def get_source_QC_df(self):
 
@@ -2176,12 +2180,22 @@ class GroupGridder(BaseGridder):
         # Calculate the difference between the first and last years
         plotting_data = (last_year_data - first_year_data).where(lambda x: x != 0)
 
-        c_map, c_norm = self._get_cmap(plotting_data)
+        # NOTE: if we want to plot the full range of data, we can get the abs max of
+        # the array and passs it to the plotting function, which sould then scale
+        # the values in the positive and negative directions. If the data are centered,
+        # it will maintain the center. However, this washes out the data especially
+        # when there are +/- outliers.
+        # abs_max = np.nanmax(np.abs(plotting_data.values))
+        # print(f"Absolute maximum value of plotting_data: {abs_max}")
+
+        c_map, c_norm, center = self._get_cmap(plotting_data)
         # Convert from cm^2 to km^2: 1 km^2 = 1e10 cm^2
         fg = plotting_data.plot(
             cmap=c_map,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            center=center,
+            # vmax=abs_max,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2254,10 +2268,8 @@ class GroupGridder(BaseGridder):
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            if direction == "mass2flux":
-                self.monthly_flux_da = in_ds * conv_ds
-            elif direction == "flux2mass":
-                self.monthly_flux_da = in_ds / conv_ds
+            print("DEBUG calculating monthly conversion factors")
+
         elif timestep == "year":
             days_in_year = [self.get_days_in_year(x) for x in times]
             conv_factors = [
@@ -2271,11 +2283,11 @@ class GroupGridder(BaseGridder):
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            if direction == "mass2flux":
-                flux_out_da = in_ds * conv_ds
-            elif direction == "flux2mass":
-                flux_out_da = in_ds / conv_ds
-            return flux_out_da
+        if direction == "mass2flux":
+            flux_out_da = in_ds * conv_ds
+        elif direction == "flux2mass":
+            flux_out_da = in_ds / conv_ds
+        return flux_out_da
 
     def QC_flux_emis(self) -> None:
         """
@@ -2460,13 +2472,14 @@ class GroupGridder(BaseGridder):
 
     def plot_map_version_difference(self):
         plotting_data = self.convert_flux_for_plotting(self.flux_diff_da)
-        c_map, c_norm = self._get_cmap(plotting_data)
+        c_map, c_norm, center = self._get_cmap(plotting_data)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=c_map,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            center=center,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2573,6 +2586,7 @@ class GroupGridder(BaseGridder):
 
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
+        center = None
         print(f"DEBUG plotting values: {c_min}, {c_max}")
         if (c_min >= 0) and (c_max > 0):
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
@@ -2582,10 +2596,11 @@ class GroupGridder(BaseGridder):
             c_map = "Blues_r"
         else:
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
+            center = 0
             c_map = "bwr"
         print(f"c_map: {c_map}, c_norm: {c_norm}")
 
-        return c_map, c_norm
+        return c_map, c_norm, center
 
     # TODO: fix this code because it is writing the scaling data upside down.
     def calculate_monthly_scaling(self):
@@ -2603,64 +2618,97 @@ class GroupGridder(BaseGridder):
         else:
             self.monthly_group_arr = monthly_raster_ds_list[0]
 
-        self.monthly_scale_arr = np.flip(self.monthly_group_arr, axis=1)
+        self.monthly_mass_arr = np.flip(self.monthly_group_arr, axis=1)
 
-        self.month_scale_ds = (
-            xr.Dataset(
-                {"monthly_scaling": (("band", "y", "x"), self.monthly_scale_arr)},
-                coords={
-                    "band": np.arange(len(years) * 12),
-                    "y": self.gepa_profile.y,
-                    "x": self.gepa_profile.x,
-                },
-            )
-            .assign_coords(year=("band", np.repeat(np.arange(2012, 2023), 12)))
-            .groupby(["year"])
-            .apply(lambda x: (x / x.sum(dim="band")) * 12)
+        times = [f"{year}-{month:02d}" for year in years for month in range(1, 13)]
+
+        monthly_scale_target = 12
+
+        # for the sources that do not have monthly data, create an array where the
+        # data are expanded to have months and each month has the same value as the year
+        # repeat each year array 12 times to create a 3d array
+
+        # create the monthly mass dataset
+        self.monthly_mass_ds = xr.Dataset(
+            {"mass": (("time", "y", "x"), self.monthly_mass_arr)},
+            coords={
+                "time": times,
+                "y": self.gepa_profile.y,
+                "x": self.gepa_profile.x,
+            },
+        ).assign_coords(
+            year=("time", np.tile(years, len(years) + 1)),
+            month=("time", np.tile(np.arange(1, 13), len(years))),
         )
 
+        print("DEBUG: calc flux from monthly scaling")
+        # calculate the monthly flux from the monthly mass data
+        self.monthly_flux_da = self.calculate_flux(
+            self.monthly_mass_ds["mass"], "year_month", "mass2flux"
+        ).rename("monthly_flux")
+
+        # scale the monthly data:
+        # get the annual flux data and expand it so that the yearly data are repeated
+        # for each month. This aligns the yearly data dimensions with the monthly
+        # data dimensions so that we can scale the monthly data by the annual data.
+        annual_flux_in_months_da = xr.DataArray(
+            np.repeat(self.annual_flux_da.values, 12, axis=0),
+            dims=["time", "y", "x"],
+            coords={
+                "time": self.monthly_flux_da.time.values,
+                "y": self.monthly_flux_da.y.values,
+                "x": self.monthly_flux_da.x.values,
+            },
+        )
+
+        # divide the monthly flux by the annual emissions and the scale the data so
+        # it sums to 12.
+        self.scaled_monthly_flux_da = (
+            (self.monthly_flux_da / annual_flux_in_months_da)
+            .rename("monthly_flux")
+            .groupby(["year"])
+            .apply(lambda x: (x / x.sum(dim="time")) * monthly_scale_target)
+        )
+
+        # check that the scaled values are equal to our target value.
         self.month_scale_check = (
-            self.month_scale_ds.groupby("year")
+            self.scaled_monthly_flux_da.groupby("year")
             .sum()
             .where(lambda x: x > 0)
             .to_dataframe()
             .reset_index()
-            .dropna(subset="monthly_scaling")
+            .dropna(subset="monthly_flux")
             .assign(
-                sum_check=lambda df: np.isclose(df["monthly_scaling"], 12, rtol=0.1)
+                sum_check=lambda df: np.isclose(
+                    df["monthly_flux"], monthly_scale_target, rtol=0.1
+                )
             )
         )
-        self.month_scale_check["sum_check"].all()
-        self.write_tif_output(
-            self.month_scale_ds["monthly_scaling"], self.monthly_scale_output_path
-        )
+        if not self.month_scale_check["sum_check"].all():
+            raise ValueError(
+                f"Monthly scaling for {self.group_name} does not sum to "
+                f"{monthly_scale_target} for all years."
+            )
 
     def plot_monthly_scaling(self):
-        tmp_ds = self.month_scale_ds["monthly_scaling"].copy()
-        tmp_ds = tmp_ds.assign_coords(month=("band", np.tile(np.arange(1, 13), 11)))
         month_plot_df = (
-            tmp_ds.to_dataframe()
+            self.scaled_monthly_flux_da.to_dataframe()
             .reset_index()
-            .drop(columns=["band", "x", "y"])
-            # .assign(month=np.tile(np.arange(1, 13), 11))
-            .dropna(subset=["monthly_scaling"])
-            .assign(
-                year_month=lambda x: x["year"].astype(str)
-                + "-"
-                + x["month"].astype(str).str.zfill(2)
-            )
+            .drop(columns=["time", "x", "y"])
+            .dropna(subset=["monthly_flux"])
         )
         month_plot_df
         g = sns.relplot(
             kind="line",
             data=month_plot_df,
             x="month",
-            y="monthly_scaling",
+            y="monthly_flux",
             hue="year",
             palette="tab20",
             height=6,
             aspect=2,
         )
+        g.ax.set(xlabel="Month", ylabel="Monthly Flux Scaling")
         g.figure.suptitle(f"{self.group_name} v3 Monthly Scaling", fontsize=16)
         plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_monthly_scaling.png")
         plt.show()
@@ -2676,14 +2724,17 @@ class GroupGridder(BaseGridder):
             self.annual_mass_da, "year", "mass2flux"
         )
         self.QC_flux_emis()
+        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
+        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
         self.annual_plot_flux_da = self.convert_flux_for_plotting(self.annual_flux_da)
         self.plot_map_first_last_year_diff()
         self.plot_annual_raster_data()
         if self.monthly_source_count > 0:
             self.calculate_monthly_scaling()
+            self.write_tif_output(
+                self.scaled_monthly_flux_da, self.monthly_scale_output_path
+            )
             self.plot_monthly_scaling()
-        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
-        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
 
 
 def run_whole_group(gch4i_name, g_info):
