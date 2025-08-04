@@ -1,3 +1,14 @@
+"""
+Name:                  create_final_netcdfs.py
+Date Last Modified:     2025-08-4
+Authors Name:           Nick Kruskamp (RTI International)
+Purpose:                This File is used to format the emission flux data into 
+                        the final netCDF files. 
+                        The output is a gridded methane emissions product that can be
+                        used for further analysis.
+Notes: 
+                      
+"""
 # %%
 # %load_ext autoreload
 # %autoreload 2
@@ -25,13 +36,11 @@ class CreateFinalNetCDFs:
         self.attrs = {
             "title": "Gridded U.S. Methane Anthropogenic Greenhouse Gas Inventory (Version 3)",
             "publication": "A gridded inventory of annual 2012-2022 U.S. anthropogenic methane emissions",
-            # To Do: add other RTI co-authors, confirm EPA co-authors
-            "authors": "Erin E. McDuffie, Julie Powers, Shane Cofffield, Yasmine Farhat, Nicholas Kruskamp, Hannah Lohman, Joannes D. Maasakkers",
-            "history": "May 1, 2025",
+            "authors": "Nicholas Kruskamp, Hannah Lohman, Julie Powers, Shane Coffield, Yasmine Farhat, Chris Coxen, Andrew Burnette, Nathan Ellermeier, John Bollenbacher, Joannes D. Maasakkers",
+            "history": "August 10, 2025",
             "conventions": "COARDS",
-            "version": "1.0 - Publication version (Data equals the preprint version)",
-            # TODO: review and update the contact information
-            "contact": "McDuffie.Erin.E@epa.gov",
+            "version": "1.0",
+            "contact": "nkruskamp@rti.org",
             # NOTE: this is a placeholder for the year of the data. Year will be
             # replaced with the year of the data during processing.
             "year": "xxxx",
@@ -61,7 +70,7 @@ class CreateFinalNetCDFs:
         for i, year in enumerate(YEARS):
             year_data_dict = {}
             # TODO: remove draft when final final.
-            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_draft.nc"
+            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}.nc"
             for in_path in self.flux_data_files:
                 # Get the file name and extract the source category and long name
                 # in_path = v3_flux_data_files[i]
