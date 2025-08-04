@@ -30,6 +30,7 @@ from gch4i.config import (
     max_year,
     min_year,
     proxy_data_dir_path,
+    emi_data_dir_path,
 )
 from gch4i.utils import name_formatter
 
@@ -67,12 +68,12 @@ def task_get_ng_storage_well_blowout_proxy_data(
             crs=4326
             )
         )
-        .drop(columns=["lat", "lon"])
-        .loc[:, ["year", "state_code", "geometry", "rel_emi"]]
+        .drop(columns=["lat", "lon", "state_code"])  # emi is at the national level
+        .loc[:, ["year", "geometry", "rel_emi"]]
     )
 
-    # Check that relative emissions sum to 1.0 each state/year combination
-    annual_sums = storage_well_blowout_gdf.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization
+    # Check that relative emissions sum to 1.0 each year
+    annual_sums = storage_well_blowout_gdf.groupby(["year"])["rel_emi"].sum()  # get sums to check normalization
     assert np.isclose(annual_sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {annual_sums}"  # assert that the sums are close to 1
 
     # Output Proxy Parquet Files
