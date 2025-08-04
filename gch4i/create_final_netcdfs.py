@@ -109,7 +109,7 @@ class CreateFinalNetCDFs:
             #add a moderate amount of compression and set the individua variable attributes
             for var in year_ds: 
                 year_ds[var].encoding.update(dict(zlib=True, complevel=4))
-                year_ds[var].fillna(0)
+                year_ds[var] = year_ds[var].fillna(0)
                 year_ds[var].attrs = {} #remove all dataset and variable attributes
                 source_cat = year_ds[var].name.split("_")[2]
                 name_parts = year_ds[var].name.split("_")[2:]
@@ -177,7 +177,7 @@ class CreateFinalNetCDFs:
             #add a moderate amount of compression and set the individua variable attributes
             for var in year_ds: 
                 year_ds[var].encoding.update(dict(zlib=True, complevel=4))
-                year_ds[var].fillna(0)
+                year_ds[var] = year_ds[var].fillna(0)
                 year_ds[var].attrs = {} #remove all dataset and variable attributes
                 source_cat = year_ds[var].name.split("_")[3]
                 name_parts = year_ds[var].name.split("_")[3:]
@@ -189,8 +189,8 @@ class CreateFinalNetCDFs:
             year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
 
     def write_outputs(self):
-        #self.create_final_netcdfs()
-        self.create_monthly_scaling_files()
+        self.create_final_netcdfs()
+        #self.create_monthly_scaling_files()
 
     # TODO: plotting function to visualize the data
     def plot_data(self):
