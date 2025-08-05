@@ -18,6 +18,7 @@ Notes:
 
 import pandas as pd
 import xarray as xr
+import numpy as np
 
 from gch4i.config import final_gridded_dir, prelim_gridded_dir, global_data_dir_path
 from gch4i.config import years as YEARS
@@ -85,6 +86,7 @@ class CreateFinalNetCDFs:
         # }
 
     def create_final_netcdfs(self):
+        self.result_dict = {}
         for i, year in enumerate(YEARS):
             # TODO: remove draft when final final.
             out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
@@ -106,9 +108,7 @@ class CreateFinalNetCDFs:
                     .set_coords(["time", "lon", "lat"])
                     .reset_coords("spatial_ref", drop=True)
                 )
-                # group_ds = group_ds.assign_coords(
-                #     {"time": (group_ds.time - group_ds.time).astype(float)}
-                # )  # set to 0 hours since year start
+                
                 year_data_dict[var_name] = group_ds
             year_ds = xr.merge(
                 year_data_dict.values()
@@ -151,9 +151,10 @@ class CreateFinalNetCDFs:
                     year_ds[var].attrs["standard_name"] = "annual_emissions"
                     year_ds[var].attrs["long_name"] = long_name
                     year_ds[var].attrs["units"] = "molec cm-2 s-1"
-
+            # save the dataset to a netCDF file
+            year_ds["time"] = [0.0]
             year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
-
+            self.result_dict[year] = year_ds
             print(f"Saved {out_path.name}")
 
     def create_monthly_scaling_files(self):
@@ -238,15 +239,23 @@ file_writer = CreateFinalNetCDFs()
 file_writer.write_outputs()
 # file_writer.plot_data()
 # %%
-# # For reference, we can look at the attributes (and other features) of the v2 data
-# from gch4i.config import V3_DATA_PATH
+# For reference, we can look at the attributes (and other features) of the v2 data
+from gch4i.config import V3_DATA_PATH
 
-# v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
-# v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
-# # %%
-# v2_scale_ds = xr.open_dataset(v2_scale_file)
-# v2_scale_ds
-# # %%
-# v2_flux_ds = xr.open_dataset(v2_flux_file)
-# v2_flux_ds
-# # %%
+v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
+v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
+# %%
+v2_scale_ds = xr.open_dataset(v2_scale_file)
+v2_scale_ds
+# %%
+v2_flux_ds = xr.open_dataset(v2_flux_file)
+v2_flux_ds
+# %%
+v3_in_path = final_gridded_dir / "Gridded_GHGI_Methane_v3_2012_AugTest.nc"
+v3_flux_ds = xr.open_dataset(v3_in_path)
+v3_flux_ds.close()
+v3_flux_ds
+# %%
+# %%
+v3_flux_ds["time"]
+# %%
