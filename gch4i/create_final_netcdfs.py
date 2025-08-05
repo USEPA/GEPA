@@ -2,23 +2,24 @@
 Name:                   create_final_netcdfs.py
 Date Last Modified:     2025-08-4
 Authors Name:           Nick Kruskamp (RTI International)
-Purpose:                This File is used to format the emission flux data into 
-                        the final netCDF files. 
+Purpose:                This File is used to format the emission flux data into
+                        the final netCDF files.
                         The output is a gridded methane emissions product that can be
                         used for further analysis.
-Notes: 
-                      
+Notes:
+
 """
+
 # %%
 # %load_ext autoreload
 # %autoreload 2
 # %%
-#import re
+# import re
 
-#import pandas as pd
+import pandas as pd
 import xarray as xr
 
-from gch4i.config import final_gridded_dir, prelim_gridded_dir
+from gch4i.config import final_gridded_dir, prelim_gridded_dir, global_data_dir_path
 from gch4i.config import years as YEARS
 
 
@@ -50,6 +51,7 @@ class CreateFinalNetCDFs:
         self.monthly_scale_files = list(
             self.monthly_scaling_dir.glob("*_monthly_scaling.tif")
         )
+        self.area_matrix_path = global_data_dir_path / "gridded_area_01_cm2.tif"
 
     def _get_month_scale_attrs(self):
         # make the monthly scaling factors attributes
@@ -65,12 +67,29 @@ class CreateFinalNetCDFs:
             "sectors with strong monthly variability."
         )
 
+    def _get_area_matrix(self):
+        """
+        Load the area matrix from the global data directory.
+        The area matrix is used to calculate the total emissions for each grid cell.
+        """
+        self.area_matrix = xr.open_dataset(self.area_matrix_path)
+        self.area_matrix = (
+            self.area_matrix.rename({"x": "lon", "y": "lat", "band": "time"})
+            .rename_vars({"band_data": "grid_cell_area"})
+            .reset_coords("spatial_ref", drop=True)
+        )
+        # self.area_matrix.attrs = {
+        #     "standard_name": "grid_cell_area",
+        #     "long_name": "Grid cell areas to convert to absolute emissions",
+        #     "units": "cm^2",
+        # }
+
     def create_final_netcdfs(self):
-        year_data_dict = {}
         for i, year in enumerate(YEARS):
             # TODO: remove draft when final final.
             out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
-            
+
+            year_data_dict = {}
             for in_path in self.flux_data_files:
                 # Get the file name and extract the source category and long name
                 source_cat = in_path.stem.split("_")[0]
@@ -85,43 +104,57 @@ class CreateFinalNetCDFs:
                     )
                     .expand_dims({"time": 1})
                     .set_coords(["time", "lon", "lat"])
-                    .reset_coords('spatial_ref', drop=True)
+                    .reset_coords("spatial_ref", drop=True)
                 )
-                group_ds.assign_coords({"time": (group_ds.time-group_ds.time).astype(float)}) #set to 0 hours since year start
+                # group_ds = group_ds.assign_coords(
+                #     {"time": (group_ds.time - group_ds.time).astype(float)}
+                # )  # set to 0 hours since year start
                 year_data_dict[var_name] = group_ds
-            year_ds = xr.merge(year_data_dict.values()) #note that xarray merge will drop variable attributes if they are different from each other
-            #setting the global file attributes
+            year_ds = xr.merge(
+                year_data_dict.values()
+            )  # note that xarray merge will drop variable attributes if they are different from each other
+            # setting the global file attributes
             year_ds.attrs = self.attrs.copy()
-            year_ds.attrs["year"] = year #update attributes to the current year
-            #adjusting the global attributes
-            year_ds.coords['time'].attrs["long_name"] = "time"
-            year_ds.coords['time'].attrs["units"] = 'hours since 2012-01-01 00:00:00'
-            year_ds.coords['time'].attrs["calendar"]  ='standard'
-            year_ds.coords['time'].attrs["axis"] = "T"
-            year_ds.coords['lat'].attrs["long_name"] = "Latitude"
-            year_ds.coords['lat'].attrs["units"] = 'degrees_north'
-            year_ds.coords['lat'].attrs["standard_name"] = 'latitude'
-            year_ds.coords['lat'].attrs["axis"] = 'Y'
-            year_ds.coords['lon'].attrs["long_name"]  ='Longitude'
-            year_ds.coords['lon'].attrs["units"] = "degrees_east"
-            year_ds.coords['lon'].attrs["standard_name"] = 'longitude'
-            year_ds.coords['lon'].attrs["axis"] = 'X'
-            #add a moderate amount of compression and set the individua variable attributes
-            for var in year_ds: 
+            year_ds.attrs["year"] = year  # update attributes to the current year
+            # adjusting the global attributes
+            year_ds.coords["time"].attrs["long_name"] = "time"
+            year_ds.coords["time"].attrs["units"] = f"hours since {year}-01-01 00:00:00"
+            year_ds.coords["time"].attrs["calendar"] = "standard"
+            year_ds.coords["time"].attrs["axis"] = "T"
+            year_ds.coords["lat"].attrs["long_name"] = "Latitude"
+            year_ds.coords["lat"].attrs["units"] = "degrees_north"
+            year_ds.coords["lat"].attrs["standard_name"] = "latitude"
+            year_ds.coords["lat"].attrs["axis"] = "Y"
+            year_ds.coords["lon"].attrs["long_name"] = "Longitude"
+            year_ds.coords["lon"].attrs["units"] = "degrees_east"
+            year_ds.coords["lon"].attrs["standard_name"] = "longitude"
+            year_ds.coords["lon"].attrs["axis"] = "X"
+            self.area_matrix["time"] = year_ds["time"]
+            year_ds = xr.merge([year_ds, self.area_matrix])
+            # add a moderate amount of compression and set the individua variable attributes
+            for var in year_ds:
                 year_ds[var].encoding.update(dict(zlib=True, complevel=4))
                 year_ds[var] = year_ds[var].fillna(0)
-                year_ds[var].attrs = {} #remove all dataset and variable attributes
-                source_cat = year_ds[var].name.split("_")[2]
-                name_parts = year_ds[var].name.split("_")[2:]
-                long_name = f"""{year} Methane emissions from IPCC source category {' '.join(name_parts)}"""
-                year_ds[var].attrs["source_category"] = source_cat
-                year_ds[var].attrs["standard_name"] = "annual_emissions"
-                year_ds[var].attrs["long_name"] = long_name
-                year_ds[var].attrs["units"] = "molec cm-2 s-1"
+                year_ds[var].attrs = {}  # remove all dataset and variable attributes
+                if var == "grid_cell_area":
+                    year_ds[var].attrs = {
+                        "standard_name": "grid_cell_area",
+                        "long_name": "Grid cell areas to convert to absolute emissions",
+                        "units": "cm^2",
+                    }
+                else:
+                    source_cat = year_ds[var].name.split("_")[2]
+                    name_parts = year_ds[var].name.split("_")[2:]
+                    long_name = f"""{year} Methane emissions from IPCC source category 
+                    {' '.join(name_parts)}"""
+                    year_ds[var].attrs["source_category"] = source_cat
+                    year_ds[var].attrs["standard_name"] = "annual_emissions"
+                    year_ds[var].attrs["long_name"] = long_name
+                    year_ds[var].attrs["units"] = "molec cm-2 s-1"
+
             year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
 
             print(f"Saved {out_path.name}")
-            
 
     def create_monthly_scaling_files(self):
         year_data_dict = {}
@@ -136,12 +169,12 @@ class CreateFinalNetCDFs:
                 name_parts = in_path.stem.split("_")[:-3]
                 long_name = f"{year} Monthly scale factors for IPCC source category {' '.join(name_parts)}"
                 var_name = f"monthly_scale_factor_{'_'.join(name_parts)}"
-                #var_attrs = {
+                # var_attrs = {
                 #    "source": source_cat,
                 #    "standard_name": "monthly_scaling",
                 #    "long_name": long_name,
-               #     "units": self.units,
-               # }
+                #     "units": self.units,
+                # }
 
                 group_ds = (
                     xr.open_dataset(in_path)
@@ -149,36 +182,38 @@ class CreateFinalNetCDFs:
                     .rename(
                         {"band_data": var_name, "band": "time", "x": "lon", "y": "lat"}
                     )
-                    #TO DO - this time dimension may need to be updated when the new monthly scaling factors have 12 months of data
+                    # TO DO - this time dimension may need to be updated when the new monthly scaling factors have 12 months of data
                     .expand_dims({"time": 12})
-                    #.assign_coords({"time": pd.DatetimeIndex([f"{year}-01-01"])})
+                    # .assign_coords({"time": pd.DatetimeIndex([f"{year}-01-01"])})
                     .set_coords(["time", "lon", "lat"])
-                    .reset_coords('spatial_ref', drop=True)
+                    .reset_coords("spatial_ref", drop=True)
                 )
-                #this may need to be updated to calculate the hours since the start of the year
-                group_ds = group_ds.assign_coords({"time": (group_ds.time-group_ds.time).astype(float)}) #set to 0 hours since year start
+                # this may need to be updated to calculate the hours since the start of the year
+                group_ds = group_ds.assign_coords(
+                    {"time": (group_ds.time - group_ds.time).astype(float)}
+                )  # set to 0 hours since year start
                 year_data_dict[var_name] = group_ds
             year_ds = xr.merge(year_data_dict.values())
             year_ds.attrs = self.attrs.copy()
-            year_ds.attrs["year"] = year #update attributes to the current year
-            #adjusting the global attributes
-            year_ds.coords['time'].attrs["long_name"] = "time"
-            year_ds.coords['time'].attrs["units"] = 'hours since 2012-01-01 00:00:00'
-            year_ds.coords['time'].attrs["calendar"]  ='standard'
-            year_ds.coords['time'].attrs["axis"] = "T"
-            year_ds.coords['lat'].attrs["long_name"] = "Latitude"
-            year_ds.coords['lat'].attrs["units"] = 'degrees_north'
-            year_ds.coords['lat'].attrs["standard_name"] = 'latitude'
-            year_ds.coords['lat'].attrs["axis"] = 'Y'
-            year_ds.coords['lon'].attrs["long_name"]  ='Longitude'
-            year_ds.coords['lon'].attrs["units"] = "degrees_east"
-            year_ds.coords['lon'].attrs["standard_name"] = 'longitude'
-            year_ds.coords['lon'].attrs["axis"] = 'X'
-            #add a moderate amount of compression and set the individua variable attributes
-            for var in year_ds: 
+            year_ds.attrs["year"] = year  # update attributes to the current year
+            # adjusting the global attributes
+            year_ds.coords["time"].attrs["long_name"] = "time"
+            year_ds.coords["time"].attrs["units"] = "hours since 2012-01-01 00:00:00"
+            year_ds.coords["time"].attrs["calendar"] = "standard"
+            year_ds.coords["time"].attrs["axis"] = "T"
+            year_ds.coords["lat"].attrs["long_name"] = "Latitude"
+            year_ds.coords["lat"].attrs["units"] = "degrees_north"
+            year_ds.coords["lat"].attrs["standard_name"] = "latitude"
+            year_ds.coords["lat"].attrs["axis"] = "Y"
+            year_ds.coords["lon"].attrs["long_name"] = "Longitude"
+            year_ds.coords["lon"].attrs["units"] = "degrees_east"
+            year_ds.coords["lon"].attrs["standard_name"] = "longitude"
+            year_ds.coords["lon"].attrs["axis"] = "X"
+            # add a moderate amount of compression and set the individua variable attributes
+            for var in year_ds:
                 year_ds[var].encoding.update(dict(zlib=True, complevel=4))
                 year_ds[var] = year_ds[var].fillna(0)
-                year_ds[var].attrs = {} #remove all dataset and variable attributes
+                year_ds[var].attrs = {}  # remove all dataset and variable attributes
                 source_cat = year_ds[var].name.split("_")[3]
                 name_parts = year_ds[var].name.split("_")[3:]
                 long_name = f"""{year} Monthly scale factors for IPCC source category {' '.join(name_parts)}"""
@@ -189,29 +224,29 @@ class CreateFinalNetCDFs:
             year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
 
     def write_outputs(self):
+        self._get_area_matrix()
         self.create_final_netcdfs()
-        #self.create_monthly_scaling_files()
+        # self.create_monthly_scaling_files()
 
     # TODO: plotting function to visualize the data
     def plot_data(self):
         pass
 
+
 # %%
 file_writer = CreateFinalNetCDFs()
 file_writer.write_outputs()
-file_writer.plot_data()
+# file_writer.plot_data()
 # %%
-
-# For reference, we can look at the attributes (and other features) of the v2 data
-# # %%
+# # For reference, we can look at the attributes (and other features) of the v2 data
 # from gch4i.config import V3_DATA_PATH
 
 # v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
 # v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
 # # %%
 # v2_scale_ds = xr.open_dataset(v2_scale_file)
-# v2_scale_ds.attrs
+# v2_scale_ds
 # # %%
 # v2_flux_ds = xr.open_dataset(v2_flux_file)
-# v2_flux_ds.attrs
+# v2_flux_ds
 # # %%
