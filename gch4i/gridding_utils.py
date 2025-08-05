@@ -1498,7 +1498,7 @@ class EmiProxyGridder(BaseGridder):
             ).transpose("year_month", "y", "x")
 
         elif (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
-            print("DEBUG: scaling emis")
+            # print("DEBUG: scaling emis")
             self.scale_emi_to_month()
 
         # check that the proxy and emi files have matching state years
@@ -2010,7 +2010,7 @@ class GroupGridder(BaseGridder):
             group_arr = arr_list[0]
 
         group_arr = np.flip(group_arr, axis=1)
-        print(f"DEBUG: group_arr shape: {group_arr.shape}")
+        # print(f"DEBUG: group_arr shape: {group_arr.shape}")
 
         if time_col == "year":
             out_mass_da = xr.DataArray(
@@ -2306,9 +2306,14 @@ class GroupGridder(BaseGridder):
         if timestep == "year_month":
             days_in_months = [self.get_days_in_month(x) for x in times]
 
-            #TODO: for livestock only, replace 29 with 28 for February
-            # if self.group_name == "":
-            # days_in_months = [28 if x.month == 2 else x.days_in_month for x in days_in_months]
+            # TODO: for livestock only, replace 29 with 28 for February
+            if (self.group_name == "3A_enteric_fermentation") | (
+                self.group_name == "3B_manure_management"
+            ):
+                # NOTE: the inventory did not adjust Feb data for leap years
+                # so we do not adjust the leap year data here.
+                print("INFO: replacing 29 with 28 for February in livestock emissions")
+                days_in_months = [28 if x == 29 else x for x in days_in_months]
 
             conv_factors = [
                 self.calc_conversion_factor(x, self.area_matrix) for x in days_in_months
@@ -2321,7 +2326,7 @@ class GroupGridder(BaseGridder):
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            print("DEBUG calculating monthly conversion factors")
+            # print("DEBUG: calculating monthly conversion factors")
 
         elif timestep == "year":
             days_in_year = [self.get_days_in_year(x) for x in times]
@@ -2640,7 +2645,7 @@ class GroupGridder(BaseGridder):
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
         center = None
-        print(f"DEBUG plotting values: {c_min}, {c_max}")
+        # print(f"DEBUG: plotting values: {c_min}, {c_max}")
         if (c_min >= 0) and (c_max > 0):
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
             c_map = "Reds"
@@ -2651,7 +2656,7 @@ class GroupGridder(BaseGridder):
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
             center = 0
             c_map = "bwr"
-        print(f"c_map: {c_map}, c_norm: {c_norm}")
+        # print(f"c_map: {c_map}, c_norm: {c_norm}")
 
         return c_map, c_norm, center
 
