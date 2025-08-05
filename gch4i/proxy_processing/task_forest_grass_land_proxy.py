@@ -42,6 +42,7 @@ from gch4i.config import (
     proxy_data_dir_path,
     sector_data_dir_path,
     years,
+    EQ_AREA_CRS,
 )
 from gch4i.utils import convert_FIPS_to_two_letter_code, normalize
 
@@ -202,8 +203,8 @@ parameter_dict = dict(
     emi_path,
     nlcd_path,
     output_path,
-) = parameter_dict["grass"].values()
-# ) = parameter_dict["forest"].values()
+# ) = parameter_dict["grass"].values()
+) = parameter_dict["forest"].values()
 
 
 # %% pytask function
@@ -232,6 +233,9 @@ def task_forest_grass_land_proxy_data(
     Returns:
     None. Proxy data is saved to a parquet file at the output_path.
     """
+    # %%
+    habitat_type = output_path.name.split("_")[0]
+
     # %%
     state_gdf = (
         gpd.read_file(state_path)
@@ -265,10 +269,29 @@ def task_forest_grass_land_proxy_data(
     if not mtbs_burn_perimeters["geometry"].is_valid.all():
         raise ValueError(f"Invalid geometries still present in the proxy data")
     # %%
+    geom_type_mask = mtbs_burn_perimeters["geometry"].geom_type == "MultiPolygon"
+
+    mp_mtbs_gdf = (
+        mtbs_burn_perimeters[geom_type_mask]
+        .to_crs(EQ_AREA_CRS)
+        .assign(main_area=lambda df: df.area)
+        .explode()
+        .assign(rel_area=lambda df: df.area / df["main_area"])
+        .to_crs(4326)
+    )
+    mp_mtbs_gdf
+
+    poly_mtbs_gdf = mtbs_burn_perimeters[~geom_type_mask].assign(rel_area=1.0)
+
+    mtbs_burn_perimeters = pd.concat([mp_mtbs_gdf, poly_mtbs_gdf])
+    mtbs_burn_perimeters
+
+    # %%
     nlcd_gdf = (
         gpd.read_parquet(nlcd_path)
         .overlay(state_gdf, how="intersection")
         .rename(columns={"values": "ch4_mg"})
+        .explode()
         # .dissolve(by="state_code", aggfunc="first")
         # .rename(columns={1: "rel_emi"})
     )
@@ -302,14 +325,14 @@ def task_forest_grass_land_proxy_data(
     # %%
 
     # Get the forest and nonforest habitat types from the FCCS data
-    fccs_forest = get_habitat_types(fccs_fuelbed, "FUELBED", "forest")
+    fccs_habitat_types = get_habitat_types(fccs_fuelbed, "FUELBED", habitat_type)
 
-    nawfd_forest = get_habitat_types(nawfd_fuelbed, "name", "forest")
+    nawfd_habitat_types = get_habitat_types(nawfd_fuelbed, "name", habitat_type)
     # %%
     # Filter the MTBS data to only include forest habitat types in the FCCS and NAWFD data
     habitat_mask = input_proxy_df["fuelbed_aggregate"].isin(
-        fccs_forest["FCCS"]
-    ) | input_proxy_df["fuelbed_aggregate"].isin(nawfd_forest["nawfd_id"])
+        fccs_habitat_types["FCCS"]
+    ) | input_proxy_df["fuelbed_aggregate"].isin(nawfd_habitat_types["nawfd_id"])
     filtered_proxy_df = input_proxy_df[habitat_mask]
     filtered_proxy_df
 
@@ -331,8 +354,11 @@ def task_forest_grass_land_proxy_data(
     fire_emissions_sums_df
     # %%
     # Join the MTBS lat long data to the proxy data
-    land_proxy_gdf = mtbs_burn_perimeters.join(fire_emissions_sums_df, how="inner")
+    land_proxy_gdf = mtbs_burn_perimeters.join(
+        fire_emissions_sums_df, how="inner"
+    ).assign(ch4_mg=lambda df: df["ch4_mg"] * df["rel_area"])
     land_proxy_gdf
+    # %%
 
     # Check if there are any states missing fires
     states_missing_fires = check_missing_data(emi_df, land_proxy_gdf)
@@ -353,7 +379,7 @@ def task_forest_grass_land_proxy_data(
         for row in states_missing_fires.itertuples():
             missing_state = row.state_code
             missing_year = row.year
-            print(f"looking for data for state: {missing_state}, year: {missing_year}")
+            # print(f"looking for data for state: {missing_state}, year: {missing_year}")
             mtbs_fill_in_gdf = mtbs_burn_perimeters.query(
                 "(state_code == @missing_state) & (year == @missing_year)"
             ).assign(
@@ -391,6 +417,9 @@ def task_forest_grass_land_proxy_data(
                 sup_data = state_data.query("year == @iyear_closest").assign(
                     year=missing_year,
                     ch4_mg=1.0,
+                    year_month=lambda df: df["year_month"].str.replace(
+                        str(iyear_closest), str(missing_year)
+                    ),
                 )
                 supp_data_df = pd.concat([supp_data_df, sup_data], ignore_index=True)
 
@@ -477,6 +506,7 @@ def task_forest_grass_land_proxy_data(
                 | np.isclose(df["sum_check"], 0, atol=0, rtol=0.00001)
             )
         )
+        .sort_index()
     )
     all_eq_df
 
@@ -497,7 +527,6 @@ def task_forest_grass_land_proxy_data(
     ax = final_proxy_gdf.query("year == 2021").plot("state_code", figsize=(10, 10))
     ax.set(title=f"{output_path.name.split("_")[0]} proxy data for 2021")
     state_gdf.boundary.plot(ax=ax, color="black", linewidth=0.5)
-
     final_proxy_gdf.to_parquet(output_path, index=False)
 
 

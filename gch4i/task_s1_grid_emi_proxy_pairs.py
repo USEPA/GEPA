@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 
 import logging
@@ -135,9 +135,9 @@ for row in tqdm(
 #     "rice_area_proxy",
 # )
 gch4i_name, emi_id, proxy_id = (
-    "3F4_fbar",
-    "chickpeas_emi",
-    "fbar_other_proxy",
+    "4A1_4A2_Forest_land_remaining_forest_land",
+    "forest_land_emi",
+    "forest_land_proxy",
 )
 row = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"

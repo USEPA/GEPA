@@ -1189,7 +1189,7 @@ class EmiProxyGridder(BaseGridder):
                             .assign(orig_len=lambda df: df.length)
                             # overlay the proxy with the cells, this results in splitting the
                             # original proxies across any intersecting cells
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             # # calculate the now partial proxy length, then divide the partial
                             # # proxy by the original proxy and multiply by the original
                             # # allocated emissions to the get the partial/disaggregated new emis.
@@ -1219,7 +1219,7 @@ class EmiProxyGridder(BaseGridder):
                             .assign(orig_area=lambda df: df.area)
                             # overlay the proxy with the cells, this results in splitting the
                             # original proxies across any intersecting cells
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             # calculate the now partial proxy area, then divide the partial
                             # proxy by the original proxy and multiply by the original
                             # allocated emissions to the get the partial/disaggregated new emis.
