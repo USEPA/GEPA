@@ -50,9 +50,9 @@ g_info.display_all_pair_statuses()
 run_these_groups = [
     # "1A_mobile_combustion",
     # "1B2biv_ng_transmission_storage",
-    # "3A_enteric_fermentation",
-    "4A1_4A2_Forest_land_remaining_forest_land",
-    "4C1_4C2_Grassland_remaining_grassland",
+    "3A_enteric_fermentation",
+    # "4A1_4A2_Forest_land_remaining_forest_land",
+    # "4C1_4C2_Grassland_remaining_grassland",
     # "1B2biv_ng_transmission_storage",
     # "1B2bii_ng_production",
     # "1B2ai_petroleum_exploration",

@@ -33,12 +33,16 @@ for gch4i_name, gridding_group_data in tqdm(
 # Example for running a single group
 # gch4i_name = "1B2aii_petroleum_production"
 # gch4i_name = "3B_manure_management"
-gch4i_name = "1A_stationary_combustion"
-# gch4i_name = "3A_enteric_fermentation"
+# gch4i_name = "1A_stationary_combustion"
+gch4i_name = "3A_enteric_fermentation"
 # gch4i_name = "4A1_4A2_Forest_land_remaining_forest_land"
 # gch4i_name = "1B2biv_ng_transmission_storage"
 # gch4i_name = "5A_industrial_landfills"
 gridding_group_data = g_info.ready_groups_df.query(f"gch4i_name == '{gch4i_name}'")
 gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
 gg.run_gridding()
+# %%
+gg.__class__ = GroupGridder
+gg.calculate_monthly_scaling()
+gg.month_scale_check
 # %%

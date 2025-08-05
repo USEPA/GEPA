@@ -80,7 +80,7 @@ g_info.display_all_pair_statuses()
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = False
+SKIP = True
 SKIP_THESE = [
     "complete",
     # "monthly failed, annual complete",
@@ -109,6 +109,9 @@ for row in tqdm(
     g_info.pairs_ready_for_gridding_df.itertuples(index=False),
     total=len(g_info.pairs_ready_for_gridding_df),
 ):
+    if SKIP and row.status in SKIP_THESE:
+        print(f"Skipping {row.gch4i_name} {row.emi_id} {row.proxy_id} ({row.status})")
+        continue
     out_qc_dir = logging_dir / row.gch4i_name
     try:
         epg = EmiProxyGridder(row)

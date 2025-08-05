@@ -361,7 +361,7 @@ class GriddingInfo:
 
     def get_ready_pairs(self):
         # get the emi/proxy pairs that are ready for gridding
-        self.get_status_table(save=False)
+        self.get_status_table()
 
         self.pairs_ready_for_gridding_df = self.mapping_df.drop_duplicates(
             subset=["gch4i_name", "emi_id", "proxy_id"]
@@ -1832,6 +1832,9 @@ class GroupGridder(BaseGridder):
         self.nc_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.nc"
         self.get_geo_filter()
         self.relative_tolerance = 0.0001
+        self.monthly_times = [
+            f"{year}-{month:02d}" for year in years for month in range(1, 13)
+        ]
 
         # IPCC_ID, SOURCE_NAME = g_name.split("_", maxsplit=1)
         # netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
@@ -1848,12 +1851,17 @@ class GroupGridder(BaseGridder):
         # )
 
     def get_monthly_source_count(self):
-        self.monthly_source_count = (
+        self.monthly_data_mask = (
             self.data_df[["emi_time_step", "proxy_time_step"]]
             .eq("monthly")
             .any(axis=1)
-            .sum()
+            # .sum()
         )
+        self.monthly_data_df = self.data_df[self.monthly_data_mask]
+        self.monthly_source_count = self.monthly_data_df.shape[0]
+
+        self.not_monthly_data_df = self.data_df[~self.monthly_data_mask]
+        self.not_monthly_source_count = self.not_monthly_data_df.shape[0]
         # self.no_monthly_source_count =
 
     def get_source_QC_df(self):
@@ -1927,24 +1935,19 @@ class GroupGridder(BaseGridder):
 
     def get_input_raster_paths(self):
         """get all the input emi/proxy pair paths."""
-        all_raster_list = []
+        self.annual_raster_list = []
         for row in self.data_df.itertuples():
             base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
-            result = list(self.qc_dir.glob(f"{base_name}*.tif"))
-            all_raster_list.extend(result)
-
-        # split the lists into annual and monthly
-        annual_raster_list = [
-            raster for raster in all_raster_list if "monthly" not in raster.name
-        ]
+            result = self.qc_dir / f"{base_name}.tif"
+            if not result.exists():
+                print(f"WARNING: {result} does not exist.")
+            self.annual_raster_list.append(result)
 
         # check that we got the number of files we expected
-        if annual_raster_list:
-            if len(annual_raster_list) == self.annual_source_count:
-                self.annual_raster_list = annual_raster_list
-            else:
+        if self.annual_raster_list:
+            if not len(self.annual_raster_list) == self.annual_source_count:
                 raise ValueError(
-                    f"only found {len(annual_raster_list)} annual rasters. "
+                    f"only found {len(self.annual_raster_list)} annual rasters. "
                     f"Expected {self.annual_source_count}."
                 )
         else:
@@ -1953,15 +1956,17 @@ class GroupGridder(BaseGridder):
         # if we expect monthly raster files, get the list of paths and check that we
         # have the right number of files
         if self.monthly_source_count > 0:
-            monthly_raster_list = [
-                raster for raster in all_raster_list if "monthly" in raster.name
-            ]
-            if monthly_raster_list:
-                if len(monthly_raster_list) == self.monthly_source_count:
-                    self.monthly_raster_list = monthly_raster_list
-                else:
+            self.monthly_raster_list = []
+            for row in self.monthly_data_df.itertuples():
+                base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+                result = self.qc_dir / f"{base_name}_monthly.tif"
+                if not result.exists():
+                    print(f"WARNING: {result} does not exist.")
+                self.monthly_raster_list.append(result)
+            if self.monthly_raster_list:
+                if not len(self.monthly_raster_list) == self.monthly_source_count:
                     raise ValueError(
-                        f"only found {len(monthly_raster_list)} annual rasters. "
+                        f"only found {len(self.monthly_raster_list)} monthly rasters. "
                         f"Expected {self.monthly_source_count}."
                     )
             else:
@@ -1969,34 +1974,77 @@ class GroupGridder(BaseGridder):
                     f"No monthly rasters found. expected {self.monthly_source_count}."
                 )
 
-    def read_and_sum_source_rasters(self):
+        if self.not_monthly_source_count > 0:
+            self.not_monthly_raster_list = []
+            for row in self.not_monthly_data_df.itertuples():
+                base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+                result = self.qc_dir / f"{base_name}.tif"
+                if not result.exists():
+                    print(f"WARNING: {result} does not exist.")
+                self.not_monthly_raster_list.append(result)
+            if self.not_monthly_raster_list:
+                if (
+                    not len(self.not_monthly_raster_list)
+                    == self.not_monthly_source_count
+                ):
+                    raise ValueError(
+                        f"only found {len(self.not_monthly_raster_list)} not monthly rasters. "
+                        f"Expected {self.not_monthly_source_count}."
+                    )
+            else:
+                raise ValueError(
+                    f"No monthly rasters found. expected {self.not_monthly_source_count}."
+                )
+
+    def read_and_sum_source_rasters(self, input_list, time_col):
         """Read the annual rasters and sum them into a single array."""
-        annual_arr_list = []
-        for raster_path in self.annual_raster_list:
+        arr_list = []
+        for raster_path in input_list:
             with rasterio.open(raster_path) as src:
                 arr_data = src.read()
-                annual_arr_list.append(arr_data)
+                arr_list.append(arr_data)
 
-        if len(annual_arr_list) > 1:
-            self.annual_group_arr = np.nansum(annual_arr_list, axis=0)
+        if len(arr_list) > 1:
+            group_arr = np.nansum(arr_list, axis=0)
         else:
-            self.annual_group_arr = annual_arr_list[0]
+            group_arr = arr_list[0]
 
-        self.annual_group_arr = np.flip(self.annual_group_arr, axis=1)
-        self.gridded_yearly_sum = np.nansum(self.annual_group_arr, axis=(1, 2))
+        group_arr = np.flip(group_arr, axis=1)
+        print(f"DEBUG: group_arr shape: {group_arr.shape}")
 
-        self.annual_mass_da = xr.DataArray(
-            self.annual_group_arr,
-            dims=["time", "y", "x"],
-            coords={
-                "time": years,
-                "y": self.gepa_profile.y,
-                "x": self.gepa_profile.x,
-            },
-            name=self.group_name,
-        )
+        if time_col == "year":
+            out_mass_da = xr.DataArray(
+                group_arr,
+                dims=["time", "y", "x"],
+                coords={
+                    "time": years,
+                    "y": self.gepa_profile.y,
+                    "x": self.gepa_profile.x,
+                },
+                name=self.group_name,
+            )
+        elif time_col == "year_month":
+            out_mass_da = xr.DataArray(
+                group_arr,
+                dims=["time", "y", "x"],
+                coords={
+                    "time": self.monthly_times,
+                    "y": self.gepa_profile.y,
+                    "x": self.gepa_profile.x,
+                },
+                name=self.group_name,
+            ).assign_coords(
+                year=("time", np.repeat(years, len(years) + 1)),
+                month=("time", np.tile(np.arange(1, 13), len(years))),
+            )
+        return out_mass_da
 
     def QC_group_grid(self):
+
+        self.gridded_yearly_sum = self.annual_mass_da.groupby("time").sum(
+            dim=["y", "x"], skipna=True
+        )
+
         self.emi_check_df = self.emi_group_year_df.assign(
             gridded_emissions=self.gridded_yearly_sum
         ).assign(
@@ -2257,6 +2305,11 @@ class GroupGridder(BaseGridder):
 
         if timestep == "year_month":
             days_in_months = [self.get_days_in_month(x) for x in times]
+
+            #TODO: for livestock only, replace 29 with 28 for February
+            # if self.group_name == "":
+            # days_in_months = [28 if x.month == 2 else x.days_in_month for x in days_in_months]
+
             conv_factors = [
                 self.calc_conversion_factor(x, self.area_matrix) for x in days_in_months
             ]
@@ -2602,50 +2655,50 @@ class GroupGridder(BaseGridder):
 
         return c_map, c_norm, center
 
-    # TODO: fix this code because it is writing the scaling data upside down.
     def calculate_monthly_scaling(self):
         """read all the monthly data, calculate a 3d array of monthly emissions
         and normalized it by year to sum to 12 for each year"""
-        monthly_raster_ds_list = []
-        for monthly_raster in self.monthly_raster_list:
-            with rasterio.open(monthly_raster) as src:
-                arr_data = src.read()
-                monthly_raster_ds_list.append(arr_data)
-            # monthly_raster_ds_list.append(xr.open_dataset(monthly_raster))
 
-        if len(monthly_raster_ds_list) > 1:
-            self.monthly_group_arr = np.nansum(monthly_raster_ds_list, axis=0)
-        else:
-            self.monthly_group_arr = monthly_raster_ds_list[0]
-
-        self.monthly_mass_arr = np.flip(self.monthly_group_arr, axis=1)
-
-        times = [f"{year}-{month:02d}" for year in years for month in range(1, 13)]
-
+        # the target value for the monthly scaling is 12 TODO update this
         monthly_scale_target = 12
 
-        # for the sources that do not have monthly data, create an array where the
-        # data are expanded to have months and each month has the same value as the year
-        # repeat each year array 12 times to create a 3d array
-
         # create the monthly mass dataset
-        self.monthly_mass_ds = xr.Dataset(
-            {"mass": (("time", "y", "x"), self.monthly_mass_arr)},
-            coords={
-                "time": times,
-                "y": self.gepa_profile.y,
-                "x": self.gepa_profile.x,
-            },
-        ).assign_coords(
-            year=("time", np.tile(years, len(years) + 1)),
-            month=("time", np.tile(np.arange(1, 13), len(years))),
+        self.monthly_mass_da = self.read_and_sum_source_rasters(
+            self.monthly_raster_list, "year_month"
         )
-
-        print("DEBUG: calc flux from monthly scaling")
         # calculate the monthly flux from the monthly mass data
         self.monthly_flux_da = self.calculate_flux(
-            self.monthly_mass_ds["mass"], "year_month", "mass2flux"
-        ).rename("monthly_flux")
+            self.monthly_mass_da, "year_month", "mass2flux"
+        )
+
+        # if there are sources that do not have monthly data, create an array where the
+        # data are expanded to have months and each month has the same value as the year
+        # repeat each year array 12 times to create a 3d array
+        if self.not_monthly_source_count > 0:
+            not_monthly_mass_da = self.read_and_sum_source_rasters(
+                self.not_monthly_raster_list, "year"
+            )
+
+            not_monthly_flux_da = self.calculate_flux(
+                not_monthly_mass_da, "year", "mass2flux"
+            )
+
+            not_monthly_flux_in_months_da = xr.DataArray(
+                np.repeat(not_monthly_flux_da.values, 12, axis=0),
+                dims=["time", "y", "x"],
+                coords={
+                    "time": self.monthly_flux_da.time.values,
+                    "y": self.monthly_flux_da.y.values,
+                    "x": self.monthly_flux_da.x.values,
+                },
+            )
+
+            monthly_data_for_scaling = (
+                self.monthly_flux_da + not_monthly_flux_in_months_da
+            )
+        # if the entire group already has monthly data, just use that data
+        else:
+            monthly_data_for_scaling = self.monthly_flux_da
 
         # scale the monthly data:
         # get the annual flux data and expand it so that the yearly data are repeated
@@ -2664,10 +2717,9 @@ class GroupGridder(BaseGridder):
         # divide the monthly flux by the annual emissions and the scale the data so
         # it sums to 12.
         self.scaled_monthly_flux_da = (
-            (self.monthly_flux_da / annual_flux_in_months_da)
-            .rename("monthly_flux")
-            .groupby(["year"])
-            .apply(lambda x: (x / x.sum(dim="time")) * monthly_scale_target)
+            (monthly_data_for_scaling / annual_flux_in_months_da).rename("monthly_flux")
+            # .groupby(["year"])
+            # .apply(lambda x: (x / x.sum(dim="time")) * monthly_scale_target)
         )
 
         # check that the scaled values are equal to our target value.
@@ -2718,7 +2770,9 @@ class GroupGridder(BaseGridder):
         self.get_source_QC_df()
         self.get_group_emi_df()
         self.get_input_raster_paths()
-        self.read_and_sum_source_rasters()
+        self.annual_mass_da = self.read_and_sum_source_rasters(
+            self.annual_raster_list, "year"
+        )
         self.QC_group_grid()
         self.annual_flux_da = self.calculate_flux(
             self.annual_mass_da, "year", "mass2flux"
