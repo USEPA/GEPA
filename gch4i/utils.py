@@ -91,13 +91,29 @@ def get_cell_gdf() -> gpd.GeoDataFrame:
     return cell_gdf
 
 
-def load_area_matrix(resolution=0.1) -> np.array:
+def load_area_matrix(resolution=0.1, plot=False) -> np.array:
     """load the raster array of grid cell area in square meters"""
+
+    gepa_profile = GEPA_spatial_profile(resolution)
     res_text = str(resolution).replace(".", "")
     input_path = global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
     with rasterio.open(input_path) as src:
-        arr = src.read(1)
-    return arr
+        area_matrix = src.read(1)
+
+    # area_matrix = np.flip(area_matrix, 0)
+    # plt.imshow(area_matrix)
+    # plt.show()
+    area_ds = xr.DataArray(
+        area_matrix,
+        coords={
+            "y": np.flip(gepa_profile.y),
+            "x": gepa_profile.x,
+        },
+    )
+    if plot:
+        area_ds.plot()
+        plt.show()
+    return area_ds
 
 
 def write_ncdf_output(

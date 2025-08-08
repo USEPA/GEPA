@@ -1789,6 +1789,7 @@ class GroupGridder(BaseGridder):
         self.nc_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.nc"
         self.get_geo_filter()
         self.relative_tolerance = 0.0001
+        self.area_ds = load_area_matrix(plot=True)
 
         # IPCC_ID, SOURCE_NAME = g_name.split("_", maxsplit=1)
         # netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
@@ -2032,11 +2033,11 @@ class GroupGridder(BaseGridder):
         """
 
         # we set 0 and negative values as NA
-      #EEM: The incoming data are in units on molec/cm2/s
-      # we want to plot them in units of Mg/km2/year
-      # Therefore, we need to divide them byt eh following conversion factor:
-      # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
-      # This conversion factor also needs to be applied to the difference plots. 
+        # EEM: The incoming data are in units on molec/cm2/s
+        # we want to plot them in units of Mg/km2/year
+        # Therefore, we need to divide them byt eh following conversion factor:
+        # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
+        # This conversion factor also needs to be applied to the difference plots.
         plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         fg = plotting_data.plot.imshow(
@@ -2137,14 +2138,13 @@ class GroupGridder(BaseGridder):
         plt.close()
 
     def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
-        """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1)"""
         return (
             10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
         )
 
     def calculate_flux(self, in_ds, timestep, direction):
         """calculates flux for dictionary of total emissions year/array pairs"""
-        self.area_matrix = load_area_matrix()
 
         if direction not in ["mass2flux", "flux2mass"]:
             raise ValueError(
@@ -2170,7 +2170,7 @@ class GroupGridder(BaseGridder):
         if timestep == "year_month":
             days_in_months = [get_days_in_month(x) for x in times]
             conv_factors = [
-                self.calc_conversion_factor(x, self.area_matrix) for x in days_in_months
+                self.calc_conversion_factor(x, self.area_ds) for x in days_in_months
             ]
 
             conv_ds = xr.DataArray(
@@ -2187,7 +2187,7 @@ class GroupGridder(BaseGridder):
         elif timestep == "year":
             days_in_year = [get_days_in_year(x) for x in times]
             conv_factors = [
-                self.calc_conversion_factor(x, self.area_matrix) for x in days_in_year
+                self.calc_conversion_factor(x, self.area_ds) for x in days_in_year
             ]
 
             conv_ds = xr.DataArray(

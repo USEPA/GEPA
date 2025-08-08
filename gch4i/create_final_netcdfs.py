@@ -14,14 +14,14 @@ Notes:
 # %load_ext autoreload
 # %autoreload 2
 # %%
-# import re
-
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from gch4i.config import final_gridded_dir, global_data_dir_path, prelim_gridded_dir
 from gch4i.config import years as YEARS
+from gch4i.utils import load_area_matrix, GEPA_spatial_profile
+from tqdm.auto import tqdm
 
 
 class CreateFinalNetCDFs:
@@ -53,6 +53,7 @@ class CreateFinalNetCDFs:
             self.monthly_scaling_dir.glob("*_monthly_scaling.tif")
         )
         self.area_matrix_path = global_data_dir_path / "gridded_area_01_cm2.tif"
+        self.gepa_profile = GEPA_spatial_profile()
 
     def _get_month_scale_attrs(self):
         # make the monthly scaling factors attributes
@@ -73,16 +74,18 @@ class CreateFinalNetCDFs:
         Load the area matrix from the global data directory.
         The area matrix is used to calculate the total emissions for each grid cell.
         """
-        self.area_matrix = xr.open_dataset(self.area_matrix_path)
         self.area_matrix = (
-            self.area_matrix.rename({"x": "lon", "y": "lat", "band": "time"})
-            .rename_vars({"band_data": "grid_cell_area"})
-            .reset_coords("spatial_ref", drop=True)
+            load_area_matrix()
+            .expand_dims(dim={"time": 1})
+            .rename({"x": "lon", "y": "lat"})
+            .to_dataset(name="grid_cell_area")
         )
 
     def create_final_netcdfs(self):
         self.gch4i_flux_dict = {}
-        for i, year in enumerate(YEARS):
+        for i, year in tqdm(
+            enumerate(YEARS), total=len(YEARS), desc="Processing years"
+        ):
             # TODO: remove draft when final final.
             out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
 
@@ -100,10 +103,17 @@ class CreateFinalNetCDFs:
                         {"band_data": var_name, "band": "time", "x": "lon", "y": "lat"}
                     )
                     .expand_dims({"time": 1})
-                    .assign_coords({"time": [0.0]})
+                    .assign_coords(
+                        {
+                            "time": [0.0],
+                            "lon": self.gepa_profile.x,
+                            "lat": np.flip(self.gepa_profile.y),
+                        }
+                    )
                     .set_coords(["time", "lon", "lat"])
                     .reset_coords("spatial_ref", drop=True)
                 )
+                group_ds.isel(time=0)[var_name].plot.imshow()
 
                 year_data_dict[var_name] = group_ds
             year_ds = xr.merge(
@@ -152,7 +162,7 @@ class CreateFinalNetCDFs:
                     year_ds[var].attrs["units"] = "molec cm-2 s-1"
             # save the dataset to a netCDF file
             year_ds["time"] = [0.0]
-            year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
+            year_ds.rio.write_crs(4326).to_netcdf(out_path, mode="w", format="NETCDF4")
             self.gch4i_flux_dict[year] = year_ds
             print(f"Saved {out_path.name}")
 
@@ -160,19 +170,30 @@ class CreateFinalNetCDFs:
         time_index = pd.date_range(
             f"{year}-01-01", periods=12, freq="MS"
         ) - pd.to_datetime(f"{year}-01-01")
-        time_index_h = time_index / np.timedelta64(1, "h")
-        return time_index_h
+        # out_time_index = time_index / np.timedelta64(1, "h")
+        out_time_index = time_index / np.timedelta64(1, "D")
+        return out_time_index
 
     def create_monthly_scaling_files(self):
         self.gch4i_month_scale_dict = {}
         # this creates a netCDF file for each year with all the monthly scaling factors
         # for that year by indexing the values.
-        for i_month, year in zip(np.arange(0, (len(YEARS) * 12), 12), YEARS):
+        for i_month, year in tqdm(
+            zip(np.arange(0, (len(YEARS) * 12), 12), YEARS),
+            total=len(YEARS),
+            desc="Processing months",
+        ):
             # get the time index in hours since the start of the year
             time_index_h = self._calc_time_index(year)
+            date_index = pd.date_range(
+                f"{year}-01-01", periods=12, freq="MS"
+            ).to_numpy()
             month_data_dict = {}
-            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_draft.nc"
-            for in_path in file_writer.monthly_scale_files:
+            out_path = (
+                final_gridded_dir
+                / f"Gridded_GHGI_Methane_v3_Monthly_Scale_Factors_{year}_draft.nc"
+            )
+            for in_path in self.monthly_scale_files:
                 # Get the file name and extract the source category and long name
                 # source_cat = in_path.stem.split("_")[0]
                 name_parts = in_path.stem.split("_")[:-2]
@@ -188,18 +209,20 @@ class CreateFinalNetCDFs:
                     # .assign_attrs(var_attrs)
                     .assign_coords(
                         {"time": time_index_h.values}
-                        # {"time": pd.date_range(f"{year}-01-01", periods=12, freq="MS")}
+                        # {"time": date_index}
                     )
                     .set_coords(["time", "lon", "lat"])
                     # .reset_coords("spatial_ref", drop=True)
                 )
                 month_data_dict[var_name] = group_ds
-            year_ds = xr.merge(month_data_dict.values())
+            year_ds = xr.merge(
+                month_data_dict.values(), compat="override", combine_attrs="override"
+            )
             year_ds.attrs = self.scale_attrs.copy()
             year_ds.attrs["year"] = year  # update attributes to the current year
             # adjusting the global attributes
             year_ds.coords["time"].attrs["long_name"] = "time"
-            year_ds.coords["time"].attrs["units"] = f"hours since {year}-01-01 00:00:00"
+            year_ds.coords["time"].attrs["units"] = f"days since {year}-01-01 00:00:00"
             year_ds.coords["time"].attrs["calendar"] = "standard"
             year_ds.coords["time"].attrs["axis"] = "T"
             year_ds.coords["lat"].attrs["long_name"] = "Latitude"
@@ -222,7 +245,7 @@ class CreateFinalNetCDFs:
                 year_ds[var].attrs["standard_name"] = "monthly scale factor"
                 year_ds[var].attrs["long_name"] = long_name
                 year_ds[var].attrs["units"] = "1"
-            year_ds.to_netcdf(out_path, mode="w", format="NETCDF4")
+            year_ds.rio.write_crs(4326).to_netcdf(out_path, mode="w", format="NETCDF4")
             self.gch4i_month_scale_dict[year] = year_ds
 
     def write_outputs(self):
@@ -235,32 +258,4 @@ class CreateFinalNetCDFs:
         pass
 
 
-# %%
-file_writer = CreateFinalNetCDFs()
-file_writer.write_outputs()
-# file_writer.plot_data()
-# %%
-# For reference, we can look at the attributes (and other features) of the v2 data
-from gch4i.config import V3_DATA_PATH
-
-v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
-v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
-v3_flux_file = final_gridded_dir / "Gridded_GHGI_Methane_v3_2012_AugTest.nc"
-v3_scale_file = final_gridded_dir / f"Gridded_GHGI_Methane_v3_2018_draft.nc"
-# %%
-v2_scale_ds = xr.open_dataset(v2_scale_file)
-v2_scale_ds.close()
-v2_scale_ds
-# %%
-v2_flux_ds = xr.open_dataset(v2_flux_file)
-v2_flux_ds.close()
-v2_flux_ds
-# %%
-v3_flux_ds = xr.open_dataset(v3_flux_file)
-v3_flux_ds.close()
-v3_flux_ds
-# %%
-v3_scale_ds = xr.open_dataset(v3_scale_file)
-v3_scale_ds.close()
-v3_scale_ds
 # %%
