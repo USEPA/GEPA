@@ -30,6 +30,9 @@ from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
 from tqdm.auto import tqdm
+from datetime import datetime
+
+from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -43,7 +46,8 @@ from gch4i.config import (
     years,
 )
 
-Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
+# NOTE use scipy import
+# Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (

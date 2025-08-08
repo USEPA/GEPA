@@ -37,8 +37,8 @@ Notes:                  - Currently this should handle all the "standard" emi-pr
 
 # %% STEP 0. Load packages, configuration files, and local parameters ------------------
 # for testing/development
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 
 import logging
@@ -74,13 +74,13 @@ logging.basicConfig(
 )
 # %%
 g_info = GriddingInfo(update_mapping=True, save_file=True)
-g_info.display_pair_status()
+g_info.display_all_pair_statuses()
 # %%
 # if SKIP is set to True, the code will skip over any rows that have already been
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = False
+SKIP = True
 SKIP_THESE = [
     "complete",
     # "monthly failed, annual complete",
@@ -98,20 +98,23 @@ SKIP_THESE = [
 ]
 
 # %%
-gch4i_name = "3C_rice_cultivation"
-gridding_rows = g_info.pairs_ready_for_gridding_df.query(
-    f"gch4i_name == '{gch4i_name}'"
-)
-gridding_rows
+# gch4i_name = "3C_rice_cultivation"
+# gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+#     f"gch4i_name == '{gch4i_name}'"
+# )
+# gridding_rows
 # %%
 # example for running all emi/proxy pairs
 for row in tqdm(
-    gridding_rows.itertuples(index=False),
-    total=len(gridding_rows),
+    g_info.pairs_ready_for_gridding_df.itertuples(index=False),
+    total=len(g_info.pairs_ready_for_gridding_df),
 ):
+    if SKIP and row.status in SKIP_THESE:
+        print(f"Skipping {row.gch4i_name} {row.emi_id} {row.proxy_id} ({row.status})")
+        continue
     out_qc_dir = logging_dir / row.gch4i_name
     try:
-        epg = EmiProxyGridder(row, out_qc_dir)
+        epg = EmiProxyGridder(row)
         epg.run_gridding()
         print(epg.base_name, epg.status)
     except Exception as e:
@@ -135,9 +138,9 @@ for row in tqdm(
 #     "rice_area_proxy",
 # )
 gch4i_name, emi_id, proxy_id = (
-    "3F4_fbar",
-    "chickpeas_emi",
-    "fbar_other_proxy",
+    "4A1_4A2_Forest_land_remaining_forest_land",
+    "forest_land_emi",
+    "forest_land_proxy",
 )
 row = g_info.pairs_ready_for_gridding_df.query(
     f"gch4i_name == '{gch4i_name}' & emi_id == '{emi_id}' & proxy_id == '{proxy_id}'"
