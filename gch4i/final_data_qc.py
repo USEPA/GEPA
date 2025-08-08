@@ -1,3 +1,4 @@
+# %%
 import pandas as pd
 import xarray as xr
 from pathlib import Path
@@ -5,23 +6,64 @@ import calendar
 import rioxarray
 import numpy as np
 import warnings
-
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 from gch4i.config import (
     V3_DATA_PATH,
     final_gridded_dir,
     years,
+    logging_dir,
 )
 
 from gch4i.utils import (
     Avogadro,
     GEPA_spatial_profile,
     Molarch4,
-    get_cell_gdf,
-    load_area_matrix,
-    normalize,
 )
 
+from gch4i.gridding_utils import GriddingInfo
+
+# %%
+g_info = GriddingInfo(update_mapping=True, save_file=True)
+group_names = list(g_info.v2_df['gch4i_name'])
+gepa_profile = GEPA_spatial_profile()
+
+# The EPA color map from their V2 plots
+emi_custom_colormap = colors.LinearSegmentedColormap.from_list(
+    name="emi_cmap",
+    colors=[
+        "#6F4C9B",
+        "#6059A9",
+        "#5568B8",
+        "#4E79C5",
+        "#4D8AC6",
+        "#4E96BC",
+        "#549EB3",
+        "#59A5A9",
+        "#60AB9E",
+        "#69B190",
+        "#77B77D",
+        "#8CBC68",
+        "#A6BE54",
+        "#BEBC48",
+        "#D1B541",
+        "#DDAA3C",
+        "#E49C39",
+        "#E78C35",
+        "#E67932",
+        "#E4632D",
+        "#DF4828",
+        "#DA2222",
+        "#B8221E",
+        "#95211B",
+        "#721E17",
+        "#521A13",
+    ],
+    N=3000,
+)
 
 # Days in year
 def get_days_in_year(year):
@@ -36,26 +78,128 @@ def calc_conversion_factor(year_days: int, area_matrix):
         10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
     )
 
+for igroup in group_names:
+    # Calculate the total national emissions by source and year
+    target_mass_sum_list_path: Path = logging_dir/f"{igroup}/{igroup}_ch4_v3_emi_qc.csv"
+    target_mass_sum_list = pd.read_csv(target_mass_sum_list_path)['ghgi_ch4_kt']
+    mass_sum_list = []
+    flux_arr_list = []
+    flux_data_dict = {}
+    for iyear in years:
+        iyear_days = get_days_in_year(iyear)  # number of days in the year
+        final_data_path: Path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}_AugTest.nc"  # path to final gridded data
+        ds = xr.open_dataset(final_data_path)  # final gridded netcdf file
+        area_matrix = ds['grid_cell_area']  # final area matrix within netcdf file
+        flux_data = ds[f'emi_ch4_{igroup}']
+        mass_data = flux_data / calc_conversion_factor(iyear_days, area_matrix)
+        mass_sum = np.nansum(mass_data)
+        mass_sum_list.append(mass_sum)
+        flux_data_dict[iyear] = flux_data.sel(time=0.0)
+    mass_sum_df = pd.DataFrame(
+        {
+            "year": years,
+            "final_sum": mass_sum_list,
+            "target_sum": target_mass_sum_list,
+            }).assign(isclose_pass=lambda df: np.isclose(
+                df["final_sum"], df["target_sum"], atol=0.0, rtol=0.0001
+            ))
+    mass_sum_df.to_csv(logging_dir/f"{igroup}/{igroup}_ch4_v3_mass_sum_final_gridded_data_qc.csv", index=False)
 
-# # Calculate the total national emissions by source and year
-# for iyear in years:
-#     iyear_days = get_days_in_year(iyear)  # number of days in the year
-#     final_data_path: Path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}_AugTest.nc"  # path to final gridded data
-#     ds = xr.open_dataset(final_data_path)  # final gridded netcdf file
-#     area_matrix = ds['grid_cell_area']  # final area matrix within netcdf file
-#     gridding_group_list = [item for item in list(xr.open_dataset(final_data_path).variables.keys()) if item.startswith('emi')]  # list of emi variables in netcdf file
-#     group_flux_data = ds[gridding_group_list]  # flux data for all gridding groups
-#     group_mass_sums = (group_flux_data / calc_conversion_factor(iyear_days, area_matrix)).sum()
+    # Plot final flux data
+    v3_arr = np.array(list(flux_data_dict.values()))
+    final_flux_data_arr = xr.DataArray(
+        v3_arr,
+        dims=["time", "y", "x"],
+        coords={
+            "time": years,
+            "y": gepa_profile.y,
+            "x": gepa_profile.x,
+        },
+        name=igroup,
+    )
+    # apply the conversion factor to the annual flux data for plotting
+    def convert_flux_for_plotting(flux_da: xr.DataArray) -> xr.DataArray:
+        """
+        Convert the flux data from molec/cm2/s to Mg/km2/year for plotting.
+        This is a helper function to be used in the plotting methods.
 
+        This required the input data array to have a time dimension repping years.
+        """
 
+        res_list = []
+        for i, time in enumerate(flux_da.time.values):
+            year = pd.to_datetime(time).year
+            year_days = get_days_in_year(year)
+            res = (
+                flux_da.sel(time=time)
+                / float(10**6 * Avogadro)
+                * (year_days * 24 * 60 * 60)
+                * Molarch4
+                * float(1e10)
+            )
+            res_list.append(res)
+
+        out_ds = xr.concat(res_list, dim="time")
+
+        return out_ds
+
+    # ADD PLOTTING CONVERSION FACTOR
+
+    final_flux_data_arr = convert_flux_for_plotting(final_flux_data_arr)
+
+    plotting_data = final_flux_data_arr.where(lambda x: x != 0)
+    # print(plotting_data.groupby("time").max(dim=...).values)
+    plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
+    # print(plotting_data.groupby("time").max(dim=...).values)
+    fg = plotting_data.plot.imshow(
+        col="time",
+        col_wrap=3,
+        cmap=emi_custom_colormap,
+        transform=ccrs.PlateCarree(),  # remember to provide this!
+        subplot_kws={"projection": ccrs.PlateCarree()},
+        # interpolation=None,
+        vmin=10**-15,
+        vmax=10,
+        cbar_kwargs={
+            "orientation": "horizontal",
+            "shrink": 0.8,
+            "aspect": 40,
+            "extend": "neither",
+            "label": "methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+        },
+        robust=True,
+        figsize=(20, 20),
+    )
+
+    for ax in fg.axs.ravel():
+        ax.add_feature(cfeature.LAND)
+        ax.add_feature(cfeature.OCEAN)
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.STATES)
+        ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+
+    fg.fig.suptitle(
+        f"{igroup}\nGridded methane flux emissions", fontsize=14
+    )
+
+    # Save the plots as PNG files to the figures directory
+    plt.savefig(logging_dir / f"{igroup}/{igroup}_ch4_v3_annual_flux_final_gridded_data_qc.png")
+    # Show the plot for review
+    plt.show()
+    # close the plot
+    plt.close()
+
+# %%
+
+# HL started writing a class but felt like it was repeating a lot of existing code.
+# The above code works to get the QC results but needs to be added to create_final_netcdfs.py
 class QCFinalNetCDFs:
-    def __init__(self, group_name, final_gridded_dir):
+    def __init__(self, group_name):
         # the path to the directory where the final gridded data is saved
         self.group_name = group_name
-        self.final_gridded_dir = final_gridded_dir
-        self.flux_data_files = list(self.final_gridded_dir.glob("*AugTest.nc"))
+        self.flux_data_files = list(final_gridded_dir.glob("*AugTest.nc"))
         self.gepa_profile = GEPA_spatial_profile()
-
+        self.qc_dir = logging_dir
 
     def qc_national_mass_sums(self):
         v3_data_dict = {}
@@ -86,15 +230,15 @@ class QCFinalNetCDFs:
             name=final_group_name,
         )
 
-        def calculate_mass(self, in_ds):
+        def calculate_mass(in_ds):
             """calculates mass for dictionary of total flux year/array pairs"""
             times = in_ds.time.values
 
             def get_days_in_year(year):
                 year = int(year)
                 return 366 if calendar.isleap(year) else 365
-            
-            def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
+
+            def calc_conversion_factor(year_days: int, area_matrix: np.array) -> np.array:
                 """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
                 return (
                     10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
@@ -102,7 +246,7 @@ class QCFinalNetCDFs:
 
             days_in_year = [get_days_in_year(x) for x in times]
             conv_factors = [
-                calc_conversion_factor(x, self.area_matrix) for x in days_in_year
+                calc_conversion_factor(x, self.v3_area_matrix) for x in days_in_year
             ]
 
             conv_ds = xr.DataArray(
@@ -117,17 +261,79 @@ class QCFinalNetCDFs:
 
         self.v3_mass_da = calculate_mass(self.v3_flux_da)
         v3_mass_yearly_sums = np.nansum(self.v3_mass_da.values, axis=(1, 2))
-        
-        mass_sums_df = pd.DataFrame(
+
+        self.mass_sums_df = pd.DataFrame(
                 {
                     "year": list(v3_data_dict.keys()),
                     "v3_sum": v3_mass_yearly_sums,
                 }
             ).assign(metric="mass")
-        return mass_sums_df
+
+        # Save mass_sums_df to the qc folder for the group
+        self.mass_sums_df.to_csv(
+            self.qc_dir / f"{self.group_name}/{self.group_name}_ch4_v3_mass_sum_final_gridded_data_qc.csv", index=False
+        )
+        return self.mass_sums_df
+
+    def qc_plot_flux_maps(self) -> None:
+        """
+        Function to plot the raster data for each year in the dictionary of rasters that are
+        output at the end of each sector script.
+        """
+
+        # we set 0 and negative values as NA
+
+        # apply the conversion factor to the annual flux data for plotting
+        plotting_data = self.v3_flux_da.where(lambda x: x != 0)
+        # print(plotting_data.groupby("time").max(dim=...).values)
+        plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
+        # print(plotting_data.groupby("time").max(dim=...).values)
+        fg = plotting_data.plot.imshow(
+            col="time",
+            col_wrap=3,
+            cmap=self.emi_custom_colormap,
+            transform=ccrs.PlateCarree(),  # remember to provide this!
+            subplot_kws={"projection": ccrs.PlateCarree()},
+            # interpolation=None,
+            vmin=10**-15,
+            vmax=10,
+            cbar_kwargs={
+                "orientation": "horizontal",
+                "shrink": 0.8,
+                "aspect": 40,
+                "extend": "neither",
+                "label": "methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            },
+            robust=True,
+            figsize=(20, 20),
+        )
+
+        for ax in fg.axs.ravel():
+            ax.add_feature(cfeature.LAND)
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
+            ax.add_feature(cfeature.STATES)
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+
+        fg.fig.suptitle(
+            f"{self.group_name}\nGridded methane flux emissions", fontsize=14
+        )
+
+        # Save the plots as PNG files to the figures directory
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_annual_flux_final_gridded_data_qc.png")
+        # Show the plot for review
+        plt.show()
+        # close the plot
+        plt.close()
+
 
 
 # %%
-file_checker = QCFinalNetCDFs()
-file_checker.create_qc_outputs()
-file_writer.plot_data()
+# # get the object needed to manage the gridding operations
+# g_info = GriddingInfo(update_mapping=True, save_file=True)
+# group_names = list(g_info.v2_df['gch4i_name'])
+
+# for igroup in group_names:
+#     file_checker = QCFinalNetCDFs(igroup)
+#     file_checker.qc_national_mass_sums()
+#     # file_checker.qc_plot_flux_maps()
