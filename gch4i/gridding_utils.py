@@ -1810,7 +1810,7 @@ class GroupGridder(BaseGridder):
         N=3000,
     )
 
-    def __init__(self, group_name, in_data, dst_dir):
+    def __init__(self, group_name, in_data, dst_dir, plot=False):
         BaseGridder.__init__(self)
         self.group_name = group_name
         self.data_df = in_data
@@ -2320,8 +2320,8 @@ class GroupGridder(BaseGridder):
             ]
 
             conv_ds = xr.DataArray(
-                conv_factors,
-                # np.flip(conv_factors, 1),
+                # conv_factors,
+                np.flip(conv_factors, 1),
                 dims=["time", "y", "x"],
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
@@ -2335,12 +2335,14 @@ class GroupGridder(BaseGridder):
             ]
 
             conv_ds = xr.DataArray(
-                conv_factors,
-                # np.flip(conv_factors, 1),
+                # conv_factors,
+                np.flip(conv_factors, 1),
                 dims=["time", "y", "x"],
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
+        conv_ds.isel(time=0).plot()
+        plt.show()
         if direction == "mass2flux":
             flux_out_da = in_ds * conv_ds
         elif direction == "flux2mass":

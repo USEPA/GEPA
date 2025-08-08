@@ -160,11 +160,17 @@ class CreateFinalNetCDFs:
                     year_ds[var].attrs["standard_name"] = "annual_emissions"
                     year_ds[var].attrs["long_name"] = long_name
                     year_ds[var].attrs["units"] = "molec cm-2 s-1"
+                    year_ds[var].rio.set_nodata(0)
             # save the dataset to a netCDF file
             year_ds["time"] = [0.0]
-            year_ds.rio.write_crs(4326).to_netcdf(out_path, mode="w", format="NETCDF4")
+            self.file_writer(year_ds, out_path)
             self.gch4i_flux_dict[year] = year_ds
             print(f"Saved {out_path.name}")
+
+    def file_writer(self, in_ds, out_path):
+        in_ds.rio.write_crs(4326).to_netcdf(
+            out_path, mode="w", format="NETCDF4"
+        )
 
     def _calc_time_index(self, year):
         time_index = pd.date_range(
@@ -245,7 +251,8 @@ class CreateFinalNetCDFs:
                 year_ds[var].attrs["standard_name"] = "monthly scale factor"
                 year_ds[var].attrs["long_name"] = long_name
                 year_ds[var].attrs["units"] = "1"
-            year_ds.rio.write_crs(4326).to_netcdf(out_path, mode="w", format="NETCDF4")
+                year_ds[var].rio.set_nodata(0)
+            self.file_writer(year_ds, out_path)
             self.gch4i_month_scale_dict[year] = year_ds
 
     def write_outputs(self):
