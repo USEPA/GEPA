@@ -36,11 +36,8 @@ from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,
-    # RoadProxyGlobals,
-    figures_data_dir_path,
     global_data_dir_path,
     load_road_globals,
-    load_state_ansi,
     max_year,
     min_year,
     years,
@@ -453,7 +450,7 @@ def stack_rasters(input_paths: list[Path], output_path: Path):
     profile = GEPA_spatial_profile().profile
     raster_list = []
     years = []
-    year_pattern = re.compile(r'(\d{4})')
+    year_pattern = re.compile(r"(\d{4})")
     for in_file in input_paths:
         if not in_file.exists():
             continue

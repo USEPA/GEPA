@@ -18,8 +18,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from gch4i.config import final_gridded_dir, global_data_dir_path, prelim_gridded_dir
-from gch4i.config import years as YEARS
+from gch4i.config import (
+    final_gridded_dir,
+    global_data_dir_path,
+    prelim_gridded_dir,
+    years as YEARS,
+)
 from gch4i.utils import load_area_matrix, GEPA_spatial_profile
 from tqdm.auto import tqdm
 
@@ -87,7 +91,7 @@ class CreateFinalNetCDFs:
             enumerate(YEARS), total=len(YEARS), desc="Processing years"
         ):
             # TODO: remove draft when final final.
-            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
+            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}.nc"
 
             year_data_dict = {}
             for in_path in self.flux_data_files:
@@ -100,20 +104,21 @@ class CreateFinalNetCDFs:
                     xr.open_dataset(in_path)
                     .sel(band=i + 1)
                     .rename(
-                        {"band_data": var_name, "band": "time", "x": "lon", "y": "lat"}
+                        {"band_data": var_name, "x": "lon", "y": "lat", "band": "time"}
                     )
                     .expand_dims({"time": 1})
                     .assign_coords(
                         {
-                            "time": [0.0],
                             "lon": self.gepa_profile.x,
                             "lat": np.flip(self.gepa_profile.y),
+                            "time": [0.0],
                         }
                     )
-                    .set_coords(["time", "lon", "lat"])
+                    .set_coords(["lon", "lat", "time"])
                     .reset_coords("spatial_ref", drop=True)
+                    # .transpose("lon", "lat", "time")
                 )
-                group_ds.isel(time=0)[var_name].plot.imshow()
+                # group_ds.isel(time=0)[var_name].plot.imshow()
 
                 year_data_dict[var_name] = group_ds
             year_ds = xr.merge(
@@ -168,8 +173,14 @@ class CreateFinalNetCDFs:
             print(f"Saved {out_path.name}")
 
     def file_writer(self, in_ds, out_path):
+        var_encoding_dict = {
+            var: dict({"zlib": True, "complevel": 4}) for var in in_ds.variables
+        }
         in_ds.rio.write_crs(4326).to_netcdf(
-            out_path, mode="w", format="NETCDF4"
+            out_path,
+            mode="w",
+            format="netcdf4",
+            encoding=var_encoding_dict,
         )
 
     def _calc_time_index(self, year):
@@ -197,7 +208,7 @@ class CreateFinalNetCDFs:
             month_data_dict = {}
             out_path = (
                 final_gridded_dir
-                / f"Gridded_GHGI_Methane_v3_Monthly_Scale_Factors_{year}_draft.nc"
+                / f"Gridded_GHGI_Methane_v3_Monthly_Scale_Factors_{year}.nc"
             )
             for in_path in self.monthly_scale_files:
                 # Get the file name and extract the source category and long name
@@ -209,21 +220,20 @@ class CreateFinalNetCDFs:
                     xr.open_dataset(in_path)
                     .isel(band=slice(i_month, i_month + 12))
                     .rename(
-                        {"band_data": var_name, "band": "time", "x": "lon", "y": "lat"}
+                        {"band_data": var_name, "x": "lon", "y": "lat", "band": "time"}
                     )
                     .drop_vars(["spatial_ref"])
-                    # .assign_attrs(var_attrs)
                     .assign_coords(
                         {"time": time_index_h.values}
                         # {"time": date_index}
                     )
-                    .set_coords(["time", "lon", "lat"])
-                    # .reset_coords("spatial_ref", drop=True)
+                    .set_coords(["lat", "lon", "time"])
+                    # .transpose("lon", "lat", "time")
                 )
                 month_data_dict[var_name] = group_ds
             year_ds = xr.merge(
                 month_data_dict.values(), compat="override", combine_attrs="override"
-            )
+            )  # .transpose("lon", "lat", "time")
             year_ds.attrs = self.scale_attrs.copy()
             year_ds.attrs["year"] = year  # update attributes to the current year
             # adjusting the global attributes

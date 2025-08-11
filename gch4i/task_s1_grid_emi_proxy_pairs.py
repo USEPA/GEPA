@@ -80,7 +80,7 @@ g_info.display_all_pair_statuses()
 # looked at based on the list of status values in the SKIP_THESE list.
 # if SKIP is set to False, it will still check if the monthly or annual files exist and
 # skip it. Otherwise it will try to run it again.
-SKIP = True
+SKIP = False
 SKIP_THESE = [
     "complete",
     # "monthly failed, annual complete",
@@ -98,16 +98,18 @@ SKIP_THESE = [
 ]
 
 # %%
-# gch4i_name = "3C_rice_cultivation"
-# gridding_rows = g_info.pairs_ready_for_gridding_df.query(
-#     f"gch4i_name == '{gch4i_name}'"
-# )
-# gridding_rows
+gch4i_name = "1B2bi_ng_exploration"
+gridding_rows = g_info.pairs_ready_for_gridding_df.query(
+    f"gch4i_name == '{gch4i_name}'"
+)
+gridding_rows
 # %%
 # example for running all emi/proxy pairs
 for row in tqdm(
-    g_info.pairs_ready_for_gridding_df.itertuples(index=False),
-    total=len(g_info.pairs_ready_for_gridding_df),
+    gridding_rows.itertuples(index=False),
+    total=len(gridding_rows),
+    # g_info.pairs_ready_for_gridding_df.itertuples(index=False),
+    # total=len(g_info.pairs_ready_for_gridding_df),
 ):
     if SKIP and row.status in SKIP_THESE:
         print(f"Skipping {row.gch4i_name} {row.emi_id} {row.proxy_id} ({row.status})")
@@ -138,7 +140,7 @@ for row in tqdm(
 #     "rice_area_proxy",
 # )
 gch4i_name, emi_id, proxy_id = (
-    "4A1_4A2_Forest_land_remaining_forest_land",
+    "1B2bi_ng_exploration",
     "forest_land_emi",
     "forest_land_proxy",
 )
@@ -150,4 +152,6 @@ out_qc_dir = logging_dir / row.gch4i_name
 epg = EmiProxyGridder(row)
 epg.run_gridding()
 epg.status
+# %%
+g_info.pairs_ready_for_gridding_df.query("proxy_id == 'ng_all_well_count_proxy'")
 # %%

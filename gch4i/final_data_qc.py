@@ -30,6 +30,7 @@ file_writer.write_outputs()
 # %%
 g_info = GriddingInfo(update_mapping=True, save_file=True)
 group_names = list(g_info.v2_df["gch4i_name"])
+group_names
 # %%
 # The EPA color map from their V2 plots
 gepa_profile = GEPA_spatial_profile()
@@ -242,6 +243,7 @@ def get_all_flux_data():
             .drop_vars("spatial_ref")
             .assign_coords(time=[iyear])
         )
+        print(ds.dims)
         flux_data_dict[iyear] = ds
         ds.close()
 
@@ -319,14 +321,14 @@ def plot_group_flux_maps(in_ds):
         tmp_ds.where(lambda x: x != 0).plot.imshow(
             col="time",
             col_wrap=4,
+            cmap="magma",
         )
         plt.show()
 
 
 def plot_monthly_scaling(in_ds):
     all_scale_summary_df = (
-        in_ds.where(lambda x: x != 0)
-        .mean(dim=["lat", "lon"])
+        in_ds.mean(dim=["lat", "lon"]).where(lambda x: x != 0)
         .to_dataframe()
         .reset_index()
         .melt(id_vars=["time"], var_name="source", value_name="monthly_flux")
@@ -418,105 +420,113 @@ def plot_original_scale_figs():
     plt.show()
 
 
-# %%
-
-for igroup in group_names:
-    # Calculate the total national emissions by source and year
-    target_mass_sum_list_path: Path = (
-        logging_dir / f"{igroup}/{igroup}_ch4_v3_emi_qc.csv"
-    )
-    target_mass_sum_df = pd.read_csv(target_mass_sum_list_path)["ghgi_ch4_kt"]
-    mass_sum_list = []
-    flux_arr_list = []
-    flux_data_dict = {}
-    for iyear in years:
-        iyear_days = get_days_in_year(iyear)  # number of days in the year
-        # print(iyear, iyear_days)
-        final_data_path: Path = (
-            final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}_AugTest.nc"
-        )  # path to final gridded data
-        ds = xr.open_dataset(final_data_path)  # final gridded netcdf file
-        ds.close()
-        area_matrix = ds["grid_cell_area"].squeeze(
-            dim="time", drop=True
-        )  # final area matrix within netcdf file
-        # area_matrix = area_matrix.sel(lat=area_matrix.lat[::-1])
-        flux_data = ds[f"emi_ch4_{igroup}"]
-        conv_arr = calc_conversion_factor(iyear_days, area_matrix)
-        mass_data = flux_data / conv_arr
-        mass_sum = np.nansum(mass_data)
-        mass_sum_list.append(mass_sum)
-        flux_data_dict[iyear] = flux_data.sel(time=0.0)
-    mass_sum_df = pd.DataFrame(
-        {
-            "year": years,
-            "final_sum": mass_sum_list,
-            "target_sum": target_mass_sum_df,
-        }
-    ).assign(
-        isclose_pass=lambda df: np.isclose(
-            df["final_sum"], df["target_sum"], atol=0.0, rtol=0.0001
+def final_file_QC():
+    for igroup in tqdm(group_names, desc="QC'ing each group"):
+        # if (igroup != "3A_enteric_fermentation") & (igroup != "3B_manure_management"):
+        #     continue
+        # Calculate the total national emissions by source and year
+        target_mass_sum_list_path: Path = (
+            logging_dir / f"{igroup}/{igroup}_ch4_v3_emi_qc.csv"
         )
-    )
+        target_mass_sum_df = pd.read_csv(target_mass_sum_list_path)["ghgi_ch4_kt"]
+        mass_sum_list = []
+        flux_arr_list = []
+        flux_data_dict = {}
+        for iyear in years:
+            iyear_days = get_days_in_year(iyear)  # number of days in the year
+            # print(iyear, iyear_days)
+            final_data_path: Path = (
+                final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}.nc"
+            )  # path to final gridded data
+            ds = xr.open_dataset(final_data_path)  # final gridded netcdf file
+            ds.close()
+            area_matrix = ds["grid_cell_area"].squeeze(
+                dim="time", drop=True
+            )  # final area matrix within netcdf file
+            if (
+                (igroup == "3A_enteric_fermentation")
+                | (igroup == "3B_manure_management")
+            ) and iyear_days == 366:
+                print(f"adjusting leap year days for livestock for year {iyear}")
+                iyear_days = 365
 
-    print(igroup, mass_sum_df["isclose_pass"].all())
-    mass_sum_df.to_csv(
-        logging_dir / f"{igroup}/{igroup}_ch4_v3_mass_sum_final_gridded_data_qc.csv",
-        index=False,
-    )
+            flux_data = ds[f"emi_ch4_{igroup}"]
+            conv_arr = calc_conversion_factor(iyear_days, area_matrix)
+            mass_data = flux_data / conv_arr
+            mass_sum = np.nansum(mass_data)
+            mass_sum_list.append(mass_sum)
+            flux_data_dict[iyear] = flux_data.sel(time=0.0)
+        mass_sum_df = pd.DataFrame(
+            {
+                "year": years,
+                "final_sum": mass_sum_list,
+                "target_sum": target_mass_sum_df,
+            }
+        ).assign(
+            isclose_pass=lambda df: np.isclose(
+                df["final_sum"], df["target_sum"], atol=0.0, rtol=0.0001
+            )
+        )
 
-    v3_arr = xr.concat(flux_data_dict.values(), dim="time").assign_coords(time=years)
+        print(igroup, mass_sum_df["isclose_pass"].all())
+        mass_sum_df.to_csv(
+            logging_dir / f"{igroup}/{igroup}_ch4_v3_mass_sum_final_gridded_data_qc.csv",
+            index=False,
+        )
 
-    # ADD PLOTTING CONVERSION FACTOR
+        v3_arr = xr.concat(flux_data_dict.values(), dim="time").assign_coords(
+            time=years
+        )
 
-    final_flux_data_arr = convert_flux_for_plotting(v3_arr)
+        # ADD PLOTTING CONVERSION FACTOR
 
-    plotting_data = final_flux_data_arr.where(lambda x: x != 0)
-    # print(plotting_data.groupby("time").max(dim=...).values)
-    plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
-    # print(plotting_data.groupby("time").max(dim=...).values)
-    fg = plotting_data.plot.imshow(
-        col="time",
-        col_wrap=3,
-        cmap=emi_custom_colormap,
-        transform=ccrs.PlateCarree(),  # remember to provide this!
-        subplot_kws={"projection": ccrs.PlateCarree()},
-        # interpolation=None,
-        vmin=10**-15,
-        vmax=10,
-        cbar_kwargs={
-            "orientation": "horizontal",
-            "shrink": 0.8,
-            "aspect": 40,
-            "extend": "neither",
-            "label": "methane emissions (Mg a$^{-1}$ km$^{-2}$)",
-        },
-        robust=True,
-        figsize=(20, 20),
-    )
+        final_flux_data_arr = convert_flux_for_plotting(v3_arr)
 
-    for ax in fg.axs.ravel():
-        ax.add_feature(cfeature.LAND)
-        ax.add_feature(cfeature.OCEAN)
-        ax.add_feature(cfeature.COASTLINE)
-        ax.add_feature(cfeature.STATES)
-        ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
+        plotting_data = final_flux_data_arr.where(lambda x: x != 0)
+        # print(plotting_data.groupby("time").max(dim=...).values)
+        plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
+        # print(plotting_data.groupby("time").max(dim=...).values)
+        fg = plotting_data.plot.imshow(
+            col="time",
+            col_wrap=3,
+            cmap=emi_custom_colormap,
+            transform=ccrs.PlateCarree(),  # remember to provide this!
+            subplot_kws={"projection": ccrs.PlateCarree()},
+            # interpolation=None,
+            vmin=10**-15,
+            vmax=10,
+            cbar_kwargs={
+                "orientation": "horizontal",
+                "shrink": 0.8,
+                "aspect": 40,
+                "extend": "neither",
+                "label": "methane emissions (Mg a$^{-1}$ km$^{-2}$)",
+            },
+            robust=True,
+            figsize=(20, 20),
+        )
 
-    fg.fig.suptitle(f"{igroup}\nGridded methane flux emissions", fontsize=14)
+        for ax in fg.axs.ravel():
+            ax.add_feature(cfeature.LAND)
+            ax.add_feature(cfeature.OCEAN)
+            ax.add_feature(cfeature.COASTLINE)
+            ax.add_feature(cfeature.STATES)
+            ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
 
-    # Save the plots as PNG files to the figures directory
-    plt.savefig(
-        logging_dir / f"{igroup}/{igroup}_ch4_v3_annual_flux_final_gridded_data_qc.png"
-    )
-    # Show the plot for review
-    plt.show()
-    # close the plot
-    plt.close()
+        fg.fig.suptitle(f"{igroup}\nGridded methane flux emissions", fontsize=14)
+
+        # Save the plots as PNG files to the figures directory
+        plt.savefig(
+            logging_dir / f"{igroup}/{igroup}_ch4_v3_annual_flux_final_gridded_data_qc.png"
+        )
+        # Show the plot for review
+        # plt.show()
+        # close the plot
+        plt.close()
+
 
 # %%
-
-
-# %%
+final_file_QC()
 # # get the object needed to manage the gridding operations
 # g_info = GriddingInfo(update_mapping=True, save_file=True)
 # group_names = list(g_info.v2_df['gch4i_name'])
@@ -529,41 +539,48 @@ for igroup in group_names:
 # %%
 all_flux_ds = get_all_flux_data()
 all_flux_ds
+list(all_flux_ds.variables.keys())
 # %%
 
 scaling_ds = get_all_scale_data()
 scaling_ds
-
-
+list(scaling_ds.variables.keys())
 # %%
-
-
-plot_monthly_scaling(scaling_ds)
-
-
-# %%
-for year in years:
+for year in tqdm(years, desc="plotting each annual file"):
     in_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
     plot_a_year(in_path)
 
-
+# %%
 plot_group_scale_maps(scaling_ds)
 # %%
 
 plot_group_flux_maps(all_flux_ds)
 # %%
+plot_monthly_scaling(scaling_ds)
 
 
 # %%
 # For reference, we can look at the attributes (and other features) of the v2 data
-# v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
-# v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
+v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
+v2_scale_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_Monthly_Scale_Factors_2012.nc"
 
-# v2_scale_ds = xr.open_dataset(v2_scale_file)
-# v2_scale_ds.close()
-# v2_scale_ds
+v2_scale_ds = xr.open_dataset(v2_scale_file)
+print(v2_scale_ds.dims)
+v2_scale_ds.close()
+v2_scale_ds
 
-# v2_flux_ds = xr.open_dataset(v2_flux_file)
-# v2_flux_ds.close()
-# v2_flux_ds
+v2_flux_ds = xr.open_dataset(v2_flux_file)
+print(v2_flux_ds.dims)
+v2_flux_ds.close()
+v2_flux_ds
+# %%
+in_path
+# %%
+ds = xr.open_dataset(in_path)
+var_encoding_dict = {var: dict({"zlib": True, "complevel": 4}) for var in ds.variables}
+var_encoding_dict
+# %%
+ds.to_netcdf(in_path, mode="w", format="NETCDF4", encoding=var_encoding_dict)
+# %%
+ds["grid_cell_area"].encoding
 # %%

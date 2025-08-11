@@ -2306,12 +2306,12 @@ class GroupGridder(BaseGridder):
         if timestep == "year_month":
             days_in_months = [self.get_days_in_month(x) for x in times]
 
-            # TODO: for livestock only, replace 29 with 28 for February
+            # NOTE: for livestock only, replace 29 with 28 for February. The inventory
+            # did not adjust Feb data for leap years so we do not adjust the leap year
+            # data here.
             if (self.group_name == "3A_enteric_fermentation") | (
                 self.group_name == "3B_manure_management"
             ):
-                # NOTE: the inventory did not adjust Feb data for leap years
-                # so we do not adjust the leap year data here.
                 print("INFO: replacing 29 with 28 for February in livestock emissions")
                 days_in_months = [28 if x == 29 else x for x in days_in_months]
 
@@ -2330,6 +2330,14 @@ class GroupGridder(BaseGridder):
 
         elif timestep == "year":
             days_in_year = [self.get_days_in_year(x) for x in times]
+
+            # for livestock only, replace 366 with 365 for leap years
+            if (self.group_name == "3A_enteric_fermentation") | (
+                self.group_name == "3B_manure_management"
+            ):
+                print("INFO: replacing 366 with 365 in livestock emissions")
+                days_in_year = [365 if x == 366 else x for x in days_in_year]
+
             conv_factors = [
                 self.calc_conversion_factor(x, self.area_ds) for x in days_in_year
             ]
