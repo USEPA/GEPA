@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Annotated
 
 import geopandas as gpd
+import numpy as np
+import pytask
 import rasterio
-from pytask import Product, mark, task
+from pytask import Product
 
 from gch4i.config import (
     EQ_AREA_CRS,
@@ -28,6 +30,7 @@ from gch4i.utils import (
     get_cell_gdf,
     proxy_from_stack,
     stack_rasters,
+    normalize,
 )
 
 # %%
@@ -35,20 +38,28 @@ from gch4i.utils import (
 fl_data_path = sector_data_dir_path / "flooded_lands"
 intermediate_dir = fl_data_path / "intermediate"
 intermediate_dir.mkdir(exist_ok=True, parents=True)
-# list(fl_data_path.rglob("*"))
-
 fl_gpkg_path = fl_data_path / "flooded_lands_.gpkg"
 
+
+# NOTE: I organize the proxy creation for these tasks to reduce the runtime. The wetland
+# data are huge, so I/O is the biggest bottleneck. By organizing the tasks this way, we
+# can avoid reading the same data multiple times.
+
 query_dict = dict(
-    fl_rem_res="lu == 'Flooded Land Remaining Flooded Land' & type == 'reservoir'",
-    fl_rem_other="lu == 'Flooded Land Remaining Flooded Land' & type == 'other constructed waterbodies'",  # noqa
+    fl_rem_res=("lu == 'Flooded Land Remaining Flooded Land' & type == 'reservoir'"),
+    fl_rem_other=(
+        "lu == 'Flooded Land Remaining Flooded Land' "
+        "& type == 'other constructed waterbodies'"
+    ),  # noqa
     fl_conv_res="lu == 'Land Converted to Flooded Land' & type == 'reservoir'",
+    fl_conv_other=(
+        "lu == 'Land Converted to Flooded Land' "
+        "& type == 'other constructed waterbodies'"
+    ),
 )
 
 # %%
 EMTPY_GRID_GDF = get_cell_gdf().to_crs(EQ_AREA_CRS)
-EMTPY_GRID_GDF
-
 
 # %%
 
@@ -63,90 +74,19 @@ def get_data_params(years, q_dict):
         if the_year > 2020:
             continue
 
-        arg_dict[the_year] = dict()
-        arg_dict[the_year]["the_year"] = the_year
-        arg_dict[the_year]["input_path"] = fl_gpkg_path
-        arg_dict[the_year]["query_dict"] = q_dict
+        arg_dict[str(the_year)] = dict()
+        arg_dict[str(the_year)]["the_year"] = the_year
+        arg_dict[str(the_year)]["input_path"] = fl_gpkg_path
+        arg_dict[str(the_year)]["query_dict"] = q_dict
 
         output_paths = {
             x: intermediate_dir / f"{x}_{the_year}.tif" for x in q_dict.keys()
         }
 
-        arg_dict[the_year]["output_path_dict"] = output_paths
+        arg_dict[str(the_year)]["output_path_dict"] = output_paths
     return arg_dict
 
 
-_ID_TO_KWARGS_FL_DATA = get_data_params(years, query_dict)
-
-for _id, kwargs in _ID_TO_KWARGS_FL_DATA.items():
-
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_process_fl_data(
-        the_year: int,
-        input_path: Path,
-        query_dict: dict,
-        output_path_dict: Annotated[dict[str, Path], Product],
-    ) -> None:
-
-        profile = GEPA_spatial_profile()
-        profile.profile.update(count=1)
-
-        year_gdf = gpd.read_file(input_path, layer=str(the_year))
-
-        # for each of the flooded land types we need
-        for key, query in query_dict.items():
-
-            # create the output path
-            out_path = output_path_dict[key]
-            # pytask will run this even if the data exist for just one product, so we're
-            # going to skip if the file exists here to avoid unnecessary processing.
-            if out_path.exists():
-                continue
-            # filter the data from that year with with query, calculate the area of the
-            # flooded land polygons
-            print(f"filtering for {key} in {the_year}")
-            data_gdf = (
-                year_gdf.query(query)
-                .to_crs(EQ_AREA_CRS)
-                .assign(fl_area=lambda df: df.area)
-            )
-            print(the_year, key, data_gdf.shape[0])
-            # data_gdf.to_parquet(out_path)
-
-            # the bulk of the work: overlay the data with the grid cells, calculated the
-            # fractional area of that cell that is flooded, and multiply that by the
-            # total ch4 emissions for that cell to get the fraction of emission. This
-            # accounts for polygons that span multiple cells so that the emissions are
-            # allocated via the fractional area. Then groupby the cell id and sum the
-            # emissions.
-            print(f"calculating grid cell emissions for {key} in {the_year}")
-            ch4_sum = (
-                data_gdf.overlay(
-                    EMTPY_GRID_GDF.reset_index(drop=False), how="intersection"
-                )
-                .assign(
-                    fractional_area=lambda df: df.area / df["fl_area"],
-                    frac_emi=lambda df: df["fractional_area"]
-                    * df["ch4.total.tonnes.y"],
-                )
-                .groupby("index")["frac_emi"]
-                .sum()
-                .rename("ch4_sum")
-            )
-            # join this data back to the empty grid, reshape the data to the original
-            # grid.
-            res_gdf = EMTPY_GRID_GDF.join(ch4_sum)
-
-            print(f"saving data for {key} in {the_year}")
-            out_arr = res_gdf.ch4_sum.values.reshape(profile.arr_shape)
-            # save the file
-            with rasterio.open(out_path, "w", **profile.profile) as dst:
-                dst.write(out_arr, 1)
-            print()
-
-
-# %%
 def get_stack_params(years, q_dict):
     arg_dict = {}
     for key in q_dict.keys():
@@ -154,8 +94,16 @@ def get_stack_params(years, q_dict):
         input_paths = []
         for the_year in years:
             # if the the year is 2021 or 2022, use 2020 data
-            if the_year > 2020:
-                input_paths.append(intermediate_dir / f"{key}_2020.tif")
+                
+            if the_year >= 2020:
+                # NOTE: for flooded land coverted other, the 2020 data are missing a
+                # state (ME), so instead of replicating 2020 into 2021 and 2022, we use
+                # the 2019 data, which is the last year that has data for all states.
+                # we otherwise replicate 2020 into 2021 and 2022 for the other proxies.
+                if key == "fl_conv_other":
+                    input_paths.append(intermediate_dir / f"{key}_2019.tif")
+                else:
+                    input_paths.append(intermediate_dir / f"{key}_2020.tif")
             else:
                 input_paths.append(intermediate_dir / f"{key}_{the_year}.tif")
         arg_dict[f"{key}_stack"] = {
@@ -163,19 +111,6 @@ def get_stack_params(years, q_dict):
             "output_path": output_path,
         }
     return arg_dict
-
-
-_ID_TO_KWARGS_STACK = get_stack_params(years, query_dict)
-
-for _id, kwargs in _ID_TO_KWARGS_STACK.items():
-
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_stack_fl_data(input_paths: Path, output_path: Annotated[Path, Product]):
-        stack_rasters(input_paths, output_path)
-
-
-# %%
 
 
 def get_proxy_params(q_dict):
@@ -189,18 +124,117 @@ def get_proxy_params(q_dict):
     return arg_dict
 
 
+def task_process_fl_data(
+    the_year: int,
+    input_path: Path,
+    query_dict: dict,
+    output_path_dict: Annotated[dict[str, Path], Product],
+) -> None:
+
+    profile = GEPA_spatial_profile()
+    profile.profile.update(count=1)
+
+    year_gdf = gpd.read_file(input_path, layer=str(the_year))
+
+    # for each of the flooded land types we need
+    for key, query in query_dict.items():
+
+        # create the output path
+        out_path = output_path_dict[key]
+        # pytask will run this even if the data exist for just one product, so we're
+        # going to skip if the file exists here to avoid unnecessary processing.
+        if out_path.exists():
+            continue
+        # filter the data from that year with with query, calculate the area of the
+        # flooded land polygons
+        print(f"filtering for {key} in {the_year}")
+        data_gdf = (
+            year_gdf.query(query).to_crs(EQ_AREA_CRS).assign(fl_area=lambda df: df.area)
+        )
+        print(the_year, key, data_gdf.shape[0])
+        # data_gdf.to_parquet(out_path)
+
+        # the bulk of the work: overlay the data with the grid cells, calculated the
+        # fractional area of that cell that is flooded, and multiply that by the
+        # total ch4 emissions for that cell to get the fraction of emission. This
+        # accounts for polygons that span multiple cells so that the emissions are
+        # allocated via the fractional area. Then groupby the cell id and sum the
+        # emissions.
+        ch4_sum = (
+            data_gdf.overlay(EMTPY_GRID_GDF.reset_index(drop=False), how="intersection")
+            .loc[:, ["index", "fl_area", "ch4.total.tonnes.y", "geometry"]]
+            .assign(
+                fractional_area=lambda df: df.area / df["fl_area"],
+                flooded_emi=lambda df: df["fractional_area"] * df["ch4.total.tonnes.y"],
+                flooded_area=lambda df: df["fractional_area"] * df["fl_area"],
+            )
+            .drop(columns=["ch4.total.tonnes.y", "fractional_area", "fl_area"])
+            .dissolve("index", aggfunc="sum")
+        )
+        ch4_sum_gdf = (
+            EMTPY_GRID_GDF.join(ch4_sum.drop(columns="geometry"))
+            # .assign(centroid=lambda df: df.geometry.centroid)
+            # .set_geometry("centroid")
+            # .sjoin(state_gdf[["state_code", "geometry"]], how="left")
+            # .set_geometry("geometry")
+            # .drop(columns=["centroid", "index_right"])
+        )
+
+        grid_sum_check = np.isclose(
+            ch4_sum_gdf["flooded_emi"].sum(),
+            data_gdf["ch4.total.tonnes.y"].sum(),
+            atol=0,
+            rtol=0.01,
+        )
+        if not grid_sum_check:
+            raise ValueError(
+                f"Grid sum check failed for {key} in {the_year}. "
+                f"Grid sum: {ch4_sum_gdf['flooded_emi'].sum()}, "
+                f"Data sum: {data_gdf['ch4.total.tonnes.y'].sum()}"
+            )
+
+        print(f"saving data for {key} in {the_year}")
+        out_arr = ch4_sum_gdf.flooded_emi.values.reshape(profile.arr_shape)
+        # save the file
+        with rasterio.open(out_path, "w", **profile.profile) as dst:
+            dst.write(out_arr, 1)
+        print()
+
+
+def task_stack_fl_data(input_paths: list[Path], output_path: Annotated[Path, Product]):
+    stack_rasters(
+        input_paths=input_paths,
+        output_path=output_path,
+    )
+
+
+def task_fl_proxy(
+    input_path: Path,
+    state_geo_path: Path,
+    output_path: Annotated[Path, Product],
+) -> None:
+    proxy_from_stack(input_path, state_geo_path, output_path)
+
+
+# %%
+
+_ID_TO_KWARGS_FL_DATA = get_data_params(years, query_dict)
+
+_ID_TO_KWARGS_STACK = get_stack_params(years, query_dict)
+
 _ID_PROXY_PARAMS = get_proxy_params(query_dict)
 
-for _id, kwargs in _ID_PROXY_PARAMS.items():
 
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_fl_proxy(
-        input_path: Path,
-        state_geo_path: Path,
-        output_path: Annotated[Path, Product],
-    ) -> None:
-        proxy_from_stack(input_path, state_geo_path, output_path)
+# %%
+
+
+pytask_sesh = pytask.build(
+    tasks=[
+        task_process_fl_data(**kwargs) for _id, kwargs in _ID_TO_KWARGS_FL_DATA.items()
+    ]
+    + [task_stack_fl_data(**kwargs) for _id, kwargs in _ID_TO_KWARGS_STACK.items()]
+    + [task_fl_proxy(**kwargs) for _id, kwargs in _ID_PROXY_PARAMS.items()]
+)
 
 
 # %%

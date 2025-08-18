@@ -44,6 +44,7 @@ from gch4i.utils import (
 # %% Pytask Function
 crop_name = "all_crop"
 nass_cdl_path = sector_data_dir_path / "nass_cdl"
+# %%
 
 
 @mark.persist
@@ -51,8 +52,9 @@ nass_cdl_path = sector_data_dir_path / "nass_cdl"
 def task_all_crop_proxy(
     input_paths: list[Path] = sorted(list(nass_cdl_path.glob("*_all_crop_perc.tif"))),
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
-    / f"{crop_name}_proxy.nc",
+    output_path: Annotated[Path, Product] = (
+        proxy_data_dir_path / f"{crop_name}_proxy.nc"
+    ),
 ) -> None:
 
     # read in the state file and filter to lower 48 + DC
@@ -119,13 +121,13 @@ def task_all_crop_proxy(
         crop_ds.groupby(["year", "statefp"])
         .apply(normalize_xr)
         .sortby(["year", "y", "x"])
-        .to_dataset(name="crops")
+        .to_dataset(name="rel_emi")
     )
-    out_ds["crops"].shape
+    out_ds["rel_emi"].shape
 
     # check that the normalization worked
     all_eq_df = (
-        out_ds["crops"]
+        out_ds["rel_emi"]
         .groupby(["statefp", "year"])
         .sum()
         .rename("sum_check")
@@ -141,8 +143,8 @@ def task_all_crop_proxy(
         raise ValueError("not all values are normed correctly!")
 
     # plot. Not hugely informative, but shows the data is there.
-    out_ds["crops"].sel(year=2020).plot.imshow()
+    out_ds["rel_emi"].sel(year=2020).plot.imshow()
 
-    out_ds["crops"].transpose("year", "y", "x").round(10).rio.write_crs(
+    out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         profile.profile["crs"]
     ).to_netcdf(output_path)

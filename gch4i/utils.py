@@ -5,6 +5,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
+import re
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -29,20 +30,21 @@ from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
 from tqdm.auto import tqdm
+from datetime import datetime
+
+from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,
-    # RoadProxyGlobals,
-    figures_data_dir_path,
     global_data_dir_path,
     load_road_globals,
-    load_state_ansi,
     max_year,
     min_year,
     years,
 )
 
-Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
+# NOTE use scipy import
+# Avogadro = 6.02214129 * 10 ** (23)  # molecules/mol
 Molarch4 = 16.04  # CH4 molecular weight (g/mol)
 tg_to_kt = 1000  # conversion factor, teragrams to kilotonnes
 # tg_scale = (
@@ -90,13 +92,29 @@ def get_cell_gdf() -> gpd.GeoDataFrame:
     return cell_gdf
 
 
-def load_area_matrix(resolution=0.1) -> np.array:
+def load_area_matrix(resolution=0.1, plot=False) -> np.array:
     """load the raster array of grid cell area in square meters"""
+
+    gepa_profile = GEPA_spatial_profile(resolution)
     res_text = str(resolution).replace(".", "")
     input_path = global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
     with rasterio.open(input_path) as src:
-        arr = src.read(1)
-    return arr
+        area_matrix = src.read(1)
+
+    # area_matrix = np.flip(area_matrix, 0)
+    # plt.imshow(area_matrix)
+    # plt.show()
+    area_ds = xr.DataArray(
+        area_matrix,
+        coords={
+            "y": np.flip(gepa_profile.y),
+            "x": gepa_profile.x,
+        },
+    )
+    if plot:
+        area_ds.plot()
+        plt.show()
+    return area_ds
 
 
 def write_ncdf_output(
@@ -431,10 +449,16 @@ def vector_to_gepa_grid():
 def stack_rasters(input_paths: list[Path], output_path: Path):
     profile = GEPA_spatial_profile().profile
     raster_list = []
-    years = [int(x.name.split("_")[2]) for x in input_paths]
+    years = []
+    year_pattern = re.compile(r"(\d{4})")
     for in_file in input_paths:
         if not in_file.exists():
             continue
+        match = year_pattern.search(in_file.name)
+        if match:
+            years.append(int(match.group(1)))
+        else:
+            years.append(None)
         with rasterio.open(in_file) as src:
             raster_list.append(src.read(1))
 

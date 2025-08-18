@@ -41,10 +41,13 @@ from gch4i.utils import us_state_to_abbrev
 @task(id="ng_processing_proxy")
 def task_get_ng_processing_proxy_data(
     state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
     enverus_midstream_ng_path: Path = sector_data_dir_path / "enverus/midstream/Rextag_Natural_Gas.gdb",
     ghgrp_facilities_path: Path = sector_data_dir_path / "ng_processing/GHGRP_Facility_Info_Jan2025.csv",
     ghgrp_subpart_w_path: Path = sector_data_dir_path / "ng_processing/EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb",
     ng_processing_emi_path: Path = emi_data_dir_path / "processing_emi.csv",
+    lng_storage_proxy_path: Path = proxy_data_dir_path / "lng_storage_proxy.parquet",
+    generators_proxy_path: Path = proxy_data_dir_path / "generators_proxy.parquet",
     proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "ng_processing_proxy.parquet",
 ):
     """
@@ -485,12 +488,24 @@ def task_get_ng_processing_proxy_data(
 
     # Add missing states alternative data to grouped_proxy
     if missing_states:
+        # Dataframe to store alternative data
         alt_proxy = gpd.GeoDataFrame()
+        # Natural gas proxy data used to fill in data gaps as needed, adding in the
+        # state_codes since the proxies were originally used for national-level emissions
+        lng_storage_proxy = gpd.read_parquet(lng_storage_proxy_path).rename(columns={"rel_emi": "emi"})
+        lng_storage_proxy = lng_storage_proxy.sjoin(state_gdf, how="left").loc[:, ["year", "state_code", "emi", "geometry"]]
+        lng_storage_proxy['rel_emi'] = lng_storage_proxy.groupby(["state_code", "year"])['emi'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+        lng_storage_proxy = lng_storage_proxy.drop(columns='emi')
+        generators_proxy = gpd.read_parquet(generators_proxy_path).rename(columns={"rel_emi": "emi"})
+        generators_proxy = generators_proxy.sjoin(state_gdf, how="left").loc[:, ["year", "state_code", "emi", "geometry"]]
+        generators_proxy['rel_emi'] = generators_proxy.groupby(["state_code", "year"])['emi'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
+        generators_proxy = generators_proxy.drop(columns='emi')
+        # Cycle through state-year combinations with missing data
         for istate_year in np.arange(0, len(missing_states)):
             istate = str(list(missing_states)[istate_year])[2:4]
             iyear = int(str(list(missing_states)[istate_year])[7:11])
             # If the missing state code-year pair is in the processing plants list,
-            # assign emissions to those facility locations.
+            # assign emissions to those facility locations (in v3, this was implemented for NY locations).
             if list(missing_states)[istate_year] in list(proxy_states_all):
                 iproxy = (processing_plants_all_gdf
                           .query("year == @iyear")
@@ -499,21 +514,56 @@ def task_get_ng_processing_proxy_data(
                           )
                 ifacility_count = len(iproxy)
                 iproxy['rel_emi'] = 1.0/ifacility_count
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))     
+                print(f"({istate}, {iyear}) has been updated with locations with 0 relative emissions in state and year.")
+            # If the missing state code-year pair is Nebraska, use the processing plant
+            # included in the O&G journal in Huntsman, NE (Cheyenne County). Uniformly
+            # distribute the emissions across the entire county.
+            elif list(missing_states)[istate_year] == 'NE':
+                county_gdf = (
+                    gpd.read_file(county_path, columns=["GEOID", "NAME", "STATEFP", "geometry"])
+                    .rename(columns=str.lower)
+                    .astype({"geoid": int, "statefp": int})
+                    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+                    .to_crs(4326)
+                )
+                iproxy = (county_gdf
+                          .query("name == 'Cheyenne'")
+                          .query("statefp == 31")
+                          .drop(columns={"geoid", "name", "statefp"})
+                          .assign(state_code = 'NE')
+                          .assign(year = iyear)
+                          .assign(rel_emi = 1.0)
+                          )
                 alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
+                print(f"({istate}, {iyear}) has been updated with Cheyenne county geometry.")
+            # If the missing state code-year pair is in the LNG Storage proxy, use that
+            # proxy data.
+            elif list(missing_states)[istate_year] in list(set(lng_storage_proxy[['state_code', 'year']].itertuples(index=False, name=None))):
+                iproxy = (lng_storage_proxy
+                          .query("year == @iyear")
+                          .query("state_code == @istate")
+                          .reset_index(drop=True)
+                          )
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))     
+                print(f"({istate}, {iyear}) has been updated with lng_storage_proxy data.")
+            # Otherwise, use the Generators proxy data.
             else:
-                # Create alternative proxy from missing states
-                iproxy = gpd.GeoDataFrame([list(missing_states)[istate_year]])
-                iproxy.columns = ['state_code', 'year']
-                iproxy['rel_emi'] = 1.0
-                iproxy = iproxy.merge(
-                    state_gdf[['state_code', 'geometry']],
-                    on='state_code',
-                    how='left')
-                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))
+                iproxy = (generators_proxy
+                          .query("year == @iyear")
+                          .query("state_code == @istate")
+                          .reset_index(drop=True)
+                          )
+                alt_proxy = gpd.GeoDataFrame(pd.concat([alt_proxy, iproxy], ignore_index=True))     
+                print(f"({istate}, {iyear}) has been updated with generators_proxy data.")
         # Add missing proxy to original proxy
         proxy_gdf_final = gpd.GeoDataFrame(pd.concat([processing_plants_clean_gdf, alt_proxy], ignore_index=True).reset_index(drop=True))
     else:
         proxy_gdf_final = processing_plants_all_gdf.copy()
+
+    # Recheck for missing data
+    proxy_states = set(proxy_gdf_final[['state_code', 'year']].itertuples(index=False, name=None))
+    missing_states = emi_states.difference(proxy_states)
 
     # Check that relative emissions sum to 1.0 each state/year combination
     sums = proxy_gdf_final.groupby(["state_code", "year"])["rel_emi"].sum()  # get sums to check normalization

@@ -71,11 +71,11 @@ import pandas as pd
 import rasterio
 import rioxarray
 import rioxarray.merge
+import seaborn as sns
 import xarray as xr
 from geocube.api.core import make_geocube
 from pytask import Product, mark
 from tqdm.auto import tqdm
-import seaborn as sns
 
 from gch4i.config import (
     global_data_dir_path,
@@ -84,27 +84,20 @@ from gch4i.config import (
     tmp_data_dir_path,
     years,
 )
-from gch4i.utils import GEPA_spatial_profile, normalize, normalize_xr
+from gch4i.utils import GEPA_spatial_profile, normalize_xr
 
 # %%
-
 source_dir = sector_data_dir_path / "septic"
-pop_input_paths = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif"))
 
-smod_zip_path = f"zip://{source_dir}/GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_V2_0.zip"
-smod_shp_path = "GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_UC_V2_0.shp"
-census_urban_path = f"zip://{source_dir}/tl_2020_us_uac20_corrected.zip"
-ahs_septic_use_path = source_dir / "AHS TABLE4 3_12_2025.csv"
-
-
-pop_path = Path("C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy/population_proxy.nc")
-pop_proxy_ds = xr.open_dataset(pop_path)
-pop_proxy_ds
 
 # %%
 @mark.persist
 def task_septic_proxy(
-    pop_input_paths: Path = pop_input_paths,
+    pop_input_paths: Path = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif")),
+    smod_zip_path: str = f"zip://{source_dir}/GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_V2_0.zip",
+    smod_shp_path: str = "GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_UC_V2_0.shp",
+    census_urban_path: str = f"zip://{source_dir}/tl_2020_us_uac20_corrected.zip",
+    ahs_septic_use_path: Path = source_dir / "AHS TABLE4 3_12_2025.csv",
     state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_data_dir_path / "septic_pop_proxy.nc",
 ) -> None:
@@ -151,6 +144,7 @@ def task_septic_proxy(
 
     gepa_profile = GEPA_spatial_profile()
 
+    # read in the time-series population data that we have.
     pop_arrs_list = []
     for pop_path in tqdm(pop_input_paths, desc="Loading Population Data"):
         with rasterio.open(pop_path) as src:
@@ -158,19 +152,23 @@ def task_septic_proxy(
             # pop_arr = np.where(pop_arr > 0, pop_arr, np.nan)
             pop_arrs_list.append(pop_arr)
 
+    # this duplicates the 2020 data into 2021 and 2022 since those population data
+    # are not available yet.
     pop_arrs_list.append(pop_arr)
     pop_arrs_list.append(pop_arr)
 
+    # stack the population arrays together
     pop_arr = np.stack(pop_arrs_list)
     pop_arr = np.astype(np.flip(pop_arr, axis=1), np.float64)
     # %%
+    # Turn the pop data into an xarray DataArray
     tmp_xr = xr.DataArray(
         pop_arr,
         dims=["year", "y", "x"],
         coords={
             "year": years,
-            "y": pop_proxy_ds.y,
-            "x": pop_proxy_ds.x,
+            "y": GEPA_spatial_profile.y,
+            "x": GEPA_spatial_profile.x,
         },
     )  # .where(lambda x: x > 0)
     tmp_file = rasterio.MemoryFile()
@@ -211,11 +209,6 @@ def task_septic_proxy(
     urban_gdf = pd.concat([smod_gdf, census_urban_peri_gdf])
     urban_gdf.to_parquet(tmp_data_dir_path / "urban_gdf.parquet")
 
-    # # %%
-    # urban_geom = urban_gdf.geometry.union_all()
-    # rural_geom = state_geom.difference(urban_geom)
-    # rural_geom
-
     # %%
     ax = smod_gdf.plot(color="xkcd:teal")
     census_urban_peri_gdf.plot(ax=ax, color="xkcd:purple")
@@ -225,7 +218,7 @@ def task_septic_proxy(
         (
             rioxarray.open_rasterio(tmp_file)
             .rename({"band": "year"})
-            .assign_coords(year=years) #, y=gepa_profile.y, x=gepa_profile.x)
+            .assign_coords(year=years)
         )
         .rio.write_crs(4326)
         .where(lambda x: x > 0)
@@ -240,6 +233,8 @@ def task_septic_proxy(
         fill=1,
     )
 
+    # this is a temporary file as a convenience to look at ourside of Python. So I don't
+    # list it in the function.
     urban_grid_path = tmp_data_dir_path / "septic_urban.tif"
 
     try:
@@ -258,6 +253,8 @@ def task_septic_proxy(
     pop_xr["urban"] = urban_grid["urban"]
 
     # %%
+    # this is where the urban class scaling factors are calculated. We get the scale for
+    # each urban class and then scale the population data by that factor.
     results = []
     for (year, urban_class), data in pop_xr.groupby(["year", "urban"]):
         total_pop = data.sum().values
@@ -267,7 +264,7 @@ def task_septic_proxy(
     results[0]
     # %%
 
-    # put the results back together
+    # put the results back together of the now class scaled data.
     weighted_pop_xr = (
         xr.concat(results, dim="stacked_year_y_x")
         .unstack("stacked_year_y_x")
@@ -280,7 +277,8 @@ def task_septic_proxy(
     )
     # weighted_pop_xr = weighted_pop_xr.where(weighted_pop_xr.statefp != 99, np.nan)
     weighted_pop_xr.sel(year=years[0]).plot(cmap="hot")
-
+    # check that the national weights are correct. These should be extremely close to
+    # that of the intented scaling factors we know across the urban classes.
     national_urban_weight_check = (
         weighted_pop_xr.groupby(["urban", "year"])
         .sum()
@@ -294,6 +292,9 @@ def task_septic_proxy(
     national_urban_weight_check
 
     # %%
+    # We are now going to take the nationally weights population data and normalize it
+    # at the state and year level. This aligns with the need of the GEPA process to
+    # allocated emissions by state and year.
     out_ds = (
         weighted_pop_xr.groupby(["year", "statefp"])
         .apply(normalize_xr)
@@ -321,6 +322,13 @@ def task_septic_proxy(
         raise ValueError("not all values are normed correctly!")
 
     # %%
+    # We now need to check that the urban class weights are still correct after the
+    # normalization. We do this by grouping by state, year, and urban class and then
+    # summing the population data. These values are going to be highly dependent on the
+    # urban classes in each state, as some states do not have all class types.
+    # NOTE: For v3, we have accepted that the urban class weights will not be
+    # perfectly equal to the original weights, but they should be very close. This is
+    # something we might way to revisit in the future.
     state_urban_weight_check = (
         out_ds.groupby(["statefp", "year", "urban"])
         .sum()
@@ -335,7 +343,7 @@ def task_septic_proxy(
 
     check_weight_means = state_urban_weight_check.groupby(["urban"])["sum_check"].mean()
     check_weight_means.to_frame().join(weights_df)
-
+    # %%
     # check that the normalization worked
     out_ds = (
         out_ds.rename("rel_emi")
@@ -347,37 +355,3 @@ def task_septic_proxy(
     out_ds.to_netcdf(output_path)
 
     # %%
-    # read the proxy file
-    proxy_ds = xr.open_dataset(output_path)  # .rename({"geoid": geo_col})
-    time_col = "year"
-    # Drop any coordinates in proxy_ds that are not y, x, or the time_col
-    proxy_ds = proxy_ds.drop_vars(
-        [
-            coord
-            for coord in proxy_ds.coords
-            if coord not in [time_col, "y", "x"]
-        ]
-    )
-    proxy_ds
-    # %%
-
-    # %%
-    roads_path = Path(
-        "C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy/roads_proxy.nc"
-    )
-    roads_ds = xr.open_dataset(roads_path)
-    roads_ds
-    # %%
-    proxy_dir = Path("C:/Users/nkruskamp/Environmental Protection Agency (EPA)/Gridded CH4 Inventory - Task 2/ghgi_v3_working/v3_data/proxy")
-    proxy_files = [x for x in proxy_dir.glob("*.nc") if x.suffix == ".nc"]
-    proxy_files
-    # %%
-    for input_path in proxy_files:
-        xr_ds = xr.open_dataset(input_path)
-        print(input_path.name)
-        print(f" all y matches: {(xr_ds.y.values == gepa_profile.y).all()}")
-        # print(f" off by: {(xr_ds.y.values - gepa_profile.y)}")
-        print(f" all x matches: {(xr_ds.x.values == gepa_profile.x).all()}")
-        # print(f" off by: {(xr_ds.x.values - gepa_profile.x)}")
-        print()
-# %%

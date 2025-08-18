@@ -4,8 +4,12 @@ Date Last Modified:     2025-02-25
 Authors Name:           Hannah Lohman (RTI International)
 Purpose:                Mapping of natural gas storage compressor station proxy emissions
 Input Files:            State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        Enverus Prism/DI: sector_data_dir_path / "enverus/production/intermediate_outputs"
-                        NEI: sector_data_dir_path / "nei_og"
+                        Enverus : {sector_data_dir_path}/enverus/midstream/Rextag_Natural_Gas.gdb
+                        EIA Storage Fields: {sector_data_dir_path}/"eia/191 Field Level Storage Data (Annual).csv"
+                        GHGRP Facility: {sector_data_dir_path}/ng_processing/
+                            GHGRP_Facility_Info_Jan2025.csv
+                        GHGRP Subpart W: {sector_data_dir_path}/ng_processing/
+                            EF_W_EMISSION_SOURCE_GHG_Jan2025.xlsb
 Output Files:           proxy_data_dir_path / "ng_storage_comp_station_proxy.parquet"
 """
 
