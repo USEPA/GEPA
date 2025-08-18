@@ -13,13 +13,19 @@ import pandas as pd
 from IPython.display import display
 from tqdm.auto import tqdm
 
-from gch4i.config import logging_dir, prelim_gridded_dir
-from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo, GroupGridder
+from gch4i.config import logging_dir
+from gch4i.gridding_utils import GriddingInfo, run_whole_group
 
 gpd.options.io_engine = "pyogrio"
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", 20)
 pd.set_option("future.no_silent_downcasting", True)
+
+
+
+
+
+
 # %%
 # create the log file for today that writes out the status of all the gridding
 # operations.
@@ -41,31 +47,23 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 # display the overall status of emi/proxy pairs
 g_info.display_all_pair_statuses()
 # %%
-# gch4i_name = "3A_enteric_fermentation"
-gch4i_name = "3C_rice_cultivation"
+run_these_groups = [
+    "1B2bi_ng_exploration",
+    # "1A_mobile_combustion",
+    # "1B2biv_ng_transmission_storage",
+    # "3A_enteric_fermentation",
+    # "4A1_4A2_Forest_land_remaining_forest_land",
+    # "4C1_4C2_Grassland_remaining_grassland",
+    # "1B2biv_ng_transmission_storage",
+    # "1B2bii_ng_production",
+    # "1B2ai_petroleum_exploration",
+    # "1B2aii_petroleum_production",
+    # "1B2aiii_petroleum_transport",
+]
 
-gch4i_name = "1B2ab_abandoned_og_wells"
-
-gridding_rows = g_info.pairs_ready_for_gridding_df.query(
-    f"gch4i_name == '{gch4i_name}'"
-)
-gridding_rows
 # %%
-for emi_proxy_data in tqdm(
-    gridding_rows.itertuples(index=False),
-    total=len(gridding_rows),
-    desc="gridding emi/proxy pairs"
-):
+for gch4i_name in run_these_groups:
+    print(f"Running gridding for group: {gch4i_name}")
+    run_whole_group(gch4i_name, g_info)
 
-    epg = EmiProxyGridder(emi_proxy_data)
-    epg.run_gridding()
-    print(epg.base_name, epg.status)
-
-g_info.get_ready_groups()
-if g_info.group_ready_status.loc[gch4i_name].iloc[0]:
-    gridding_group_data = g_info.ready_groups_df.query(f"gch4i_name == '{gch4i_name}'")
-    gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
-    gg.run_gridding()
-else:
-    print("one or more emi/proxy pairs are not ready for gridding.")
 # %%

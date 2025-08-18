@@ -53,11 +53,13 @@ from joblib import Parallel, delayed
 from matplotlib.colors import TwoSlopeNorm
 from rasterio.features import rasterize
 from tqdm.auto import tqdm
+from scipy.constants import Avogadro
 
 from gch4i.config import (
     V3_DATA_PATH,
     emi_data_dir_path,
     global_data_dir_path,
+    prelim_gridded_dir,
     logging_dir,
     max_year,
     min_year,
@@ -66,7 +68,6 @@ from gch4i.config import (
     years,
 )
 from gch4i.utils import (
-    Avogadro,
     GEPA_spatial_profile,
     Molarch4,
     get_cell_gdf,
@@ -180,6 +181,7 @@ class GriddingInfo:
                     right_index=True,
                     how="left",
                 )
+                .astype({"proxy_has_file": bool})
                 .fillna({"proxy_has_file": False})
             )
             if self.save_file:
@@ -283,7 +285,8 @@ class GriddingInfo:
         xr_ds = xr.open_dataset(input_path, chunks="auto")
         coords = list(xr_ds.coords.keys())
         data_vars = list(xr_ds.data_vars.keys())
-        data_vars.remove("spatial_ref")
+        if "spatial_ref" in data_vars:
+            data_vars.remove("spatial_ref")
         if data_vars:
             if len(data_vars) > 1:
                 warnings.warn(
@@ -358,7 +361,7 @@ class GriddingInfo:
 
     def get_ready_pairs(self):
         # get the emi/proxy pairs that are ready for gridding
-        self.get_status_table(save=False)
+        self.get_status_table()
 
         self.pairs_ready_for_gridding_df = self.mapping_df.drop_duplicates(
             subset=["gch4i_name", "emi_id", "proxy_id"]
@@ -372,8 +375,12 @@ class GriddingInfo:
         #         ~self.pairs_ready_for_gridding_df["status"].isin(SKIP_THESE)
         #     ]
 
-    def display_group_emi_proxy_statuses(self):
-        pass
+    def display_group_emi_proxy_statuses(self, group_name):
+        self.get_ready_pairs()
+        group_statuses_df = self.pairs_ready_for_gridding_df.query(
+            f"gch4i_name == '{group_name}'"
+        )
+        display(group_statuses_df[["emi_id", "proxy_id", "status"]])
 
     def get_ready_groups(self):
         # get the status of each gridding group
@@ -402,6 +409,8 @@ class GriddingInfo:
             .multiply(100)
             .round(2)
         )
+        print("groups not ready for gridding")
+        display(self.group_ready_status.query("status == False"))
 
     def display_all_pair_statuses(self):
         # display the progress of the emi/proxy pairs
@@ -485,7 +494,6 @@ class EmiProxyGridder(BaseGridder):
         self.emi_id = emi_proxy_in_data.emi_id
         self.proxy_id = emi_proxy_in_data.proxy_id
         self.proxy_time_step = emi_proxy_in_data.proxy_time_step
-        self.proxy_time_step = emi_proxy_in_data.proxy_time_step
         self.proxy_has_year_col = emi_proxy_in_data.proxy_has_year_col
         self.proxy_has_month_col = emi_proxy_in_data.proxy_has_month_col
         self.proxy_has_year_month_col = emi_proxy_in_data.proxy_has_year_month_col
@@ -501,8 +509,6 @@ class EmiProxyGridder(BaseGridder):
             self.status = "not started"
             self.update_status()
         self.base_name = f"{self.gch4i_name}-{self.emi_id}-{self.proxy_id}"
-        self.emi_input_path = list(emi_data_dir_path.glob(f"{self.emi_id}.csv"))[0]
-        self.proxy_input_path = list(proxy_data_dir_path.glob(f"{self.proxy_id}.*"))[0]
         self.annual_output_path = self.qc_dir / f"{self.base_name}.tif"
         self.has_monthly = (
             self.emi_time_step == "monthly" or self.proxy_time_step == "monthly"
@@ -524,6 +530,24 @@ class EmiProxyGridder(BaseGridder):
         logging.info(
             f"{self.proxy_id} is at {self.proxy_geo_level}/{self.proxy_time_step} level."
         )
+        self.emi_input_path = self.get_path(self.emi_id, emi_data_dir_path)
+        self.proxy_input_path = self.get_path(self.proxy_id, proxy_data_dir_path)
+
+    def get_path(self, file_name, file_path):
+        try:
+            in_path = list(file_path.glob(f"{file_name}.*"))[0]
+            if not in_path.exists():
+                self.status = "emi file not found"
+                self.update_status()
+                logging.critical(self.status)
+                raise FileNotFoundError(self.status)
+        except IndexError:
+            self.status = f"{file_name} file not found"
+            self.update_status()
+            logging.critical(self.status)
+            raise FileNotFoundError(self.status)
+
+        return in_path
 
     def get_status(self):
         self.cursor.execute(
@@ -585,7 +609,9 @@ class EmiProxyGridder(BaseGridder):
         match self.emi_geo_level:
             case "national":
                 self.emi_cols = self.emi_time_cols + ["ghgi_ch4_kt"]
-                self.emi_df = pd.read_csv(self.emi_input_path, usecols=self.emi_cols)
+                self.emi_df = pd.read_csv(
+                    self.emi_input_path, usecols=self.emi_cols
+                ).query("(ghgi_ch4_kt > 0)")
             case "state":
                 self.emi_cols = self.emi_time_cols + ["state_code", "ghgi_ch4_kt"]
                 self.emi_df = pd.read_csv(
@@ -1136,7 +1162,7 @@ class EmiProxyGridder(BaseGridder):
                                     "allocated_ch4_kt"
                                 ].transform(lambda x: x / len(x)),
                             )
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             .reset_index()
                             .assign(
                                 geometry=lambda df: df.centroid,
@@ -1163,7 +1189,7 @@ class EmiProxyGridder(BaseGridder):
                             .assign(orig_len=lambda df: df.length)
                             # overlay the proxy with the cells, this results in splitting the
                             # original proxies across any intersecting cells
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             # # calculate the now partial proxy length, then divide the partial
                             # # proxy by the original proxy and multiply by the original
                             # # allocated emissions to the get the partial/disaggregated new emis.
@@ -1193,7 +1219,7 @@ class EmiProxyGridder(BaseGridder):
                             .assign(orig_area=lambda df: df.area)
                             # overlay the proxy with the cells, this results in splitting the
                             # original proxies across any intersecting cells
-                            .overlay(cell_gdf)
+                            .overlay(cell_gdf, keep_geom_type=False)
                             # calculate the now partial proxy area, then divide the partial
                             # proxy by the original proxy and multiply by the original
                             # allocated emissions to the get the partial/disaggregated new emis.
@@ -1254,6 +1280,11 @@ class EmiProxyGridder(BaseGridder):
                 fill=0,
                 transform=self.gepa_profile.profile["transform"],
                 dtype=np.float64,
+                # NOTE: setting this parameter to True may more closely align our
+                # emissions grids with v2. This will allow emissions to be allocated to
+                # cells that are not fully covered by the proxy geometry. False would
+                # limit emissions to only those cells that are fully covered.
+                all_touched=True,
                 merge_alg=rasterio.enums.MergeAlg.add,
             )
             ch4_kt_result_rasters[time_var] = ch4_kt_raster
@@ -1321,9 +1352,17 @@ class EmiProxyGridder(BaseGridder):
                     for geom, value in zip(emi_gdf.geometry, emi_gdf.ghgi_ch4_kt)
                 ],
                 out_shape=out_shape,
-                transform=transform,
                 fill=0,
-                dtype="float32",
+                transform=transform,
+                dtype=np.float64,
+                # NOTE: setting this parameter to True may more closely align our
+                # emissions grids with v2. This will allow emissions to be allocated to
+                # cells that are not fully covered by the proxy geometry. False would
+                # limit emissions to only those cells that are fully covered.
+                # XXX: this fails the emissions checks, I assume data are leaking
+                # outside the county and state boundaries and adding emissions to the
+                # wrong areas.
+                # all_touched=True,
                 # merge_alg=rasterio.enums.MergeAlg.add,
             )
             return year, emi_raster
@@ -1459,7 +1498,7 @@ class EmiProxyGridder(BaseGridder):
             ).transpose("year_month", "y", "x")
 
         elif (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
-            print("DEBUG: scaling emis")
+            # print("DEBUG: scaling emis")
             self.scale_emi_to_month()
 
         # check that the proxy and emi files have matching state years
@@ -1596,19 +1635,19 @@ class EmiProxyGridder(BaseGridder):
 
         if missing_year_months:
             logging.info(f"Filling missing year_months: {missing_year_months}")
-            empty_array = np.zeros_like(
-                self.proxy_ds["results"].isel(year_month=0).values
-            )
             if self.time_col == "year":
+                empty_array = np.zeros_like(
+                    self.proxy_ds["results"].isel(year=0).values
+                )
                 for year in missing_year_months:
-                    if isinstance(self.proxy_ds.indexes["year_month"], pd.MultiIndex):
+                    if isinstance(self.proxy_ds.indexes["year"], pd.MultiIndex):
                         fill_value = (year, 1)
                     else:
                         fill_value = year
                     missing_da = xr.Dataset(
                         {"results": (["y", "x"], empty_array)},
                         coords={
-                            "year_month": [fill_value],
+                            "year": [fill_value],
                             "year": year,
                             "y": self.proxy_ds["y"],
                             "x": self.proxy_ds["x"],
@@ -1619,10 +1658,13 @@ class EmiProxyGridder(BaseGridder):
                             self.proxy_ds,
                             missing_da,
                         ],
-                        dim="year_month",
+                        dim="year",
                     )
                 self.proxy_ds = self.proxy_ds.sortby("year")
             elif self.time_col == "year_month":
+                empty_array = np.zeros_like(
+                    self.proxy_ds["results"].isel(year_month=0).values
+                )
                 for year_month in missing_year_months:
                     year, month = map(int, year_month.split("-"))
                     if isinstance(self.proxy_ds.indexes["year_month"], pd.MultiIndex):
@@ -1737,6 +1779,7 @@ class GroupGridder(BaseGridder):
     emi_custom_colormap = colors.LinearSegmentedColormap.from_list(
         name="emi_cmap",
         colors=[
+            "#FFFFFF00",
             "#6F4C9B",
             "#6059A9",
             "#5568B8",
@@ -1767,7 +1810,7 @@ class GroupGridder(BaseGridder):
         N=3000,
     )
 
-    def __init__(self, group_name, in_data, dst_dir):
+    def __init__(self, group_name, in_data, dst_dir, plot=False):
         BaseGridder.__init__(self)
         self.group_name = group_name
         self.data_df = in_data
@@ -1789,6 +1832,10 @@ class GroupGridder(BaseGridder):
         self.nc_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.nc"
         self.get_geo_filter()
         self.relative_tolerance = 0.0001
+        self.monthly_times = [
+            f"{year}-{month:02d}" for year in years for month in range(1, 13)
+        ]
+        self.area_ds = load_area_matrix(plot=True)
 
         # IPCC_ID, SOURCE_NAME = g_name.split("_", maxsplit=1)
         # netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
@@ -1805,20 +1852,29 @@ class GroupGridder(BaseGridder):
         # )
 
     def get_monthly_source_count(self):
-        self.monthly_source_count = (
+        self.monthly_data_mask = (
             self.data_df[["emi_time_step", "proxy_time_step"]]
             .eq("monthly")
             .any(axis=1)
-            .sum()
+            # .sum()
         )
+        self.monthly_data_df = self.data_df[self.monthly_data_mask]
+        self.monthly_source_count = self.monthly_data_df.shape[0]
+
+        self.not_monthly_data_df = self.data_df[~self.monthly_data_mask]
+        self.not_monthly_source_count = self.not_monthly_data_df.shape[0]
+        # self.no_monthly_source_count =
 
     def get_source_QC_df(self):
 
         qc_files = []
         for row in self.data_df.itertuples():
             base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
-            result = list(self.qc_dir.glob(f"{base_name}_emi_grid_qc.csv"))
-            qc_files.extend(result)
+            result = self.qc_dir / f"{base_name}_emi_grid_qc.csv"
+            if not result.exists():
+                print("FILE NOT FOUND")
+            else:
+                qc_files.append(result)
 
         qc_files = [x for x in qc_files if "monthly" not in x.name]
         if len(qc_files) != self.annual_source_count:
@@ -1865,12 +1921,13 @@ class GroupGridder(BaseGridder):
         emi_results_list = []
         for row in self.data_df.itertuples():
             emi_df = pd.read_csv(emi_data_dir_path / f"{row.emi_id}.csv")
-            try:
+            if "state_code" in emi_df.columns:
                 emi_df = emi_df.query(
                     f"(state_code.isin({self.geo_filter})) & (ghgi_ch4_kt > 0)"
                 )
-            except:
-                print("national emissions")
+            else:
+                # print("national emissions")
+                emi_df = emi_df.query("(ghgi_ch4_kt > 0)")
             emi_results_list.append(emi_df)
         self.all_emi_results_df = pd.concat(emi_results_list, axis=0)
         self.emi_group_year_df = (
@@ -1879,24 +1936,19 @@ class GroupGridder(BaseGridder):
 
     def get_input_raster_paths(self):
         """get all the input emi/proxy pair paths."""
-        all_raster_list = []
+        self.annual_raster_list = []
         for row in self.data_df.itertuples():
             base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
-            result = list(self.qc_dir.glob(f"{base_name}*.tif"))
-            all_raster_list.extend(result)
-
-        # split the lists into annual and monthly
-        annual_raster_list = [
-            raster for raster in all_raster_list if "monthly" not in raster.name
-        ]
+            result = self.qc_dir / f"{base_name}.tif"
+            if not result.exists():
+                print(f"WARNING: {result} does not exist.")
+            self.annual_raster_list.append(result)
 
         # check that we got the number of files we expected
-        if annual_raster_list:
-            if len(annual_raster_list) == self.annual_source_count:
-                self.annual_raster_list = annual_raster_list
-            else:
+        if self.annual_raster_list:
+            if not len(self.annual_raster_list) == self.annual_source_count:
                 raise ValueError(
-                    f"only found {len(annual_raster_list)} annual rasters. "
+                    f"only found {len(self.annual_raster_list)} annual rasters. "
                     f"Expected {self.annual_source_count}."
                 )
         else:
@@ -1905,15 +1957,17 @@ class GroupGridder(BaseGridder):
         # if we expect monthly raster files, get the list of paths and check that we
         # have the right number of files
         if self.monthly_source_count > 0:
-            monthly_raster_list = [
-                raster for raster in all_raster_list if "monthly" in raster.name
-            ]
-            if monthly_raster_list:
-                if len(monthly_raster_list) == self.monthly_source_count:
-                    self.monthly_raster_list = monthly_raster_list
-                else:
+            self.monthly_raster_list = []
+            for row in self.monthly_data_df.itertuples():
+                base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+                result = self.qc_dir / f"{base_name}_monthly.tif"
+                if not result.exists():
+                    print(f"WARNING: {result} does not exist.")
+                self.monthly_raster_list.append(result)
+            if self.monthly_raster_list:
+                if not len(self.monthly_raster_list) == self.monthly_source_count:
                     raise ValueError(
-                        f"only found {len(monthly_raster_list)} annual rasters. "
+                        f"only found {len(self.monthly_raster_list)} monthly rasters. "
                         f"Expected {self.monthly_source_count}."
                     )
             else:
@@ -1921,34 +1975,77 @@ class GroupGridder(BaseGridder):
                     f"No monthly rasters found. expected {self.monthly_source_count}."
                 )
 
-    def read_and_sum_source_rasters(self):
+        if self.not_monthly_source_count > 0:
+            self.not_monthly_raster_list = []
+            for row in self.not_monthly_data_df.itertuples():
+                base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+                result = self.qc_dir / f"{base_name}.tif"
+                if not result.exists():
+                    print(f"WARNING: {result} does not exist.")
+                self.not_monthly_raster_list.append(result)
+            if self.not_monthly_raster_list:
+                if (
+                    not len(self.not_monthly_raster_list)
+                    == self.not_monthly_source_count
+                ):
+                    raise ValueError(
+                        f"only found {len(self.not_monthly_raster_list)} not monthly rasters. "
+                        f"Expected {self.not_monthly_source_count}."
+                    )
+            else:
+                raise ValueError(
+                    f"No monthly rasters found. expected {self.not_monthly_source_count}."
+                )
+
+    def read_and_sum_source_rasters(self, input_list, time_col):
         """Read the annual rasters and sum them into a single array."""
-        annual_arr_list = []
-        for raster_path in self.annual_raster_list:
+        arr_list = []
+        for raster_path in input_list:
             with rasterio.open(raster_path) as src:
                 arr_data = src.read()
-                annual_arr_list.append(arr_data)
+                arr_list.append(arr_data)
 
-        if len(annual_arr_list) > 1:
-            self.annual_group_arr = np.nansum(annual_arr_list, axis=0)
+        if len(arr_list) > 1:
+            group_arr = np.nansum(arr_list, axis=0)
         else:
-            self.annual_group_arr = annual_arr_list[0]
+            group_arr = arr_list[0]
 
-        self.annual_group_arr = np.flip(self.annual_group_arr, axis=1)
-        self.gridded_yearly_sum = np.nansum(self.annual_group_arr, axis=(1, 2))
+        group_arr = np.flip(group_arr, axis=1)
+        # print(f"DEBUG: group_arr shape: {group_arr.shape}")
 
-        self.annual_mass_da = xr.DataArray(
-            self.annual_group_arr,
-            dims=["time", "y", "x"],
-            coords={
-                "time": years,
-                "y": self.gepa_profile.y,
-                "x": self.gepa_profile.x,
-            },
-            name=self.group_name,
-        )
+        if time_col == "year":
+            out_mass_da = xr.DataArray(
+                group_arr,
+                dims=["time", "y", "x"],
+                coords={
+                    "time": years,
+                    "y": self.gepa_profile.y,
+                    "x": self.gepa_profile.x,
+                },
+                name=self.group_name,
+            )
+        elif time_col == "year_month":
+            out_mass_da = xr.DataArray(
+                group_arr,
+                dims=["time", "y", "x"],
+                coords={
+                    "time": self.monthly_times,
+                    "y": self.gepa_profile.y,
+                    "x": self.gepa_profile.x,
+                },
+                name=self.group_name,
+            ).assign_coords(
+                year=("time", np.repeat(years, len(years) + 1)),
+                month=("time", np.tile(np.arange(1, 13), len(years))),
+            )
+        return out_mass_da
 
     def QC_group_grid(self):
+
+        self.gridded_yearly_sum = self.annual_mass_da.groupby("time").sum(
+            dim=["y", "x"], skipna=True
+        )
+
         self.emi_check_df = self.emi_group_year_df.assign(
             gridded_emissions=self.gridded_yearly_sum
         ).assign(
@@ -2025,6 +2122,44 @@ class GroupGridder(BaseGridder):
         plt.show()
         plt.close(fig)
 
+    def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> float:
+        """calculate emissions in kt to flux (in units of molec. cm-2 s-1)"""
+        return (
+            10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
+        )
+
+    def calc_year_plot_conv_factor(self, year):
+        year_days = self.get_days_in_year(year)
+        conv_factor = (
+            10**6 * Avogadro * (year_days * 24 * 60 * 60) * Molarch4 * float(1e10)
+        )
+        return conv_factor
+
+    def convert_flux_for_plotting(self, flux_da: xr.DataArray) -> xr.DataArray:
+        """
+        Convert the flux data from molec/cm2/s to Mg/km2/year for plotting.
+        This is a helper function to be used in the plotting methods.
+
+        This required the input data array to have a time dimension repping years.
+        """
+
+        res_list = []
+        for i, time in enumerate(flux_da.time.values):
+            year = pd.to_datetime(time).year
+            year_days = self.get_days_in_year(year)
+            res = (
+                flux_da.sel(time=time)
+                / float(10**6 * Avogadro)
+                * (year_days * 24 * 60 * 60)
+                * Molarch4
+                * float(1e10)
+            )
+            res_list.append(res)
+
+        out_ds = xr.concat(res_list, dim="time")
+
+        return out_ds
+
     def plot_annual_raster_data(self) -> None:
         """
         Function to plot the raster data for each year in the dictionary of rasters that are
@@ -2032,19 +2167,21 @@ class GroupGridder(BaseGridder):
         """
 
         # we set 0 and negative values as NA
-      #EEM: The incoming data are in units on molec/cm2/s
-      # we want to plot them in units of Mg/km2/year
-      # Therefore, we need to divide them byt eh following conversion factor:
-      # plot_data [Mg/yr/km2] = flux_data [molec/cm2/yr] / (10^6 [Mg/g] * Avogadro [molec/mol] * mw_ch4) [g/mol] * (365 * 24 * 60 * 60) [s/yr] * 1e10 [cm2/km2]
-      # This conversion factor also needs to be applied to the difference plots. 
-        plotting_data = (self.annual_flux_da / 1e10).where(lambda x: x != 0)
+
+        # apply the conversion factor to the annual flux data for plotting
+        plotting_data = self.annual_plot_flux_da.where(lambda x: x != 0)
+        # print(plotting_data.groupby("time").max(dim=...).values)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
+        # print(plotting_data.groupby("time").max(dim=...).values)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=self.emi_custom_colormap,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            # interpolation=None,
+            vmin=10**-15,
+            vmax=10,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2055,6 +2192,7 @@ class GroupGridder(BaseGridder):
             robust=True,
             figsize=(20, 20),
         )
+
         for ax in fg.axs.ravel():
             ax.add_feature(cfeature.LAND)
             ax.add_feature(cfeature.OCEAN)
@@ -2073,7 +2211,7 @@ class GroupGridder(BaseGridder):
         # close the plot
         plt.close()
 
-    def plot_raster_data_difference(self) -> None:
+    def plot_map_first_last_year_diff(self) -> None:
         """
         Function to plot the difference between the first and last years of the raster data
         for each sector.
@@ -2081,27 +2219,32 @@ class GroupGridder(BaseGridder):
         # Define the geographic transformation parameters
 
         # Get the first and last years of the data
-        list_of_data_years = list(self.annual_flux_da.time.values)
-
+        list_of_data_years = list(self.annual_plot_flux_da.time.values)
         first_year = np.min(list_of_data_years)
         last_year = np.max(list_of_data_years)
 
-        first_year_data = self.annual_flux_da.sel(time=first_year)
-        last_year_data = self.annual_flux_da.sel(time=last_year)
+        first_year_data = self.annual_plot_flux_da.sel(time=first_year)
+        last_year_data = self.annual_plot_flux_da.sel(time=last_year)
 
         # Calculate the difference between the first and last years
-        self.difference_raster = (last_year_data - first_year_data).where(
-            lambda x: x != 0
-        )
+        plotting_data = (last_year_data - first_year_data).where(lambda x: x != 0)
 
-        plotting_data = self.difference_raster / 1e10
+        # NOTE: if we want to plot the full range of data, we can get the abs max of
+        # the array and passs it to the plotting function, which sould then scale
+        # the values in the positive and negative directions. If the data are centered,
+        # it will maintain the center. However, this washes out the data especially
+        # when there are +/- outliers.
+        # abs_max = np.nanmax(np.abs(plotting_data.values))
+        # print(f"Absolute maximum value of plotting_data: {abs_max}")
 
-        c_map, c_norm = self._get_cmap(plotting_data)
+        c_map, c_norm, center = self._get_cmap(plotting_data)
         # Convert from cm^2 to km^2: 1 km^2 = 1e10 cm^2
         fg = plotting_data.plot(
             cmap=c_map,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            center=center,
+            # vmax=abs_max,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2136,15 +2279,18 @@ class GroupGridder(BaseGridder):
         # close the plot
         plt.close()
 
-    def calc_conversion_factor(self, year_days: int, area_matrix: np.array) -> np.array:
-        """calculate emissions in kt to flux (in units of molec. cm-2 s-1) """
-        return (
-            10**9 * Avogadro / float(Molarch4 * year_days * 24 * 60 * 60) / area_matrix
-        )
+    def get_days_in_year(self, year):
+        year = int(year)
+        return 366 if calendar.isleap(year) else 365
+
+    def get_days_in_month(self, year_month):
+        year, month = year_month.split("-")
+        year = int(year)
+        month = int(month)
+        return calendar.monthrange(year, month)[1]
 
     def calculate_flux(self, in_ds, timestep, direction):
         """calculates flux for dictionary of total emissions year/array pairs"""
-        self.area_matrix = load_area_matrix()
 
         if direction not in ["mass2flux", "flux2mass"]:
             raise ValueError(
@@ -2157,51 +2303,59 @@ class GroupGridder(BaseGridder):
 
         times = in_ds.time.values
 
-        def get_days_in_year(year):
-            year = int(year)
-            return 366 if calendar.isleap(year) else 365
-
-        def get_days_in_month(year_month):
-            year, month = year_month.split("-")
-            year = int(year)
-            month = int(month)
-            return calendar.monthrange(year, month)[1]
-
         if timestep == "year_month":
-            days_in_months = [get_days_in_month(x) for x in times]
+            days_in_months = [self.get_days_in_month(x) for x in times]
+
+            # NOTE: for livestock only, replace 29 with 28 for February. The inventory
+            # did not adjust Feb data for leap years so we do not adjust the leap year
+            # data here.
+            if (self.group_name == "3A_enteric_fermentation") | (
+                self.group_name == "3B_manure_management"
+            ):
+                print("INFO: replacing 29 with 28 for February in livestock emissions")
+                days_in_months = [28 if x == 29 else x for x in days_in_months]
+
             conv_factors = [
-                self.calc_conversion_factor(x, self.area_matrix) for x in days_in_months
+                self.calc_conversion_factor(x, self.area_ds) for x in days_in_months
             ]
 
             conv_ds = xr.DataArray(
-                conv_factors,
-                # np.flip(conv_factors, 1),
+                # conv_factors,
+                np.flip(conv_factors, 1),
                 dims=["time", "y", "x"],
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            if direction == "mass2flux":
-                self.monthly_flux_da = in_ds * conv_ds
-            elif direction == "flux2mass":
-                self.monthly_flux_da = in_ds / conv_ds
+            # print("DEBUG: calculating monthly conversion factors")
+
         elif timestep == "year":
-            days_in_year = [get_days_in_year(x) for x in times]
+            days_in_year = [self.get_days_in_year(x) for x in times]
+
+            # for livestock only, replace 366 with 365 for leap years
+            if (self.group_name == "3A_enteric_fermentation") | (
+                self.group_name == "3B_manure_management"
+            ):
+                print("INFO: replacing 366 with 365 in livestock emissions")
+                days_in_year = [365 if x == 366 else x for x in days_in_year]
+
             conv_factors = [
-                self.calc_conversion_factor(x, self.area_matrix) for x in days_in_year
+                self.calc_conversion_factor(x, self.area_ds) for x in days_in_year
             ]
 
             conv_ds = xr.DataArray(
-                conv_factors,
-                # np.flip(conv_factors, 1),
+                # conv_factors,
+                np.flip(conv_factors, 1),
                 dims=["time", "y", "x"],
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            if direction == "mass2flux":
-                flux_out_da = in_ds * conv_ds
-            elif direction == "flux2mass":
-                flux_out_da = in_ds / conv_ds
-            return flux_out_da
+        conv_ds.isel(time=0).plot()
+        plt.show()
+        if direction == "mass2flux":
+            flux_out_da = in_ds * conv_ds
+        elif direction == "flux2mass":
+            flux_out_da = in_ds / conv_ds
+        return flux_out_da
 
     def QC_flux_emis(self) -> None:
         """
@@ -2288,10 +2442,10 @@ class GroupGridder(BaseGridder):
             v3_mass_da = self.calculate_flux(
                 v3_time_match_da, timestep="year", direction="flux2mass"
             )
-            v2_mass_da = self.calculate_flux(
+            self.v2_mass_da = self.calculate_flux(
                 self.v2_flux_da, timestep="year", direction="flux2mass"
             )
-            self.mass_diff_da = (v3_mass_da - v2_mass_da).where(lambda x: x != 0)
+            self.mass_diff_da = (v3_mass_da - self.v2_mass_da).where(lambda x: x != 0)
             self.write_tif_output(
                 self.mass_diff_da,
                 self.qc_dir / f"{self.group_name}_ch4_v3_v2_mass_diff.tif",
@@ -2301,7 +2455,7 @@ class GroupGridder(BaseGridder):
                 self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_diff.tif",
             )
 
-            v2_mass_yearly_sums = np.nansum(v2_mass_da.values, axis=(1, 2))
+            v2_mass_yearly_sums = np.nansum(self.v2_mass_da.values, axis=(1, 2))
             v3_mass_yearly_sums = np.nansum(v3_mass_da.values, axis=(1, 2))
 
             mass_dif_df = pd.DataFrame(
@@ -2321,7 +2475,7 @@ class GroupGridder(BaseGridder):
 
             self._plot_percent_dif_fig()
             self._plot_difference_histogram()
-            self._plot_difference_map()
+            self.plot_map_version_difference()
 
     def _plot_percent_dif_fig(self):
         g = sns.relplot(
@@ -2338,15 +2492,62 @@ class GroupGridder(BaseGridder):
         plt.show()
         plt.close()
 
-    def _plot_difference_map(self):
-        plotting_data = self.flux_diff_da / 1e10
-        c_map, c_norm = self._get_cmap(plotting_data)
+    def plot_timeseries_comparison(self, var="flux"):
+
+        if var not in ["flux", "mass"]:
+            raise ValueError(
+                f"var must be either 'flux' or 'mass', not {var}. "
+                "This is used to determine which variable to plot."
+            )
+        if var == "flux":
+            v3_data = self.annual_flux_da
+            v2_data = self.v2_flux_da
+        elif var == "mass":
+            v3_data = self.annual_mass_da
+            v2_data = self.v2_mass_da
+
+        tmp_v3_df = (
+            v3_data.rename(var)
+            .to_dataframe()
+            .reset_index()
+            .drop(columns=["x", "y"])
+            .assign(version="v3")
+            .query(f"{var} != 0")
+            .dropna(subset=[var])
+        )
+        tmp_v2_df = (
+            v2_data.rename(var)
+            .to_dataframe()
+            .reset_index()
+            .drop(columns=["x", "y"])
+            .assign(version="v2")
+            .query(f"{var} != 0")
+            .dropna(subset=[var])
+        )
+        compare_df = pd.concat([tmp_v2_df, tmp_v3_df], ignore_index=True)
+        g = sns.relplot(
+            data=compare_df,
+            x="time",
+            y=var,
+            hue="version",
+            kind="line",
+            height=5,
+            aspect=2,
+        )
+        g.figure.suptitle(
+            f"{self.group_name} v2 vs v3 {var} timeseries",
+        )
+
+    def plot_map_version_difference(self):
+        plotting_data = self.convert_flux_for_plotting(self.flux_diff_da)
+        c_map, c_norm, center = self._get_cmap(plotting_data)
         fg = plotting_data.plot.imshow(
             col="time",
             col_wrap=3,
             cmap=c_map,
             transform=ccrs.PlateCarree(),  # remember to provide this!
             subplot_kws={"projection": ccrs.PlateCarree()},
+            center=center,
             cbar_kwargs={
                 "orientation": "horizontal",
                 "shrink": 0.8,
@@ -2453,60 +2654,185 @@ class GroupGridder(BaseGridder):
 
         c_min = np.nanmin(in_da.values)
         c_max = np.nanmax(in_da.values)
-        if c_min >= 0:
+        center = None
+        # print(f"DEBUG: plotting values: {c_min}, {c_max}")
+        if (c_min >= 0) and (c_max > 0):
             c_norm = colors.Normalize(vmin=0, vmax=c_max)
             c_map = "Reds"
-        elif c_max <= 0:
+        elif (c_max <= 0) and (c_min < 0):
             c_norm = colors.Normalize(vmin=c_min, vmax=0)
             c_map = "Blues_r"
         else:
             c_norm = TwoSlopeNorm(vmin=c_min, vcenter=0, vmax=c_max)
+            center = 0
             c_map = "bwr"
+        # print(f"c_map: {c_map}, c_norm: {c_norm}")
 
-        return c_map, c_norm
+        return c_map, c_norm, center
 
     def calculate_monthly_scaling(self):
         """read all the monthly data, calculate a 3d array of monthly emissions
         and normalized it by year to sum to 12 for each year"""
-        monthly_raster_ds_list = []
-        for monthly_raster in self.monthly_raster_list:
-            monthly_raster_ds_list.append(xr.open_dataset(monthly_raster))
 
-        self.month_scale_ds = (
-            xr.concat(monthly_raster_ds_list, dim="source")
-            .sum(dim="source")
-            .assign_coords(year=("band", np.repeat(np.arange(2012, 2023), 12)))
-            .groupby(["year"])
-            .apply(lambda x: (x / x.sum(dim="band")) * 12)
+        # the target value for the monthly scaling is 12 TODO update this
+        monthly_scale_target = 12
+
+        # create the monthly mass dataset
+        self.monthly_mass_da = self.read_and_sum_source_rasters(
+            self.monthly_raster_list, "year_month"
+        )
+        # calculate the monthly flux from the monthly mass data
+        self.monthly_flux_da = self.calculate_flux(
+            self.monthly_mass_da, "year_month", "mass2flux"
         )
 
+        # if there are sources that do not have monthly data, create an array where the
+        # data are expanded to have months and each month has the same value as the year
+        # repeat each year array 12 times to create a 3d array
+        if self.not_monthly_source_count > 0:
+            not_monthly_mass_da = self.read_and_sum_source_rasters(
+                self.not_monthly_raster_list, "year"
+            )
+
+            not_monthly_flux_da = self.calculate_flux(
+                not_monthly_mass_da, "year", "mass2flux"
+            )
+
+            not_monthly_flux_in_months_da = xr.DataArray(
+                np.repeat(not_monthly_flux_da.values, 12, axis=0),
+                dims=["time", "y", "x"],
+                coords={
+                    "time": self.monthly_flux_da.time.values,
+                    "y": self.monthly_flux_da.y.values,
+                    "x": self.monthly_flux_da.x.values,
+                },
+            )
+
+            monthly_data_for_scaling = (
+                self.monthly_flux_da + not_monthly_flux_in_months_da
+            )
+        # if the entire group already has monthly data, just use that data
+        else:
+            monthly_data_for_scaling = self.monthly_flux_da
+
+        # scale the monthly data:
+        # get the annual flux data and expand it so that the yearly data are repeated
+        # for each month. This aligns the yearly data dimensions with the monthly
+        # data dimensions so that we can scale the monthly data by the annual data.
+        annual_flux_in_months_da = xr.DataArray(
+            np.repeat(self.annual_flux_da.values, 12, axis=0),
+            dims=["time", "y", "x"],
+            coords={
+                "time": self.monthly_flux_da.time.values,
+                "y": self.monthly_flux_da.y.values,
+                "x": self.monthly_flux_da.x.values,
+            },
+        )
+
+        # divide the monthly flux by the annual emissions and the scale the data so
+        # it sums to 12.
+        self.scaled_monthly_flux_da = (
+            (monthly_data_for_scaling / annual_flux_in_months_da).rename("monthly_flux")
+            # .groupby(["year"])
+            # .apply(lambda x: (x / x.sum(dim="time")) * monthly_scale_target)
+        )
+
+        # check that the scaled values are equal to our target value.
         self.month_scale_check = (
-            self.month_scale_ds.groupby("year")
+            self.scaled_monthly_flux_da.groupby("year")
             .sum()
             .where(lambda x: x > 0)
             .to_dataframe()
             .reset_index()
-            .dropna(subset="band_data")
-            .assign(sum_check=lambda df: np.isclose(df.band_data, 12, rtol=0.1))
+            .dropna(subset="monthly_flux")
+            .assign(
+                sum_check=lambda df: np.isclose(
+                    df["monthly_flux"], monthly_scale_target, rtol=0.1
+                )
+            )
         )
-        self.month_scale_check["sum_check"].all()
-        self.write_tif_output(
-            self.month_scale_ds["band_data"], self.monthly_scale_output_path
+        if not self.month_scale_check["sum_check"].all():
+            raise ValueError(
+                f"Monthly scaling for {self.group_name} does not sum to "
+                f"{monthly_scale_target} for all years."
+            )
+
+    def plot_monthly_scaling(self):
+        month_plot_df = (
+            self.scaled_monthly_flux_da.to_dataframe()
+            .reset_index()
+            .drop(columns=["time", "x", "y"])
+            .dropna(subset=["monthly_flux"])
         )
+        month_plot_df
+        g = sns.relplot(
+            kind="line",
+            data=month_plot_df,
+            x="month",
+            y="monthly_flux",
+            hue="year",
+            palette="tab20",
+            height=6,
+            aspect=2,
+        )
+        g.ax.set(xlabel="Month", ylabel="Monthly Flux Scaling")
+        g.figure.suptitle(f"{self.group_name} v3 Monthly Scaling", fontsize=16)
+        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_monthly_scaling.png")
+        plt.show()
+        plt.close()
 
     def run_gridding(self):
         self.get_source_QC_df()
         self.get_group_emi_df()
         self.get_input_raster_paths()
-        self.read_and_sum_source_rasters()
+        self.annual_mass_da = self.read_and_sum_source_rasters(
+            self.annual_raster_list, "year"
+        )
         self.QC_group_grid()
         self.annual_flux_da = self.calculate_flux(
             self.annual_mass_da, "year", "mass2flux"
         )
         self.QC_flux_emis()
-        self.plot_raster_data_difference()
+        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
+        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
+        self.annual_plot_flux_da = self.convert_flux_for_plotting(self.annual_flux_da)
+        self.plot_map_first_last_year_diff()
         self.plot_annual_raster_data()
         if self.monthly_source_count > 0:
             self.calculate_monthly_scaling()
-        self.write_tif_output(self.annual_flux_da, self.tif_flux_output_path)
-        self.write_tif_output(self.annual_mass_da, self.tif_kt_output_path)
+            self.write_tif_output(
+                self.scaled_monthly_flux_da, self.monthly_scale_output_path
+            )
+            self.plot_monthly_scaling()
+
+
+def run_whole_group(gch4i_name, g_info):
+    gridding_rows = g_info.mapping_df.query(f"gch4i_name == '{gch4i_name}'")
+    gridding_rows
+    for emi_proxy_data in tqdm(
+        gridding_rows.itertuples(index=False),
+        total=len(gridding_rows),
+        desc="gridding emi/proxy pairs",
+    ):
+        try:
+            epg = EmiProxyGridder(emi_proxy_data)
+            epg.run_gridding()
+            print(epg.base_name, epg.status)
+        except Exception as e:
+            print(
+                f"Error gridding {emi_proxy_data.emi_id} and "
+                f"{emi_proxy_data.proxy_id}: {e}"
+            )
+            continue
+
+    g_info.get_ready_groups()
+    g_info.display_group_emi_proxy_statuses(gch4i_name)
+
+    if g_info.group_ready_status.loc[gch4i_name].iloc[0]:
+        gridding_group_data = g_info.ready_groups_df.query(
+            f"gch4i_name == '{gch4i_name}'"
+        )
+        gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
+        gg.run_gridding()
+    else:
+        print("one or more emi/proxy pairs are not ready for gridding.")
