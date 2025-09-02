@@ -1,10 +1,10 @@
 """
 Name:                   task_stat_comb_emi.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-10-27
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of stationary combustion emissions
 Input Files:            - {ghgi_data_dir_path}/1A_stationary_combustion/
-                            Stationary non-CO2 InvDB State Breakout_2022.xlsx
+                            Stationary non-CO2 InvDB State Breakout_2023.xlsx
 Output Files:           - {emi_data_dir_path}/
                             not_mapped_emi.csv
                             stat_comb_comm_emi.csv
@@ -26,9 +26,9 @@ import pandas as pd
 import ast
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
 )
@@ -58,7 +58,6 @@ def get_comb_stat_inv_data(in_path, src, params):
         pd.read_excel(
             in_path[0],
             sheet_name=params["arguments"][0],  # Sheet name
-            skiprows=params["arguments"][1],  # Skip rows
             index_col=None
         )
     )
@@ -82,6 +81,9 @@ def get_comb_stat_inv_data(in_path, src, params):
     # Query for Electricity Generation & speicific fuel type, if category
     if cat == "Electricity Generation":
         emi_df = emi_df.query('category == "Electricity Generation" and fuel1 == @fuel')
+    # Query for Residential & Biomass fuel type, if category
+    elif cat == "Residential" and fuel == "Biomass":
+        emi_df = emi_df.query('category == "Residential" and fuel1 == "Biomass"')
     # Query for identified category and fuel type
     else:
         emi_df = emi_df.query('category == @cat and fuel1 == @fuel')
@@ -127,9 +129,9 @@ source_name = "1A_stationary_combustion"
 source_path = "1A_stationary_combustion"  # Changed from combustion_stationary
 
 # Data Guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (ghch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -140,11 +142,11 @@ emi_parameters_dict = {}
 for emi_name, data in proxy_data.groupby("emi_id"):
     filenames = data.file_name.iloc[0].split(",")
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in filenames],
+        "input_paths": [v4_ghgi_data_dir_path / source_path / x for x in filenames],
         "source_list": [x.strip().casefold() for x in (data.Category + "_" + data.Fuel1)
                         .to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict

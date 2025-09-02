@@ -1,12 +1,12 @@
 """
 Name:                  Abandoned_Coal_Emissions
-Date Last Modified:    2024-09-19
+Date Last Modified:    2025-10-21
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Clean and standardized abandoned coal methane emissions data
 gch4i_name:             1B1a_abandoned_coal
-Input Files:           - gch4i_data_guide_v3.xlsx
-                       - {V3_DATA_PATH}/ghgi/1B1a_abandoned_coal/
-                            AbandonedCoalMines1990-2022_FRv1.xlsx
+Input Files:           - gch4i_data_guide_v4.xlsx
+                       - {V4_DATA_PATH}/ghgi/1B1a_abandoned_coal/
+                            AbandonedCoalMines1990-2023_FRv1.xlsx
 Output Files:          - {emi_data_dir_path}/abd_coal_emi.csv
 """
 
@@ -17,9 +17,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year,
 )
@@ -44,10 +44,7 @@ def read_emi_data(in_path, src):
         # read in the data
         pd.read_excel(
             in_path,
-            sheet_name="InvDB",
-            skiprows=15,
-            # nrows=115,
-            # usecols="A:BA",
+            sheet_name="InvDB"
         )
         # name column names lower
         .rename(columns=lambda x: str(x).lower())
@@ -76,6 +73,8 @@ def read_emi_data(in_path, src):
         .apply(pd.to_numeric, errors="coerce")
         # # drop states that have all nan values
         .dropna(how="all")
+        # Fill missing with 0
+        .fillna(0)
         # reset the index state back to a column
         .reset_index()
         # make the table long by state/year
@@ -100,16 +99,16 @@ def read_emi_data(in_path, src):
 
 # Retrieve input data filepath from data guide sheet
 source_name = "1B1a_abandoned_coal"
-data_guide_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
-proxy_data = pd.read_excel(data_guide_path, sheet_name="emi_proxy_mapping").query(
+data_guide_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
+proxy_data = pd.read_excel(data_guide_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 emi_parameters_dict = {}
-for emi_name, data in proxy_data.groupby("emi"):
+for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_name / x for x in data.file_name],
-        "source_list": data.ghgi_group.to_list(),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv",
+        "input_paths": [v4_ghgi_data_dir_path / source_name / x for x in data.file_name],
+        "source_list": data.gch4i_source.to_list(),
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv",
     }
 
 # loop over input data files and process each using read_emi_data

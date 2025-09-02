@@ -1,10 +1,11 @@
 """
 Name:                  3F4 Field Burning Emissions
-Date Last Modified:    2025-01-21
+Date Last Modified:    2025-08-21
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Clean and standardized field burning emissions data
-Input Files:           - gch4i_data_guide_v3.xlsx
-                       - {V3_DATA_PATH}/ghgi/3F4_fbar/FBAR_90-22_State.xlsx.
+Input Files:           - gch4i_data_guide_v4.xlsx
+                       - {V4_DATA_PATH}/ghgi/3F4_fbar/
+                        Field Burning of Ag Residues_1990-2023_State.xlsx
 Output Files:          - {emi_data_dir_path}/barley_emi.csv
                                             /chickpeas_emi.csv
                                             /cotton_emi.csv
@@ -38,9 +39,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
 )
@@ -58,9 +59,9 @@ file. The parameters are used to create the pytask task for the emi.
 # gch4i_name to filter the data guide
 source_name = "3F4_fbar"
 # Data Guide Dictionary
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (gch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -69,10 +70,12 @@ emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
+        "input_path": v4_ghgi_data_dir_path / source_name / data.file_name.iloc[0],
         "source_list": data.gch4i_source.to_list(),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv",
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv",
     }
+
+emi_parameters_dict
 
 
 # %% Create Pytask Function and Loop
@@ -100,6 +103,7 @@ for _id, _kwargs in emi_parameters_dict.items():
 
         # Clean the source list
         source_list = [x.strip().casefold() for x in source_list]
+
         # Define years of interest
         year_list = [str(x) for x in list(range(min_year, max_year + 1))]
 
@@ -107,10 +111,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             # read in the data
             pd.read_excel(
                 input_path,
-                sheet_name="InvDB",
-                skiprows=15,
-                # nrows=115,
-                # usecols="A:BA",
+                sheet_name="InvDB"
             )
             # name column names lower
             .rename(columns=lambda x: str(x).lower())
@@ -121,7 +122,6 @@ for _id, _kwargs in emi_parameters_dict.items():
                 .fillna(df["subcategory2"])
                 .replace("", np.nan)
                 .fillna(df["subcategory1"])
-                .str.replace(" ", "_")
                 .str.lower()
             )
             .dropna(subset="ghgi_source")

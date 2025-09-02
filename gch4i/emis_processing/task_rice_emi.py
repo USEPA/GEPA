@@ -1,10 +1,11 @@
 """
 Name:                  3C Rice Cultivation Emissions
-Date Last Modified:    2025-01-21
+Date Last Modified:    2025-08-21
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Clean and standardized rice cultivation emissions data
-Input Files:           - gch4i_data_guide_v3.xlsx
-                       - {V3_DATA_PATH}/ghgi/3C_rice_cultivation/Rice_90-22_State.xlsx
+Input Files:           - gch4i_data_guide_v4.xlsx
+                       - {V4_DATA_PATH}/ghgi/3C_rice_cultivation/
+                        Rice Cultivation_1990-2023_State.xlsx
 Output Files:          - {emi_data_dir_path}/rice_cult_emi.csv
 """
 
@@ -16,9 +17,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year,
 )
@@ -36,9 +37,9 @@ file. The parameters are used to create the pytask task for the emi.
 # gch4i_name to filter the data guide
 source_name = "3C_rice_cultivation"
 # data guide directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # read and query for the source name (gch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -47,9 +48,9 @@ emi_parameters_dict = {}
 # loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_path": ghgi_data_dir_path / source_name / data.file_name.iloc[0],
+        "input_path": v4_ghgi_data_dir_path / source_name / data.file_name.iloc[0],
         "source_list": data.gch4i_source.to_list(),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv",
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv",
     }
 
 input_path, source_list, output_path = emi_parameters_dict["rice_cult_emi"].values()
@@ -86,7 +87,7 @@ for _id, _kwargs in emi_parameters_dict.items():
             pd.read_excel(
                 input_path,
                 sheet_name="InvDB",
-                skiprows=15,
+                #skiprows=15,
                 # nrows=115,
                 # usecols="A:BA",
             )

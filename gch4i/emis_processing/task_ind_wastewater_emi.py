@@ -1,12 +1,12 @@
 """
 Name:                   task_ind_wastewater_emi.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-08-21
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of industrial wastewater emissions to State, Year,
                             emissions format
 gch4i_name:             5D2_industrial_wastewater
 Input Files:            - {ghgi_data_dir_path}/5D2_industrial_wastewater/
-                            WW_State-level Estimates_90-22_27June2024.xlsx
+                            WWW_State-level Estimates_90-23_ER_v1_8Apr2025_epa.xlsx
 Output Files:           - {emi_data_dir_path}/
                             ww_brew_emi.csv
                             ww_ethanol_emi.csv
@@ -25,9 +25,9 @@ import pandas as pd
 import ast
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
 )
@@ -120,9 +120,9 @@ source_name = "5D2_industrial_wastewater"
 source_path = "5D2_industrial_wastewater"  # Changed from wastewater
 
 # Data Guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (ghch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -131,10 +131,10 @@ emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
+        "input_paths": [v4_ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory1.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict

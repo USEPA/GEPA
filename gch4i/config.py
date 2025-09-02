@@ -7,25 +7,50 @@ load_dotenv(find_dotenv(usecwd=True), override=True)
 # Set path to location of input data files (same directory where output files are saved)
 # Define your own path to the data directory in the .env file
 # Remove the environment variable
-v3_data = os.getenv("V3_DATA_PATH")
-V3_DATA_PATH = Path(v3_data)
+project_dir_path = os.getenv("PROJECT_DIR_PATH")
+PROJECT_DIR_PATH = Path(project_dir_path)
+V3_DATA_PATH = Path(PROJECT_DIR_PATH) / "ghgi_v3_working/v3_data"
+V4_DATA_PATH = Path(PROJECT_DIR_PATH) / "gch4i_v4/v4_data"
 
-figures_data_dir_path = V3_DATA_PATH / "figures"
-global_data_dir_path = V3_DATA_PATH / "global"
-ghgi_data_dir_path = V3_DATA_PATH / "ghgi"
-tmp_data_dir_path = V3_DATA_PATH / "tmp"
-emi_data_dir_path = V3_DATA_PATH / "emis"
-proxy_data_dir_path = V3_DATA_PATH / "proxy"
-sector_data_dir_path = V3_DATA_PATH / "sector"
-intermediate_data_dir_path = V3_DATA_PATH / "interim"
+# V3 Paths
+v3_figures_data_dir_path = V3_DATA_PATH / "figures"
+v3_global_data_dir_path = V3_DATA_PATH / "global"
+v3_ghgi_data_dir_path = V3_DATA_PATH / "ghgi"
+v3_tmp_data_dir_path = V3_DATA_PATH / "tmp"
+v3_emi_data_dir_path = V3_DATA_PATH / "emis"
 
-prelim_gridded_dir = V3_DATA_PATH / "gridded_data_prelim"
-final_gridded_dir = V3_DATA_PATH / "gridded_data_final"
+v3_proxy_data_dir_path = V3_DATA_PATH / "proxy"
+v3_sector_data_dir_path = V3_DATA_PATH / "sector"
+v3_intermediate_data_dir_path = V3_DATA_PATH / "interim"
 
-logging_dir = V3_DATA_PATH.parents[0] / "gridding_log_and_qc"
-gridded_output_dir = logging_dir / "gridded_output"
+v3_prelim_gridded_dir = V3_DATA_PATH / "gridded_data_prelim"
+v3_final_gridded_dir = V3_DATA_PATH / "gridded_data_final"
 
-status_db_path = logging_dir / "gridding_status.db"
+v3_logging_dir = V3_DATA_PATH.parents[0] / "gridding_log_and_qc"
+v3_gridded_output_dir = v3_logging_dir / "gridded_output"
+
+v3_status_db_path = v3_logging_dir / "gridding_status.db"
+
+# V4 Paths
+# v4_figures_data_dir_path = V4_DATA_PATH / "figures"
+v4_global_data_dir_path = V4_DATA_PATH / "global"
+v4_ghgi_data_dir_path = V4_DATA_PATH / "ghgi"
+v4_tmp_data_dir_path = V4_DATA_PATH / "tmp"
+v4_emi_data_dir_path = V4_DATA_PATH / "emis"
+
+v4_proxy_data_dir_path = V4_DATA_PATH / "proxy"
+# v4_sector_data_dir_path = V4_DATA_PATH / "sector"
+v4_open_data_dir_path = V4_DATA_PATH / "open_data"
+v4_proprietary_data_dir_path = V4_DATA_PATH / "proprietary_data"
+
+v4_intermediate_data_dir_path = V4_DATA_PATH / "interim"
+v4_prelim_gridded_dir = V4_DATA_PATH / "gridded_data_prelim"
+v4_final_gridded_dir = V4_DATA_PATH / "gridded_data_final"
+
+# v4_logging_dir = V4_DATA_PATH.parents[0] / "gridding_log_and_qc"
+# v4_gridded_output_dir = v4_logging_dir / "gridded_output"
+
+# v4_status_db_path = v4_logging_dir / "gridding_status.db"
 
 # this is used by the file task_download_census_geo.py to download specific census
 # geometry files
@@ -33,7 +58,7 @@ census_geometry_list = ["county", "state", "primaryroads"]
 
 # the years of the data processing.
 min_year = 2012
-max_year = 2022
+max_year = 2023
 years = range(min_year, max_year + 1)
 
 EQ_AREA_CRS = "ESRI:102003"
