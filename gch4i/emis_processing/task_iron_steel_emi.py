@@ -1,12 +1,12 @@
 """
 Name:                   task_iron_steel_emi.py
-Date Last Modified:     2025-02-13
+Date Last Modified:     2025-08-21
 Authors Name:           Chris Coxen
 Purpose:                Mapping of iron and steel emissions to State, Year, emissions
                         format
 gch4i_name:             2C1_iron_and_steel
 Input Files:            - {ghgi_data_dir_path}/2C1_iron_and_steel/
-                            State_Iron-Steel_1990-2022.xlsx
+                            State_Iron-Steel_1990-2023.xlsx
 Output Files:           - {emi_data_dir_path}/
                             iron_steel_emi.csv
 """
@@ -19,9 +19,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     min_year,
     max_year
 )
@@ -52,9 +52,7 @@ def get_iron_and_steel_inv_data(in_path, src):
     emi_df = pd.read_excel(
         in_path,
         sheet_name="InvDB",
-        skiprows=15,
-        nrows=457,
-        usecols="A:BA"
+        #usecols="A:BC"
         )
     # Specify years to keep
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
@@ -108,9 +106,9 @@ source_name = "2C1_iron_and_steel"
 source_path = "2C1_iron_and_steel"
 
 # Data Guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (ghch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -119,9 +117,9 @@ emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
+        "input_paths": [v4_ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Category.to_list()],
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict

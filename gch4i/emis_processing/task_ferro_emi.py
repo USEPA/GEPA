@@ -1,10 +1,10 @@
 """
 Name:                  2C2 Ferroalloy Emissions
-Date Last Modified:    2025-01-17
+Date Last Modified:    2025-08-21
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Clean and standardized abandoned ferroalloy emissions data
-Input Files:           - gch4i_data_guide_v3.xlsx
-                       - {V3_DATA_PATH}/ghgi/2C2_ferroalloy/State_Ferroalloys_1990-2022.
+Input Files:           - gch4i_data_guide_v4.xlsx
+                       - {V4_DATA_PATH}/ghgi/2C2_ferroalloy/State_Ferroalloys_1990-2023.
                         xlsx
 Output Files:          - {emi_data_dir_path}/ferro_emi.csv
 """
@@ -17,9 +17,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
 )
@@ -46,7 +46,7 @@ def read_emi_data(in_path, src):
         pd.read_excel(
             in_path,
             sheet_name="InvDB",
-            skiprows=15,
+            #skiprows=15,
             # nrows=115,
             # usecols="A:BA",
         )
@@ -70,9 +70,10 @@ def read_emi_data(in_path, src):
         # set the index to state
         .set_index("state_code")
         # covert "NO" string to numeric (will become np.nan)
+        .replace(0, pd.NA)
         .apply(pd.to_numeric, errors="coerce")
-        # # drop states that have all nan values
         .dropna(how="all")
+        .fillna(0)
         # reset the index state back to a column
         .reset_index()
         # make the table long by state/year
@@ -106,9 +107,9 @@ file. The parameters are used to create the pytask task for the emi.
 # gch4i_name to filter the data guide
 source_name = "2C2_ferroalloy"
 # data guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # read and query for the source name (gch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -117,9 +118,9 @@ emi_parameters_dict = {}
 # loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [list(ghgi_data_dir_path.rglob(x))[0] for x in data.file_name],
+        "input_paths": [list(v4_ghgi_data_dir_path.rglob(x))[0] for x in data.file_name],
         "source_list": data.gch4i_source.to_list(),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv",
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv",
     }
 
 # %% Create Pytask Function and Loop

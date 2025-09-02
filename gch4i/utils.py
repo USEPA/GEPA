@@ -36,7 +36,9 @@ from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,
-    global_data_dir_path,
+    V4_DATA_PATH,
+    v4_global_data_dir_path,
+    #global_data_dir_path,
     load_road_globals,
     max_year,
     min_year,

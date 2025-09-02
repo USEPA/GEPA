@@ -1,12 +1,12 @@
 """
 Name:                   task_mobile_comb_emi.py
-Date Last Modified:     2025-07-23
+Date Last Modified:     2025-08-27
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of mobile combustion emissions
 gch4i_name:             1A_mobile_combustion
 Input Files:            - {ghgi_data_dir_path}/1A_mobile_combustion/
-                            Mobile non-CO2 InvDB State Breakout_2022.xlsx
-                            Mobile Dataframe 11.24.2023_proxied_DC fixed.xlsx
+                            Mobile non-CO2 InvDB State Breakout_2023.xlsx
+                            SIT Mobile Dataframe_10.01.2024-Review.xlsx
 Output Files:           - {emi_data_dir_path}/
                             emi_passenger_cars.csv
                             emi_light.csv
@@ -39,9 +39,9 @@ import pandas as pd
 import ast
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
 )
@@ -50,9 +50,9 @@ from gch4i.utils import tg_to_kt
 
 
 # Create function to grab the parameters from the excel file
-def read_excel_params(file_path, subsector, emission, sheet='emi_proxy_mapping'):
+def read_excel_params(file_path, subsector, emission, sheet='emi_data_guide'):
     """
-    Reads add_param column from gch4i_data_guide_v3.xlsx and returns a dictionary.
+    Reads add_param column from gch4i_data_guide_v4.xlsx and returns a dictionary.
     """
     # Read in Excel File
     df = (pd.read_excel(file_path, sheet_name=sheet)
@@ -109,7 +109,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
                 'heavy-duty vehicles', 'diesel highway']):
         # Directly overwrite the params dictionary
         params = read_excel_params(proxy_file_path, source_name, src,
-                                   sheet='emi_proxy_mapping')
+                                   sheet='emi_data_guide')
     else:
         params = params
 
@@ -118,7 +118,6 @@ def get_comb_mobile_inv_data(in_path, src, params):
         pd.read_excel(
             in_path[0],
             sheet_name=params["arguments"][0],  # Sheet name
-            skiprows=params["arguments"][1],    # Skip rows
             index_col=None
         )
     )
@@ -175,7 +174,7 @@ def get_comb_mobile_inv_data(in_path, src, params):
     emi_df2 = (
         pd.read_excel(
             in_path[1],
-            sheet_name=params["arguments"][2],  # Sheet name
+            sheet_name=params["arguments"][1],  # Sheet name
             index_col=None
         )
     )
@@ -254,9 +253,9 @@ source_name = "1A_mobile_combustion"
 source_path = "1A_mobile_combustion"
 
 # Data Guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (ghch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -267,10 +266,10 @@ emi_parameters_dict = {}
 for emi_name, data in proxy_data.groupby("emi_id"):
     filenames = data.file_name.iloc[0].split(",")
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in filenames],
+        "input_paths": [v4_ghgi_data_dir_path / source_path / x for x in filenames],
         "source_list": [x.strip().casefold() for x in data.Subcategory2.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict
