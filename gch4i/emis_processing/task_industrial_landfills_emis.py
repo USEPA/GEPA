@@ -1,6 +1,6 @@
 """
 Name:                   task_industrial_landfills_emis.py
-Date Last Modified:     2025-06-09
+Date Last Modified:     2025-09-07
 Authors Name:           H. Lohman (RTI International)
 Purpose:                Mapping of industrial landfill emissions to State, Year, emissions
                         format
@@ -33,12 +33,11 @@ from geopy.geocoders import Nominatim
 import duckdb
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    proxy_data_dir_path,
-    global_data_dir_path,
-    ghgi_data_dir_path,
-    emi_data_dir_path,
-    sector_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_global_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_emi_data_dir_path,
+    v4_open_data_dir_path,
     max_year,
     min_year,
     years,
@@ -47,34 +46,41 @@ from gch4i.config import (
 from gch4i.utils import name_formatter
 
 mt_to_kt = 0.001  # conversion factor, metric tonnes to kilotonnes
-mmtg_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
+mmt_to_kt = 1000  # conversion factor, million metric tonnes to kilotonnes
 
+# Input file paths
+inventory_workbook_path: Path = v4_ghgi_data_dir_path / "5A_industrial_landfills/State_IND_LF_1990-2023_LA.xlsx"
+state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
+subpart_tt_emissions_path: Path = v4_open_data_dir_path / "ghgrp/GHGRP_SubpartTT_Emissions_2010-2023.csv"
+ghgrp_facility_info_path: Path = v4_open_data_dir_path / "ghgrp/GHGRP_FacilityInfo_2010-2023.csv"
+food_manufacturers_processors_path: Path = v4_open_data_dir_path / "landfills/FoodManufacturersandProcessors.xlsx"
+nonreporting_pp_proxy_path: Path = v4_proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet"
 
 # %%
 @mark.persist
 @task(id="industrial_landfills_emi")
 def task_get_industrial_landfills_pulp_paper_inv_data(
-    inventory_workbook_path: Path = ghgi_data_dir_path / "5A_industrial_landfills/State_IND_LF_1990-2022_LA.xlsx",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
-    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
-    nonreporting_pp_proxy_path: Path = proxy_data_dir_path / "ind_landfills_pp_nr_proxy.parquet",
-    reporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
-    nonreporting_pp_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_pp_nr_emi.csv",
+    inventory_workbook_path,
+    state_path,
+    subpart_tt_emissions_path,
+    ghgrp_facility_info_path,
+    nonreporting_pp_proxy_path,
+    reporting_pp_emis_output_path: Annotated[Path, Product] = v4_emi_data_dir_path / "ind_landfills_pp_r_emi.csv",
+    nonreporting_pp_emis_output_path: Annotated[Path, Product] = v4_emi_data_dir_path / "ind_landfills_pp_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
     # Get state vectors and state_code for use with inventory and proxy data
     state_gdf = (
-    gpd.read_file(state_path)
-    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-    .rename(columns=str.lower)
-    .rename(columns={"stusps": "state_code", "name": "state_name"})
-    .astype({"statefp": int})
-    # get only lower 48 + DC
-    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-    .to_crs(4326)
-    )
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
+        )
 
     # State-level inventory emissions for pulp and paper (reporting + non-reporting)
     # Assume the emissions in the file are the sum of reporting and non-reporting facilities
@@ -84,7 +90,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
             sheet_name="P&P State Emissions",
             skiprows=5,
             nrows=60,
-            usecols="B:AI",
+            usecols="B:AJ",
         )
         # name column names lower
         .rename(columns=lambda x: str(x).lower())
@@ -99,7 +105,7 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_mmt")
-        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmtg_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmt_to_kt)
         .drop(columns=["ch4_mmt"])
         # make the columns types correct
         .astype({"year": int, "ch4_kt": float})
@@ -112,49 +118,37 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
     # National-level inventory emissions for pulp and paper (reporting + non-reporting)
     national_inventory_pp_emi_df = state_inventory_pp_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # Get reporting facility emissions from Subpart TT
-    reporting_pp_emissions = (
+    # Reporting facility emissions and locations from Subpart TT
+    # Query pulp & paper NAICS codes
+    subpart_tt_pp_emi_df = (
         pd.read_csv(
             subpart_tt_emissions_path,
-        )
-        .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
-        .astype({"facility_id": int, "year": int})
-        .query("ghg_name == 'METHANE'")
-        .drop(columns="ghg_name")
-        .query("year.between(@min_year, @max_year)")
-        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
-        .drop(columns=["ch4_t"])
-        .reset_index(drop=True)
-    )
-    # Reporting facility locations from GHGRP
-    reporting_pp_locations = (
-        pd.read_csv(
-            ghgrp_facility_info_path,
             usecols=("facility_id",
+                     "reporting_year",
+                     "facility_name",
+                     "ghg_quantity",
+                     "ghg_name",
                      "latitude",
                      "longitude",
                      "state",
                      "city",
                      "zip",
-                     "primary_naics"))
-        .astype({"facility_id": int, "primary_naics": str})
+                     "naics_code")
+        )
         .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
-        .drop_duplicates(subset=['facility_id'], keep='last')
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
+        .astype({"facility_id": int, "year": int, "naics_code": str})
+        .query("ghg_name == 'METHANE'")
+        .query("year.between(@min_year, @max_year)")
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
+        .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .query("state_code.isin(@state_gdf['state_code'])")
-        .reset_index(drop=True)
-    )
-    # Merge the emissions with the facility locations
-    # Query pulp & paper NAICS codes
-    subpart_tt_pp_emi_df = ((
-        reporting_pp_emissions)
-        .merge(reporting_pp_locations, how="left", on="facility_id")
         .query("naics_code.str.startswith('321') | naics_code.str.startswith('322')" )
-        .drop(columns=["naics_code"])
+        .drop(columns=["ghg_name", "ch4_t"])
         .dropna(subset=["latitude", "longitude"])
         .reset_index(drop=True)
     )
+
     # State-level Subpart TT emissions for pulp and paper (reporting)
     state_subpart_tt_pp_emi_df = subpart_tt_pp_emi_df.groupby(['year', 'state_code']).sum().reset_index()
     # list of unique states in subpart tt
@@ -197,26 +191,26 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
                 reporting_state_emi = state_inventory_pp_istate.query('year == @iyear').assign(r_ch4_kt=lambda df: df["ch4_kt"]).drop(columns=["ch4_kt"])
             corrected_pp_emi_df = pd.concat([corrected_pp_emi_df, reporting_state_emi])
     corrected_pp_emi_df = (corrected_pp_emi_df
-                                .merge(state_inventory_pp_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
-                                .rename(columns={"ch4_kt": "tot_ch4_kt"})
-                                .fillna(0)
-                                .assign(nr_ch4_kt=lambda df: df['tot_ch4_kt']-df['r_ch4_kt'])
-                                .replace(0, np.nan)                                   
-                                )
+                           .merge(state_inventory_pp_emi_df, left_on=['state_code', 'year'], right_on=['state_code', 'year'], how='outer')
+                           .rename(columns={"ch4_kt": "tot_ch4_kt"})
+                           .fillna(0)
+                           .assign(nr_ch4_kt=lambda df: df['tot_ch4_kt']-df['r_ch4_kt'])
+                           .replace(0, np.nan)                                   
+                           )
     
     reporting_pp_emi_df = (corrected_pp_emi_df
-                                   .drop(columns=["tot_ch4_kt", "nr_ch4_kt"])
-                                   .rename(columns={"r_ch4_kt": "ghgi_ch4_kt"})
-                                   .dropna()
-                                   .reset_index(drop=True)
-                                   )
+                           .drop(columns=["tot_ch4_kt", "nr_ch4_kt"])
+                           .rename(columns={"r_ch4_kt": "ghgi_ch4_kt"})
+                           .dropna()
+                           .reset_index(drop=True)
+                           )
 
     nonreporting_pp_emi_df = (corrected_pp_emi_df
-                                   .drop(columns=["tot_ch4_kt", "r_ch4_kt"])
-                                   .rename(columns={"nr_ch4_kt": "ghgi_ch4_kt"})
-                                   .dropna()
-                                   .reset_index(drop=True)
-                                   )
+                              .drop(columns=["tot_ch4_kt", "r_ch4_kt"])
+                              .rename(columns={"nr_ch4_kt": "ghgi_ch4_kt"})
+                              .dropna()
+                              .reset_index(drop=True)
+                              )
 
     reporting_pp_emi_df.to_csv(reporting_pp_emis_output_path, index=False)
     nonreporting_pp_emi_df.to_csv(nonreporting_pp_emis_output_path, index=False)
@@ -225,27 +219,27 @@ def task_get_industrial_landfills_pulp_paper_inv_data(
 
 
 def task_get_industrial_landfills_food_beverage_inv_data(
-    inventory_workbook_path: Path = ghgi_data_dir_path / "5A_industrial_landfills/State_IND_LF_1990-2022_LA.xlsx",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    subpart_tt_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartTT_Emissions.csv",
-    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
-    food_manufacturers_processors_path = V3_DATA_PATH / "sector/landfills/Food Manufacturers and Processors.xlsx",
-    reporting_fb_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_r_emi.csv",
-    nonreporting_fb_emis_output_path: Annotated[Path, Product] = emi_data_dir_path / "ind_landfills_fb_nr_emi.csv",
+    inventory_workbook_path,
+    state_path,
+    subpart_tt_emissions_path,
+    ghgrp_facility_info_path,
+    food_manufacturers_processors_path,
+    reporting_fb_emis_output_path: Annotated[Path, Product] = v4_emi_data_dir_path / "ind_landfills_fb_r_emi.csv",
+    nonreporting_fb_emis_output_path: Annotated[Path, Product] = v4_emi_data_dir_path / "ind_landfills_fb_nr_emi.csv",
 ) -> None:
     """read in the ghgi_ch4_kt values for each state"""
 
     # Get state vectors and state_code for use with inventory and proxy data
     state_gdf = (
-    gpd.read_file(state_path)
-    .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
-    .rename(columns=str.lower)
-    .rename(columns={"stusps": "state_code", "name": "state_name"})
-    .astype({"statefp": int})
-    # get only lower 48 + DC
-    .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
-    .to_crs(4326)
-    )
+        gpd.read_file(state_path)
+        .loc[:, ["NAME", "STATEFP", "STUSPS", "geometry"]]
+        .rename(columns=str.lower)
+        .rename(columns={"stusps": "state_code", "name": "state_name"})
+        .astype({"statefp": int})
+        # get only lower 48 + DC
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
+        .to_crs(4326)
+        )
         
     # State-level inventory emissions for food and beverage (reporting + non-reporting)
     state_inventory_fb_emi_df = (
@@ -253,8 +247,8 @@ def task_get_industrial_landfills_food_beverage_inv_data(
             inventory_workbook_path,
             sheet_name="F&B State Emissions",
             skiprows=5,
-            nrows=927,
-            usecols="B:AI",
+            nrows=60,
+            usecols="B:AJ",
         )
         # name column names lower
         .rename(columns=lambda x: str(x).lower())
@@ -269,7 +263,7 @@ def task_get_industrial_landfills_food_beverage_inv_data(
         .reset_index()
         # make the table long by state/year
         .melt(id_vars="state_code", var_name="year", value_name="ch4_mmt")
-        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmtg_to_kt)
+        .assign(ch4_kt=lambda df: df["ch4_mmt"] * mmt_to_kt)
         .drop(columns=["ch4_mmt"])
         # make the columns types correct
         .astype({"year": int, "ch4_kt": float})
@@ -282,48 +276,33 @@ def task_get_industrial_landfills_food_beverage_inv_data(
     # National-level inventory emissions for food and beverage (reporting + non-reporting)
     national_inventory_fb_emi_df = state_inventory_fb_emi_df.drop(columns=["state_code"]).groupby(['year']).sum().reset_index()
 
-    # Reporting facility emissions from Subpart TT
-    reporting_fb_emissions = (
+    # Reporting facility emissions and locations from Subpart TT
+    # Query food & beverage NAICS codes
+    subpart_tt_fb_emi_df = (
         pd.read_csv(
             subpart_tt_emissions_path,
-        )
-        .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
-        .astype({"facility_id": int, "year": int})
-        .query("ghg_name == 'METHANE'")
-        .drop(columns="ghg_name")
-        .query("year.between(@min_year, @max_year)")
-        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
-        .drop(columns=["ch4_t"])
-        .reset_index(drop=True)
-    )
-    # Reporting facility locations from Subpart TT
-    reporting_fb_locations = (
-        pd.read_csv(
-            ghgrp_facility_info_path,
             usecols=("facility_id",
+                     "reporting_year",
+                     "facility_name",
+                     "ghg_quantity",
+                     "ghg_name",
                      "latitude",
                      "longitude",
                      "state",
                      "city",
                      "zip",
-                     "primary_naics"))
-        .dropna(subset=["latitude", "longitude", "primary_naics"])
-        .astype({"facility_id": int, "primary_naics": int})
+                     "naics_code")
+        )
         .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
-        .drop_duplicates(subset=['facility_id'], keep='last')
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
+        .astype({"facility_id": int, "year": int, "naics_code": int})
+        .query("ghg_name == 'METHANE'")
+        .query("year.between(@min_year, @max_year)")
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
+        .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .query("state_code.isin(@state_gdf['state_code'])")
-        .reset_index(drop=True)
-    )
-
-    # Merge the emissions with the facility locations
-    # Query food & beverage NAICS codes
-    subpart_tt_fb_emi_df = ((
-        reporting_fb_emissions)
-        .merge(reporting_fb_locations, how="left", on="facility_id")
         .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
-        .drop(columns=["naics_code"])
+        .drop(columns=["ghg_name", "ch4_t"])
         .dropna(subset=["latitude", "longitude"])
         .reset_index(drop=True)
     )
@@ -337,24 +316,39 @@ def task_get_industrial_landfills_food_beverage_inv_data(
 
     # list of food and beverage facilities
     food_beverage_facilities_df = (
-    pd.read_excel(
-        food_manufacturers_processors_path,
-        sheet_name='Data',
-        nrows=59915,
-        usecols="A:K",
-    )
-    .rename(columns=lambda x: str(x).lower())
-    .rename(columns={"name": "facility_name", "state": "state_code", "uniqueid": "facility_id"})
-    .drop(columns=["naics_code_description"])
-    # filter for relevant NAICS codes (based on GHGI)
-    .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
-    .drop(columns=["naics_code"])
-    # remove facilities that do not report excess food waste
-    .dropna(subset=['excessfood_tonyear_lowest'])
-    # get only lower 48 + DC
-    # .query("state_code.isin(@state_info_df['state_code'])")
-    .reset_index(drop=True)
-    )
+        pd.read_excel(
+            food_manufacturers_processors_path,
+            sheet_name='Data',
+            nrows=43739,
+            usecols="A:L",
+            )
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"name": "facility_name",
+                         "state": "state_code",
+                        "zip code": "zip_code",
+                        "uniqueid": "facility_id",
+                        "excess food estimate, low (tons per year)": "excessfood_tonyear_lowest",
+                        "excess food estimate, high (tons per year)": "excessfood_tonyear_highest",})
+        .drop(columns=["naics_code_description"])
+        .astype({"naics_code": int})
+        # filter for relevant NAICS codes (based on GHGI)
+        .query("naics_code == 311612|naics_code == 311421|naics_code == 311513|naics_code == 312140|naics_code == 311611|naics_code == 311615|naics_code == 311225|naics_code == 311613|naics_code == 311710|naics_code == 311221|naics_code == 311224|naics_code == 311314|naics_code == 311313") 
+        .drop(columns=["naics_code"])
+        # remove facilities that do not report excess food waste
+        .dropna(subset=['excessfood_tonyear_lowest'])
+        # get only lower 48 + DC
+        .query("state_code.isin(@state_gdf['state_code'])")
+        .fillna({'address': '', 'city': '', 'county': ''})
+        # create full address for location matching
+        .assign(full_address=lambda df: df["address"] + ' ' + df["city"] + ' ' + df["county"] + ' ' + df["state_code"] + ' ' + df["zip_code"].astype(str))
+        # create partial address for location matching
+        .assign(partial_address=lambda df: df["city"] + ' ' + df["county"] + ' ' + df["state_code"] + ' ' + df["zip_code"].astype(str))
+        # calculate the average food waste (tonnes) at each facility
+        .assign(avg_waste_t=lambda df: (df["excessfood_tonyear_lowest"] + df["excessfood_tonyear_highest"]) * 0.5)
+        .assign(lat=0)
+        .assign(lon=0)
+        .reset_index(drop=True)
+        )
 
     # try to match facilities to GHGRP based on county and city
     food_beverage_facilities_locs = food_beverage_facilities_df.copy()

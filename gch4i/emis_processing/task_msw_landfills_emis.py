@@ -1,12 +1,12 @@
 """
 Name:                   task_msw_landfills_emis.py
-Date Last Modified:     2025-06-09
+Date Last Modified:     2025-09-08
 Authors Name:           H. Lohman, A. Burnette (RTI International)
 Purpose:                Mapping of MSW landfill emissions to State, Year, emissions
                         format
 gch4i_name:             5A_msw_landfills
 Input Files:            - {ghgi_data_dir_path}/{5A_msw_landfills}/
-                            State_MSW_LF_1990-2022_LA.xlsx
+                            State_MSW_LF_1990-2023_LA.xlsx
 Output Files:           - {emi_data_dir_path}/
                             msw_landfills_r_emi.csv
                             msw_landfills_nr_emi.csv
@@ -23,10 +23,10 @@ import pandas as pd
 import ast
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    global_data_dir_path,
-    ghgi_data_dir_path,
+    project_dir_path,
+    v4_emi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_ghgi_data_dir_path,
     max_year,
     min_year
     )
@@ -34,7 +34,7 @@ from gch4i.config import (
 # from gch4i.utils import tg_to_kt
 tg_to_kt = 1000
 
-state_path = Path(global_data_dir_path) / "tl_2020_us_state.zip"
+state_path = Path(v4_global_data_dir_path) / "tl_2020_us_state.zip"
 
 # %% Step 1. Create Function
 
@@ -72,8 +72,7 @@ def get_msw_landfills_inv_data(in_path, src, params):
     emi_df = pd.read_excel(
         in_path,
         sheet_name="InvDB",
-        skiprows=15,
-        nrows=58,
+        nrows=60,
         )
     # Specify years to keep
     year_list = [str(x) for x in list(range(min_year, max_year + 1))]
@@ -161,18 +160,18 @@ def get_msw_landfills_inv_data(in_path, src, params):
 This section initializes the parameters for the task and stores them in the
 emi_parameters_dict.
 
-The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v3.xlsx
+The parameters are read from the emi_proxy_mapping sheet of the gch4i_data_guide_v4.xlsx
 file. The parameters are used to create the pytask task for the emi.
 """
-# gch4i_name in gch4i_data_guide_v3.xlsx, emi_proxy_mapping sheet
+# gch4i_name in gch4i_data_guide_v4.xlsx, emi_proxy_mapping sheet
 source_name = "5A_msw_landfills"
 # Directory name for GHGI data
 source_path = "5A_msw_landfills"
 
 # Data Guide Directory
-proxy_file_path = V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+proxy_file_path = Path(project_dir_path) / "gch4i_v4/gch4i_data_guide_v4.xlsx"
 # Read and query for the source name (ghch4i_name)
-proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_proxy_mapping").query(
+proxy_data = pd.read_excel(proxy_file_path, sheet_name="emi_data_guide").query(
     f"gch4i_name == '{source_name}'"
 )
 
@@ -181,10 +180,10 @@ emi_parameters_dict = {}
 # Loop through the proxy data and store the parameters in the emi_parameters_dict
 for emi_name, data in proxy_data.groupby("emi_id"):
     emi_parameters_dict[emi_name] = {
-        "input_paths": [ghgi_data_dir_path / source_path / x for x in data.file_name],
+        "input_paths": [v4_ghgi_data_dir_path / source_path / x for x in data.file_name],
         "source_list": [x.strip().casefold() for x in data.Subcategory1.to_list()],
         "parameters": ast.literal_eval(data.add_params.iloc[0]),
-        "output_path": emi_data_dir_path / f"{emi_name}.csv"
+        "output_path": v4_emi_data_dir_path / f"{emi_name}.csv"
     }
 
 emi_parameters_dict
@@ -222,3 +221,5 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)
+
+# %%

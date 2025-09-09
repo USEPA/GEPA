@@ -1,6 +1,6 @@
 """
 Name:                   task_msw_landfills_proxy.py
-Date Last Modified:     2025-06-09
+Date Last Modified:     2025-09-09
 Authors Name:           H. Lohman (RTI International)
 Purpose:                Mapping of municipal solid waste (MSW) landfills reporting and
                         non-reporting proxy emissions
@@ -27,11 +27,10 @@ from geopy.geocoders import Nominatim
 import duckdb
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    emi_data_dir_path,
-    proxy_data_dir_path,
-    global_data_dir_path,
-    sector_data_dir_path,
+    v4_emi_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
     max_year,
     min_year,
 )
@@ -43,14 +42,22 @@ year_range = [*range(min_year, max_year + 1, 1)]  # List of emission years
 year_range_str = [str(i) for i in year_range]
 num_years = len(year_range)
 
+# Input file paths
+state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
+ghgrp_facility_info_path: Path = v4_open_data_dir_path / "ghgrp/GHGRP_FacilityInfo_2010-2023.csv"
+subpart_hh_emissions_path: Path = v4_open_data_dir_path / "ghgrp/GHGRP_SubpartHH_Emissions_2010-2023.csv"
+frs_facility_path: Path = v4_global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
+nonreporting_facility_path: Path = v4_open_data_dir_path/"landfills/Non-Reporting_LF_DB_2020_1.12.2021.xlsx"
+
+
 # %%
 @mark.persist
 @task(id="msw_landfills_proxy")
 def task_get_reporting_msw_landfills_proxy_data(
-    subpart_hh_emissions_path: Path = sector_data_dir_path / "landfills/GHGRP_SubpartHH_Emissions.csv",
-    ghgrp_facility_info_path: Path = sector_data_dir_path / "landfills/GHGRP_Emitter_Facility_Information.csv",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    reporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "msw_landfills_r_proxy.parquet",
+    subpart_hh_emissions_path,
+    ghgrp_facility_info_path,
+    state_path,
+    reporting_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "msw_landfills_r_proxy.parquet",
 ):
     """
     Relative emissions and location information for reporting facilities are taken from 
@@ -69,42 +76,29 @@ def task_get_reporting_msw_landfills_proxy_data(
     )
 
     # Reporting facility emissions from Subpart HH
-    reporting_hh_emissions = (
+    reporting_facility_df = (
         pd.read_csv(
             subpart_hh_emissions_path,
-        )
-        .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t"})
-        .astype({"facility_id": int, "year": int})
-        .query("ghg_name == 'METHANE'")
-        .drop(columns="ghg_name")
-        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
-        .drop(columns=["ch4_t"])
-        .reset_index(drop=True)
-    )
-    # Reporting facility locations from GHGRP
-    ghgrp_locations = (
-        pd.read_csv(
-            ghgrp_facility_info_path,
             usecols=("facility_id",
+                     "reporting_year",
+                     "facility_name",
+                     "ghg_quantity",
+                     "ghg_name",
                      "latitude",
                      "longitude",
                      "state",
                      "city",
                      "zip",
-                     "primary_naics"))
-        .astype({"facility_id": int, "primary_naics": str})
+                     "naics_code")
+        )
         .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"state": "state_code", "primary_naics": "naics_code"})
-        .drop_duplicates(subset=['facility_id'], keep='last')
+        .rename(columns={"reporting_year": "year", "ghg_quantity": "ch4_t", "state": "state_code"})
+        .astype({"facility_id": int, "year": int, "naics_code": int})
+        .query("ghg_name == 'METHANE'")
+        .assign(ch4_kt=lambda df: df["ch4_t"] * mt_to_kt)
+        .drop_duplicates(subset=['facility_id', 'year'], keep='last')
         .query("state_code.isin(@state_gdf['state_code'])")
-        .reset_index(drop=True)
-    )
-
-    # Merge the emissions with the facility locations
-    reporting_facility_df = ((
-        reporting_hh_emissions)
-        .merge(ghgrp_locations, how="left", on="facility_id")
+        .drop(columns=["ghg_name", "ch4_t"])
         .dropna(subset=["latitude", "longitude"])
         .reset_index(drop=True)
     )
@@ -131,13 +125,12 @@ def task_get_reporting_msw_landfills_proxy_data(
 
 
 def get_nonreporting_msw_landfills_proxy_data(
-    nonreporting_facility_path: Path = V3_DATA_PATH / "sector/landfills/Non-Reporting_LF_DB_2020_1.12.2021.xlsx",
-    frs_naics_path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
-    frs_facility_path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
+    nonreporting_facility_path,
+    frs_facility_path,
     # the NAICS code pulled from the v2 notebook for facilities in the FRS data
     MSW_FRS_NAICS_CODE = 562219,
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    nonreporting_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "msw_landfills_nr_proxy.parquet",
+    state_path,
+    nonreporting_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "msw_landfills_nr_proxy.parquet",
     ):
 
     # Non-reporting facilities from LMOP and WBJ
@@ -177,21 +170,23 @@ def get_nonreporting_msw_landfills_proxy_data(
     # Read in FRS data to get location information for landfills with missing location information 
     # This comes from the Facility Registration system, the original file (NATIONAL_SINGLE.csv is > 1.5 Gb)
 
+    # Read in FRS data to get location information for landfills with missing location 
+    # information. FRS facilities with NAICS code: 562219.
     FRS_facility_locs = (
-        duckdb.execute(
-            (
-                "SELECT frs_main.primary_name as name, frs_main.location_address as location_address, frs_main.city_name as city_name, frs_main.state_code as state_code, frs_main.accuracy_value as accuracy_value, frs_main.latitude83 as latitude, frs_main.longitude83 as longitude "
-                f"FROM (SELECT registry_id, primary_name, location_address, city_name, state_code, accuracy_value, latitude83, longitude83 FROM '{frs_facility_path}') as frs_main "
-                f"JOIN (SELECT registry_id, naics_code FROM '{frs_naics_path}') AS frs_naics "
-                "ON frs_main.registry_id = frs_naics.registry_id "
-                f"WHERE naics_code == {MSW_FRS_NAICS_CODE}"
-            )
-        )
-        .df()
+        pd.read_csv(
+            frs_facility_path,
+            usecols=("REGISTRY_ID", "PRIMARY_NAME", "LOCATION_ADDRESS", "CITY_NAME",
+                     "STATE_CODE", "ACCURACY_VALUE", "NAICS_CODES", "LATITUDE83", "LONGITUDE83"))
+        .rename(columns=lambda x: str(x).lower())
+        .rename(columns={"primary_name": "name", "naics_codes": "naics_code", "latitude83": "latitude", "longitude83": "longitude"})
+        .dropna(subset=["naics_code"])
+        .astype({"naics_code": str})
         .assign(formatted_fac_name=lambda df: name_formatter(df["name"]), source="frs")
+        .query('latitude > 0')
+        .query("naics_code.str.startswith('562219')")
+        .reset_index(drop=True)
     )
     FRS_facility_locs['city_name'] = FRS_facility_locs['city_name'].replace('NO LOCALITY NAME TO MIGRATE FROM 2002 NEI V3', 'NaN')
-    FRS_facility_locs.head()
 
     # Loop through the non-reporting landfills that do not have locations to try to find
     # matches in the FRS dataset.
@@ -375,7 +370,7 @@ def get_nonreporting_msw_landfills_proxy_data(
     nonreporting_facility_all_years_df = nonreporting_facility_all_years_df.rename(columns={"NR ID":"facility_id", "Name": "facility_name", "State": "state_code", "WIP_MT": "wip_mt", "Year": "year"})
 
     nonreporting_facility_all_years_df['rel_emi'] = nonreporting_facility_all_years_df.groupby(["state_code", "year"])['wip_mt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)
-    nonreporting_facility_all_years_df = nonreporting_facility_all_years_df.drop(columns='wip_mt')
+    nonreporting_facility_all_years_df = nonreporting_facility_all_years_df.drop(columns='wip_mt').reset_index(drop=True)
 
     nonreporting_facility_gdf = (
     gpd.GeoDataFrame(
@@ -402,11 +397,11 @@ def get_nonreporting_msw_landfills_proxy_data(
 # reporting emissions to these locations, otherwise assign the emissions uniformly 
 # across the state of RI.
 def task_add_missing_landfills_proxy_data(
-        state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-        r_emi_path: Annotated[Path, Product] = emi_data_dir_path / "msw_landfills_r_emi.csv",
-        r_proxy_path: Annotated[Path, Product] = proxy_data_dir_path / "msw_landfills_r_proxy.parquet",
-        nr_emi_path: Annotated[Path, Product] = emi_data_dir_path / "msw_landfills_nr_emi.csv",
-        nr_proxy_path: Annotated[Path, Product] = proxy_data_dir_path / "msw_landfills_nr_proxy.parquet",
+        state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+        r_emi_path: Annotated[Path, Product] = v4_emi_data_dir_path / "msw_landfills_r_emi.csv",
+        r_proxy_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "msw_landfills_r_proxy.parquet",
+        nr_emi_path: Annotated[Path, Product] = v4_emi_data_dir_path / "msw_landfills_nr_emi.csv",
+        nr_proxy_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "msw_landfills_nr_proxy.parquet",
         ):
 
     # Read in State Geo Data
@@ -474,3 +469,5 @@ def task_add_missing_landfills_proxy_data(
     nr_proxy_gdf_updated.to_parquet(nr_proxy_path)
 
     return None
+
+# %%
