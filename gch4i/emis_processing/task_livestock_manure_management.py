@@ -154,8 +154,8 @@ def get_livestock_manure_management_inv_data(in_path, src, params):
     # Read in data
     emi_df = pd.read_excel(
         in_path[0],
-        sheet_name=params["arguments"][0],  # Sheet Name
-        skiprows=params["arguments"][1],  # Skip Rows
+        sheet_name=params["arguments"][0],
+        skiprows=params["arguments"][1],
     )
 
     # Copy emi_df as emi_df_base
