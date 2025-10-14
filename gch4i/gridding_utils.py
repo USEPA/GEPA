@@ -52,19 +52,22 @@ from IPython.display import display
 from joblib import Parallel, delayed
 from matplotlib.colors import TwoSlopeNorm
 from rasterio.features import rasterize
-from tqdm.auto import tqdm
 from scipy.constants import Avogadro
+from tqdm.auto import tqdm
 
 from gch4i.config import (
     V3_DATA_PATH,
-    emi_data_dir_path,
-    global_data_dir_path,
-    prelim_gridded_dir,
-    logging_dir,
+    V4_DATA_PATH,
     max_year,
     min_year,
-    proxy_data_dir_path,
-    status_db_path,
+    v3_proxy_data_dir_path,
+    v4_emi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_logging_dir,
+    v4_prelim_gridded_dir,
+    v4_proxy_data_dir_path,
+    v4_status_db_path,
+    v4_tmp_data_dir_path,
     years,
 )
 from gch4i.utils import (
@@ -74,8 +77,6 @@ from gch4i.utils import (
     load_area_matrix,
     normalize,
 )
-
-logger = logging.getLogger(__name__)
 
 REL_EMI_COL_LIST = ["rel_emi", "ch4", "emis_kt", "ch4_flux"]
 
@@ -88,18 +89,19 @@ class GriddingInfo:
             V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
         )
         self.data_guide_path: Path = (
-            V3_DATA_PATH.parents[1] / "gch4i_data_guide_v3.xlsx"
+            V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
         )
-        self.emi_proxy_info_path: Path = (
-            V3_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv"
-        )
-        self.status_db_path: Path = logging_dir / "gridding_status.db"
+        # self.emi_proxy_info_path: Path = (
+        #     V4_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv"
+        # )
+        self.status_db_path: Path = v4_logging_dir / "gridding_status.db"
         self.guide_sheet = pd.read_excel(
             self.data_guide_path, sheet_name="emi_proxy_mapping"
         )
         self.v2_df = pd.read_csv(self.v2_data_path).rename(
             columns={"v3_gch4i_name": "gch4i_name"}
         )
+        self.get_status_table(save=False)
         self.get_mapping_df()
         self.get_ready_pairs()
         self.get_ready_groups()
@@ -125,7 +127,7 @@ class GriddingInfo:
                 total=n_unique_proxies,
             ):
                 proxy_name = data.proxy_id
-                proxy_paths = list(proxy_data_dir_path.glob(f"{proxy_name}.*"))
+                proxy_paths = list(v4_proxy_data_dir_path.glob(f"{proxy_name}.*"))
                 if proxy_paths:
                     proxy_path = proxy_paths[0]
                     if proxy_path.suffix == ".parquet":
@@ -153,7 +155,7 @@ class GriddingInfo:
                 total=n_unique_emis,
             ):
                 emi_name = data.emi_id
-                emi_paths = list(emi_data_dir_path.glob(f"{emi_name}.csv"))
+                emi_paths = list(v4_emi_data_dir_path.glob(f"{emi_name}.csv"))
                 if not emi_paths:
                     print(f"{emi_name} not found")
                     continue
@@ -184,16 +186,18 @@ class GriddingInfo:
                 .astype({"proxy_has_file": bool})
                 .fillna({"proxy_has_file": False})
             )
-            if self.save_file:
-                self.mapping_df.to_csv(self.emi_proxy_info_path, index=False)
+            # if self.save_file:
+            #     self.mapping_df.to_csv(self.emi_proxy_info_path, index=False)
         else:
-            if not self.emi_proxy_info_path.exists():
-                raise FileNotFoundError(
-                    "The emi_proxy_info_path file does not exist. "
-                    "Please run the update_mapping option to create it."
-                )
+            # if not self.emi_proxy_info_path.exists():
+            #     raise FileNotFoundError(
+            #         "The emi_proxy_info_path file does not exist. "
+            #         "Please run the update_mapping option to create it."
+            #     )
 
-            self.mapping_df = pd.read_csv(self.emi_proxy_info_path)
+            self.mapping_df = pd.read_excel(
+                self.data_guide_path, sheet_name="emi_proxy_mapping", engine="openpyxl"
+            )
 
     def make_has_cols_bool(self, in_df):
         has_cols = in_df.filter(like="has").columns
@@ -356,24 +360,17 @@ class GriddingInfo:
         if save:
             the_date = datetime.now().strftime("%Y-%m-%d")
             self.status_df.to_csv(
-                logging_dir / f"gridding_status_{the_date}.csv", index=False
+                v4_logging_dir / f"gridding_status_{the_date}.csv", index=False
             )
 
     def get_ready_pairs(self):
         # get the emi/proxy pairs that are ready for gridding
-        self.get_status_table()
-
         self.pairs_ready_for_gridding_df = self.mapping_df.drop_duplicates(
             subset=["gch4i_name", "emi_id", "proxy_id"]
         )
         self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df.merge(
             self.status_df, on=["gch4i_name", "emi_id", "proxy_id"], how="left"
-        )
-
-        # if SKIP:
-        #     self.pairs_ready_for_gridding_df = self.pairs_ready_for_gridding_df[
-        #         ~self.pairs_ready_for_gridding_df["status"].isin(SKIP_THESE)
-        #     ]
+        ).fillna({"status": "not started"})
 
     def display_group_emi_proxy_statuses(self, group_name):
         self.get_ready_pairs()
@@ -409,21 +406,26 @@ class GriddingInfo:
             .multiply(100)
             .round(2)
         )
-        print("groups not ready for gridding")
+        print("groups ready for gridding")
+        display(self.group_ready_status.query("status == True"))
+        print("groups *not* ready for gridding")
         display(self.group_ready_status.query("status == False"))
 
     def display_all_pair_statuses(self):
         # display the progress of the emi/proxy pairs
         print("percent of emi/proxy pairs by status")
         display(
-            self.status_df["status"].value_counts(normalize=True).multiply(100).round(2)
+            self.pairs_ready_for_gridding_df["status"]
+            .value_counts(normalize=True)
+            .multiply(100)
+            .round(2)
         )
 
 
 class BaseGridder(object):
     def __init__(self):
-        self.state_geo_path = global_data_dir_path / "tl_2020_us_state.zip"
-        self.county_geo_path = global_data_dir_path / "tl_2020_us_county.zip"
+        self.state_geo_path = v4_global_data_dir_path / "tl_2020_us_state.zip"
+        self.county_geo_path = v4_global_data_dir_path / "tl_2020_us_county.zip"
         self.gepa_profile = GEPA_spatial_profile()
         self.get_geo_filter()
 
@@ -485,53 +487,175 @@ class BaseGridder(object):
 
 class EmiProxyGridder(BaseGridder):
 
-    def __init__(self, emi_proxy_in_data):
-        BaseGridder.__init__(self)
-        self.gch4i_name = emi_proxy_in_data.gch4i_name
-        self.file_type = emi_proxy_in_data.file_type
-        self.emi_time_step = emi_proxy_in_data.emi_time_step
-        self.emi_geo_level = emi_proxy_in_data.emi_geo_level
-        self.emi_id = emi_proxy_in_data.emi_id
-        self.proxy_id = emi_proxy_in_data.proxy_id
-        self.proxy_time_step = emi_proxy_in_data.proxy_time_step
-        self.proxy_has_year_col = emi_proxy_in_data.proxy_has_year_col
-        self.proxy_has_month_col = emi_proxy_in_data.proxy_has_month_col
-        self.proxy_has_year_month_col = emi_proxy_in_data.proxy_has_year_month_col
-        self.proxy_has_rel_emi_col = emi_proxy_in_data.proxy_has_rel_emi_col
-        self.proxy_rel_emi_col = emi_proxy_in_data.proxy_rel_emi_col
-        self.proxy_geo_level = emi_proxy_in_data.proxy_geo_level
-        self.qc_dir = logging_dir / self.gch4i_name
-        self.db_path = status_db_path
+    def __init__(
+        self,
+        gch4i_name: str,
+        emi_id: Path,
+        proxy_id: Path,
+        express=False,
+    ):
+        super().__init__()
+        self.gch4i_name = gch4i_name
+        self.emi_id = emi_id
+        self.proxy_id = proxy_id
+        self.base_name = f"{self.gch4i_name}-{self.emi_id}-{self.proxy_id}"
+        self.qc_dir = v4_logging_dir / self.gch4i_name
+        self.open_log()
+        self.db_path = v4_status_db_path
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         self.get_status()
         if self.status is None:
             self.status = "not started"
             self.update_status()
-        self.base_name = f"{self.gch4i_name}-{self.emi_id}-{self.proxy_id}"
         self.annual_output_path = self.qc_dir / f"{self.base_name}.tif"
-        self.has_monthly = (
-            self.emi_time_step == "monthly" or self.proxy_time_step == "monthly"
+
+        self.express = express
+        self.emi_input_path = self.get_path(self.emi_id, v4_emi_data_dir_path)
+        if express:
+            self.logger.info("Running in express mode, using v3 proxy data")
+            self.proxy_input_path = self.get_path(self.proxy_id, v3_proxy_data_dir_path)
+        else:
+            self.proxy_input_path = self.get_path(self.proxy_id, v4_proxy_data_dir_path)
+        self.file_type = (
+            "parquet" if self.proxy_input_path.suffix == ".parquet" else "netcdf"
         )
+
+        self.check_emi_file()
+        self.check_proxy_file()
+        self.get_time_col()
+
         if self.has_monthly:
             self.monthly_output_path = self.qc_dir / f"{self.base_name}_monthly.tif"
         else:
             self.monthly_output_path = None
-        self.time_col = self.get_time_col()
+
         self.yearly_raster_qc_pass = False
         self.yearly_raster_qc_df = None
         self.monthly_raster_qc_pass = False
         self.monthly_raster_qc_df = None
-        logging.info("=" * 83)
-        logging.info(f"Gridding {self.base_name}.")
-        logging.info(
+
+    def check_emi_file(self):
+        in_df = duckdb.execute(f"SELECT * FROM '{self.emi_input_path}' LIMIT 0").df()
+        col_list = list(in_df.columns.str.lower())
+        self.emi_has_state_col = "state_code" in col_list
+        # emi_has_county_col = "county" in col_list
+        self.emi_has_county_col = "fips" in col_list
+        self.emi_has_year_col = "year" in col_list
+        self.emi_has_month_col = "month" in col_list
+        self.emi_has_emi_col = "ghgi_ch4_kt" in col_list
+
+        if self.emi_has_county_col:
+            self.emi_geo_level = "county"
+        elif self.emi_has_state_col:
+            self.emi_geo_level = "state"
+        else:
+            self.emi_geo_level = "national"
+
+        if self.emi_has_month_col:
+            self.emi_time_step = "monthly"
+        else:
+            self.emi_time_step = "annual"
+
+        self.logger.info(
             f"{self.emi_id} is at {self.emi_geo_level}/{self.emi_time_step} level."
         )
-        logging.info(
+
+    def check_proxy_file(self):
+        if self.file_type == "parquet":
+            self.check_proxy_parquet()
+        elif self.file_type == "netcdf":
+            self.check_proxy_nc()
+        else:
+            raise ValueError(f"File type {self.file_type} not recognized.")
+        self.logger.info(
             f"{self.proxy_id} is at {self.proxy_geo_level}/{self.proxy_time_step} level."
         )
-        self.emi_input_path = self.get_path(self.emi_id, emi_data_dir_path)
-        self.proxy_input_path = self.get_path(self.proxy_id, proxy_data_dir_path)
+
+    def check_proxy_parquet(self):
+        in_gdf = duckdb.execute(f"SELECT * FROM '{self.proxy_input_path}' LIMIT 0").df()
+        col_list = list(in_gdf.columns.str.lower())
+
+        self.proxy_has_state_col = "state_code" in col_list
+        self.proxy_has_county_col = "county" in col_list
+        self.proxy_has_year_col = "year" in col_list
+        self.proxy_has_year_month_col = "year_month" in col_list
+        self.proxy_has_month_col = "month" in col_list
+        self.proxy_has_geom_col = "geometry" in col_list
+        self.proxy_has_rel_emi_col = any(x in col_list for x in REL_EMI_COL_LIST)
+        if self.proxy_has_rel_emi_col:
+            self.proxy_rel_emi_col = [x for x in REL_EMI_COL_LIST if x in col_list][0]
+        else:
+            self.proxy_rel_emi_col = None
+
+        if self.proxy_has_year_month_col | self.proxy_has_month_col:
+            self.proxy_time_step = "monthly"
+        else:
+            self.proxy_time_step = "annual"
+
+        if self.proxy_has_county_col:
+            self.proxy_geo_level = "county"
+        elif self.proxy_has_state_col:
+            self.proxy_geo_level = "state"
+        else:
+            self.proxy_geo_level = "national"
+
+    def check_proxy_nc(self):
+        xr_ds = xr.open_dataset(self.proxy_input_path, chunks="auto")
+        coords = list(xr_ds.coords.keys())
+        data_vars = list(xr_ds.data_vars.keys())
+        if "spatial_ref" in data_vars:
+            data_vars.remove("spatial_ref")
+        if data_vars:
+            if len(data_vars) > 1:
+                warnings.warn(
+                    f"More than one data variable in the netcdf file: {data_vars}"
+                )
+            self.proxy_has_rel_emi_col = True
+            self.proxy_rel_emi_col = data_vars[0]
+        else:
+            self.proxy_has_rel_emi_col = False
+            self.proxy_rel_emi_col = None
+
+        self.proxy_has_state_col = "statefp" in coords
+        self.proxy_has_county_col = "geoid" in coords
+        self.proxy_has_year_col = "year" in coords
+        self.proxy_has_year_month_col = "year_month" in coords
+        self.proxy_has_geom_col = all(x in coords for x in ["x", "y"])
+
+        if self.proxy_has_year_month_col:
+            self.proxy_time_step = "monthly"
+        else:
+            self.proxy_time_step = "annual"
+
+        if self.proxy_has_county_col:
+            self.proxy_geo_level = "county"
+        else:
+            self.proxy_geo_level = "state"
+
+    def get_time_col(self):
+        if self.emi_time_step == "monthly" or self.proxy_time_step == "monthly":
+            self.time_col = "year_month"
+            self.has_monthly = True
+        elif self.emi_time_step == "annual" and self.proxy_time_step == "annual":
+            self.time_col = "year"
+            self.has_monthly = False
+
+    def open_log(self):
+        self.logger = logging.getLogger(__name__)
+        self.logfile_name = self.qc_dir / (self.base_name + ".log")
+
+        # print(self.logfile_name)
+
+        logging.basicConfig(
+            format="%(asctime)s  %(levelname)s: %(message)s",
+            datefmt="%m/%d/%Y %I:%M:%S %p",
+            level=logging.INFO,
+            filename=self.logfile_name,
+            filemode="a",
+        )
+        self.logger.info("=" * 83)
+        self.logger.info(f"Gridding {self.base_name}.")
 
     def get_path(self, file_name, file_path):
         try:
@@ -539,12 +663,12 @@ class EmiProxyGridder(BaseGridder):
             if not in_path.exists():
                 self.status = "emi file not found"
                 self.update_status()
-                logging.critical(self.status)
+                self.logger.critical(self.status)
                 raise FileNotFoundError(self.status)
         except IndexError:
-            self.status = f"{file_name} file not found"
+            self.status = "emi file not found"
             self.update_status()
-            logging.critical(self.status)
+            self.logger.critical(self.status)
             raise FileNotFoundError(self.status)
 
         return in_path
@@ -565,19 +689,13 @@ class EmiProxyGridder(BaseGridder):
         # if the proxy doesn't have relative emissions, we normalize by the
         # timestep of gridding (year, or year_month)
         if not self.proxy_has_rel_emi_col:
-            logging.info(f"{self.proxy_id} adding a relative emissions column.")
+            self.logger.info(f"{self.proxy_id} adding a relative emissions column.")
             self.proxy_gdf["rel_emi"] = (
                 self.proxy_gdf.assign(emis_kt=1)
                 .groupby(self.match_cols)["emis_kt"]
                 .transform(normalize)
             )
             self.proxy_rel_emi_col = "rel_emi"
-
-    def get_time_col(self):
-        if self.emi_time_step == "monthly" or self.proxy_time_step == "monthly":
-            self.time_col = "year_month"
-        elif self.emi_time_step == "annual" and self.proxy_time_step == "annual":
-            self.time_col = "year"
 
     def get_emi_time_col(self):
         match self.emi_time_step:
@@ -586,7 +704,9 @@ class EmiProxyGridder(BaseGridder):
             case "annual":
                 self.emi_time_cols = ["year"]
             case _:
-                logging.critical(f"emi_time_step {self.emi_time_step} not recognized")
+                self.logger.critical(
+                    f"emi_time_step {self.emi_time_step} not recognized"
+                )
 
     def get_geo_col(self):
         if self.file_type == "netcdf":
@@ -628,7 +748,9 @@ class EmiProxyGridder(BaseGridder):
                     usecols=self.emi_cols,
                 ).query("(state_code.isin(@self.geo_filter)) & (ghgi_ch4_kt > 0)")
             case _:
-                logging.critical(f"emi_geo_level {self.emi_geo_level} not recognized")
+                self.logger.critical(
+                    f"emi_geo_level {self.emi_geo_level} not recognized"
+                )
         if self.emi_time_step == "monthly":
             self.emi_df = self.emi_df.assign(
                 month=lambda df: pd.to_datetime(df["month"], format="%B").dt.month,
@@ -636,21 +758,37 @@ class EmiProxyGridder(BaseGridder):
                     df[["year", "month"]].assign(DAY=1)
                 ).dt.strftime("%Y-%m"),
             )
-        if self.emi_df.year.unique().shape[0] != len(years):
+        if self.emi_df.year.nunique() != len(years):
             self.missing_years = list(set(years) - set(self.emi_df.year.unique()))
             if self.missing_years:
-                logging.warning(f"{self.emi_id} is missing years: {self.missing_years}")
-                logging.warning(f"these years will be filled with 0s.")
+                self.logger.warning(
+                    f"{self.emi_id} is missing years: {self.missing_years}"
+                )
+                self.logger.warning(f"these years will be filled with 0s.")
+                if self.emi_df.empty:
+                    self.emi_df = pd.DataFrame(
+                        {
+                            "state_code": np.tile(
+                                self.state_gdf.state_code, len(years)
+                            ),
+                            "year": np.repeat(years, len(self.state_gdf)),
+                            "ghgi_ch4_kt": 0.0,
+                        },
+                        index=pd.RangeIndex(len(self.state_gdf) * len(years)),
+                    )
         else:
             self.missing_years = False
         self.get_match_cols()
 
-    def check_vector_proxy_time_geo(self, time_col):
+    def check_vector_proxy_time_geo(self, time_col, bypass_error=False):
 
         # check if all the proxy state / time columns are in the emissions data
         # NOTE: this check happens again later, but at a siginificant time cost
         # if the data are large. It is here to catch the error early and break
         # the loop with critical message.
+        # NOTE: v4 update: bypass_error has been added to allow the code to continue
+        # to run as part of the express update, where we may need to check multiple
+        # time for the QC without failing.
 
         if self.geo_col:
             grouping_cols = [self.geo_col, time_col]
@@ -683,7 +821,7 @@ class EmiProxyGridder(BaseGridder):
                     .groupby(self.geo_col)
                     .size()
                 )
-                logging.critical(
+                self.logger.critical(
                     f"QC FAILED: {self.emi_id}, {self.proxy_id}\n"
                     f"proxy state/{time_col} columns do not match emissions\n"
                     "missing states and counts of missing times:\n"
@@ -692,7 +830,7 @@ class EmiProxyGridder(BaseGridder):
                     "\n"
                 )
             else:
-                logging.critical(
+                self.logger.critical(
                     f"QC FAILED: {self.emi_id}, {self.proxy_id}\n"
                     "proxy time column does not match emissions\n"
                     "missing times:\n"
@@ -703,12 +841,13 @@ class EmiProxyGridder(BaseGridder):
             self.time_geo_qc_pass = True
 
         if self.time_geo_qc_pass:
-            logging.info(f"QC PASS: state/{time_col} QC.")
+            self.logger.info(f"QC PASS: state/{time_col} QC.")
         else:
-            logging.critical(f"QC FAIL: state/{time_col} QC.\n")
+            self.logger.critical(f"QC FAIL: state/{time_col} QC.\n")
             self.status = f"failed state/{time_col} QC"
             self.update_status()
-            raise ValueError(f"{self.base_name} {self.status}")
+            if not bypass_error:
+                raise ValueError(f"{self.base_name} {self.status}")
 
     def read_proxy_file(self):
         try:
@@ -716,19 +855,19 @@ class EmiProxyGridder(BaseGridder):
         except Exception as e:
             self.status = "error reading proxy"
             self.update_status()
-            logging.critical(f"Error reading {self.proxy_id}: {e}\n")
+            self.logger.critical(f"Error reading {self.proxy_id}: {e}\n")
             raise ValueError(f"{self.base_name} {self.status}")
 
         if self.proxy_gdf.is_empty.any():
             self.status = "proxy has empty geometries"
             self.update_status()
-            logging.critical(f"{self.proxy_id} has empty geometries.\n")
+            self.logger.critical(f"{self.proxy_id} has empty geometries.\n")
             raise ValueError(f"{self.base_name} {self.status}")
 
         if not self.proxy_gdf.is_valid.all():
             self.status = "proxy has invalid geometries"
             self.update_status()
-            logging.critical(f"{self.proxy_id} has invalid geometries.\n")
+            self.logger.critical(f"{self.proxy_id} has invalid geometries.\n")
             raise ValueError(f"{self.base_name} {self.status}")
 
         # minor formatting issue that some year_months in proxy data were written
@@ -741,7 +880,7 @@ class EmiProxyGridder(BaseGridder):
         # if the proxy doesn't have a year column, we explode the data out to
         # repeat the same data for every year.
         if not self.proxy_has_year_col:
-            logging.info(f"{self.proxy_id} adding a year column.")
+            self.logger.info(f"{self.proxy_id} adding a year column.")
             # duplicate the data for all years in years_list
             self.proxy_gdf = self.proxy_gdf.assign(
                 year=lambda df: [years for _ in range(df.shape[0])]
@@ -750,7 +889,7 @@ class EmiProxyGridder(BaseGridder):
             try:
                 self.proxy_gdf = self.proxy_gdf.astype({"year": int})
             except:
-                logging.critical(f"{self.proxy_id} year column has NAs.\n")
+                self.logger.critical(f"{self.proxy_id} year column has NAs.\n")
                 self.status = "proxy year has NAs"
                 self.update_status()
                 raise ValueError(f"{self.base_name} {self.status}")
@@ -758,7 +897,7 @@ class EmiProxyGridder(BaseGridder):
         # if the proxy data are monthly, but don't have the year_month column,
         # create it.
         if (self.proxy_time_step == "monthly") & (not self.proxy_has_year_month_col):
-            logging.info(f"{self.proxy_id} adding a year_month column.")
+            self.logger.info(f"{self.proxy_id} adding a year_month column.")
             # add a year_month column to the proxy data
             try:
                 self.proxy_gdf = self.proxy_gdf.assign(
@@ -777,7 +916,7 @@ class EmiProxyGridder(BaseGridder):
         # if the proxy data are monthly, but don't have the month column,
         # create it.
         if (self.proxy_time_step == "monthly") & (not self.proxy_has_month_col):
-            logging.info(f"{self.proxy_id} adding a month column.")
+            self.logger.info(f"{self.proxy_id} adding a month column.")
             # add a month column to the proxy data
             self.proxy_gdf = self.proxy_gdf.assign(
                 month=lambda df: pd.to_datetime(df["year_month"]).dt.month
@@ -801,7 +940,7 @@ class EmiProxyGridder(BaseGridder):
         - month_check: DataFrame containing the check for monthly emissions.
         """
         # calculate the relative MONTHLY proxy emissions
-        logging.info("Calculating monthly scaling factors for emissions data")
+        self.logger.info("Calculating monthly scaling factors for emissions data")
 
         if self.geo_col is not None:
             annual_norm = [self.geo_col, "year"]
@@ -851,7 +990,9 @@ class EmiProxyGridder(BaseGridder):
             .query("month_normed > 0")
             .assign(isclose=lambda df: np.isclose(df["month_normed"], 1))
         )
-        print("check scaling passed: ", check_scaling["isclose"].all())
+        self.logger.debug(
+            "check emi month scaling passed: ", check_scaling["isclose"].all()
+        )
 
         tmp_df = (
             self.emi_df.sort_values(annual_norm)
@@ -876,26 +1017,32 @@ class EmiProxyGridder(BaseGridder):
             .dropna(subset=["ghgi_ch4_kt"])
         )
         tmp_df
-
-        month_check = (
-            tmp_df.groupby(annual_norm)["ghgi_ch4_kt"]
-            .sum()
-            .rename("month_check")
-            .to_frame()
-            .join(self.emi_df.set_index(annual_norm))
-            .assign(isclose=lambda df: np.isclose(df["month_check"], df["ghgi_ch4_kt"]))
-        )
-        month_check["isclose"].all()
-
-        if not month_check["isclose"].all():
-            logging.critical("Monthly emissions do not sum to the expected values")
-            raise ValueError(
-                "Monthly emissions do not sum to the expected values. Check the log for "
-                "details."
-            )
+        if self.emi_df.empty and tmp_df.empty:
+            self.logger.warning("No emissions data after scaling to month.")
         else:
-            logging.info("QC PASS: Monthly emissions check!")
-            self.emi_df = tmp_df
+            month_check = (
+                tmp_df.groupby(annual_norm)["ghgi_ch4_kt"]
+                .sum()
+                .rename("month_check")
+                .to_frame()
+                .join(self.emi_df.set_index(annual_norm))
+                .assign(
+                    isclose=lambda df: np.isclose(df["month_check"], df["ghgi_ch4_kt"])
+                )
+            )
+            month_check["isclose"].all()
+
+            if not month_check["isclose"].all():
+                self.logger.critical(
+                    "Monthly emissions do not sum to the expected values"
+                )
+                raise ValueError(
+                    "Monthly emissions do not sum to the expected values. Check the log for "
+                    "details."
+                )
+            else:
+                self.logger.info("QC PASS: Monthly emissions check!")
+                self.emi_df = tmp_df
 
     def allocate_emissions_to_proxy(self):
         """
@@ -969,27 +1116,32 @@ class EmiProxyGridder(BaseGridder):
         self.allocation_qc_pass = self.allocation_qc_df.qc_pass.all()
 
         if self.allocation_qc_pass:
-            logging.info("QC PASS: all proxy emission by state/year equal (isclose)")
+            self.logger.info(
+                "QC PASS: all proxy emission by state/year equal (isclose)"
+            )
         else:
-            logging.critical(
+            self.logger.critical(
                 f"QC FAIL: {self.emi_id}, {self.proxy_id}. allocation failed."
             )
-            logging.info("states and years with emissions that don't match")
+            self.logger.info("states and years with emissions that don't match")
             if self.geo_col:
                 unique_state_codes = self.emi_df[
                     ~self.emi_df["state_code"].isin(self.proxy_gdf["state_code"])
                 ]["state_code"].unique()
-                logging.warning(
+                self.logger.warning(
                     f"states with no proxy points in them: {unique_state_codes}"
                 )
-                logging.info(
+                self.logger.info(
                     (
                         "states with unaccounted emissions: "
                         f"{self.allocation_qc_df[~self.allocation_qc_df['isclose']]['state_code'].unique()}"
                     )
                 )
+                self.status = "failed allocation QC"
+                self.update_status()
+                raise ValueError(f"{self.base_name} {self.status}")
             else:
-                logging.critical(
+                self.logger.critical(
                     f"QC FAIL: {self.emi_id}, {self.proxy_id}. annual allocation failed."
                 )
                 self.status = "failed allocation QC"
@@ -1090,7 +1242,7 @@ class EmiProxyGridder(BaseGridder):
 
     def grid_vector_data(self):
         if self.allocation_gdf.empty:
-            logging.warning(
+            self.logger.warning(
                 f"{self.proxy_id} allocation is empty. likely no"
                 f"emissions data for {self.emi_id}"
             )
@@ -1101,7 +1253,7 @@ class EmiProxyGridder(BaseGridder):
                 # turn the vector proxy into a grid
                 self.grid_allocated_emissions()
             except Exception as e:
-                logging.critical(
+                self.logger.critical(
                     f"{self.emi_id}, {self.proxy_id} gridding failed {e}\n"
                 )
                 self.status = "gridding failed"
@@ -1255,8 +1407,8 @@ class EmiProxyGridder(BaseGridder):
             ]
 
             if not invalid_geometries.empty:
-                logging.warning(
-                    f"Found {invalid_geometries.shape[0]} invalid or empty geometries with a total allocated_ch4_kt of "
+                self.logger.warning(
+                    f"Found {invalid_geometries.shape[0]} invalid or empty geometries for {time_var} with a total allocated_ch4_kt of "
                     f"{invalid_geometries['allocated_ch4_kt'].sum()}"
                 )
                 # Drop invalid or empty geometries
@@ -1440,7 +1592,7 @@ class EmiProxyGridder(BaseGridder):
         if len(final_df.query("(ghgi_ch4_kt > 0) & ~has_proxy")) > 0:
             if self.geo_col:
                 missing_states = self.time_geo_qc_df.state_code.value_counts()
-                logging.critical(
+                self.logger.critical(
                     f"QC FAILED: {self.emi_id}, {self.proxy_id}\n"
                     "proxy state/year columns do not match emissions\n"
                     "missing states and counts of missing times:\n"
@@ -1448,7 +1600,7 @@ class EmiProxyGridder(BaseGridder):
                     "\n"
                 )
             else:
-                logging.critical(
+                self.logger.critical(
                     f"QC FAILED: {self.emi_id}, {self.proxy_id}\n"
                     "proxy time column does not match emissions\n"
                     "missing times:\n"
@@ -1600,12 +1752,12 @@ class EmiProxyGridder(BaseGridder):
             self.yearly_raster_qc_df.to_csv(out_path)
 
         if qc_pass:
-            logging.info(f"QC PASS: all gridded emission by {QC_time_col}.")
+            self.logger.info(f"QC PASS: all gridded emission by {QC_time_col}.")
         else:
-            logging.critical(
+            self.logger.critical(
                 "QC FAIL: gridded emissions do not equal inventory emissions."
             )
-            logging.info(
+            self.logger.info(
                 "\t"
                 + raster_qc_df[~raster_qc_df.qc_pass].to_string().replace("\n", "\n\t")
             )
@@ -1634,7 +1786,7 @@ class EmiProxyGridder(BaseGridder):
         missing_year_months = set(all_year_months) - set(proxy_year_month)
 
         if missing_year_months:
-            logging.info(f"Filling missing year_months: {missing_year_months}")
+            self.logger.info(f"Filling missing year_months: {missing_year_months}")
             if self.time_col == "year":
                 empty_array = np.zeros_like(
                     self.proxy_ds["results"].isel(year=0).values
@@ -1710,9 +1862,9 @@ class EmiProxyGridder(BaseGridder):
                 self.write_tif_output(
                     self.proxy_ds["results"], self.monthly_output_path
                 )
-                logging.info(f"{self.base_name} monthly gridding complete.\n")
+                self.logger.info(f"{self.base_name} monthly gridding complete.\n")
             else:
-                logging.critical(f"{self.base_name} failed monthly raster QC.\n")
+                self.logger.critical(f"{self.base_name} failed monthly raster QC.\n")
         else:
             # if the time step is annual, we need to get the annual emissions data. Here
             # this just gives it a new name, but it is the same as the results variable.
@@ -1721,9 +1873,9 @@ class EmiProxyGridder(BaseGridder):
         self.QC_emi_raster_sums("year")
         if self.yearly_raster_qc_pass:
             self.write_tif_output(self.yearly_results, self.annual_output_path)
-            logging.info(f"{self.base_name} annual gridding complete.\n")
+            self.logger.info(f"{self.base_name} annual gridding complete.\n")
         else:
-            logging.critical(f"{self.base_name} failed annual raster QC.\n")
+            self.logger.critical(f"{self.base_name} failed annual raster QC.\n")
 
         if self.has_monthly:
             if all([self.monthly_raster_qc_pass, self.yearly_raster_qc_pass]):
@@ -1815,7 +1967,7 @@ class GroupGridder(BaseGridder):
         self.group_name = group_name
         self.data_df = in_data
         self.dst_dir = dst_dir
-        self.qc_dir = logging_dir / self.group_name
+        self.qc_dir = v4_logging_dir / self.group_name
         self.annual_source_count = self.data_df.shape[0]
         self.get_monthly_source_count()
         if self.monthly_source_count > 0:
@@ -1836,20 +1988,6 @@ class GroupGridder(BaseGridder):
             f"{year}-{month:02d}" for year in years for month in range(1, 13)
         ]
         self.area_ds = load_area_matrix(plot=True)
-
-        # IPCC_ID, SOURCE_NAME = g_name.split("_", maxsplit=1)
-        # netcdf_title = f"EPA methane emissions from {SOURCE_NAME}"
-        # netcdf_description = (
-        #     f"Gridded EPA Inventory - {g_name} - "
-        #     f"{SOURCE_NAME} - IPCC Source Category {IPCC_ID}"
-        # )
-        # netcdf_title = f"CH4 emissions from {source_name} gridded to 1km x 1km"
-        # write_ncdf_output(
-        #     ch4_flux_result_da,
-        #     nc_flux_output_path,
-        #     netcdf_title,
-        #     netcdf_description,
-        # )
 
     def get_monthly_source_count(self):
         self.monthly_data_mask = (
@@ -1920,7 +2058,7 @@ class GroupGridder(BaseGridder):
         """get all the original emissions files and sum up emissions by year."""
         emi_results_list = []
         for row in self.data_df.itertuples():
-            emi_df = pd.read_csv(emi_data_dir_path / f"{row.emi_id}.csv")
+            emi_df = pd.read_csv(v4_emi_data_dir_path / f"{row.emi_id}.csv")
             if "state_code" in emi_df.columns:
                 emi_df = emi_df.query(
                     f"(state_code.isin({self.geo_filter})) & (ghgi_ch4_kt > 0)"
@@ -2312,7 +2450,9 @@ class GroupGridder(BaseGridder):
             if (self.group_name == "3A_enteric_fermentation") | (
                 self.group_name == "3B_manure_management"
             ):
-                print("INFO: replacing 29 with 28 for February in livestock emissions")
+                self.logger.info(
+                    "INFO: replacing 29 with 28 for February in livestock emissions"
+                )
                 days_in_months = [28 if x == 29 else x for x in days_in_months]
 
             conv_factors = [
@@ -2326,7 +2466,7 @@ class GroupGridder(BaseGridder):
                 coords=[times, self.gepa_profile.y, self.gepa_profile.x],
                 name="conversion_factor",
             )
-            # print("DEBUG: calculating monthly conversion factors")
+            # self.logger.debug("DEBUG: calculating monthly conversion factors")
 
         elif timestep == "year":
             days_in_year = [self.get_days_in_year(x) for x in times]
@@ -2335,7 +2475,7 @@ class GroupGridder(BaseGridder):
             if (self.group_name == "3A_enteric_fermentation") | (
                 self.group_name == "3B_manure_management"
             ):
-                print("INFO: replacing 366 with 365 in livestock emissions")
+                self.logger.info("INFO: replacing 366 with 365 in livestock emissions")
                 days_in_year = [365 if x == 366 else x for x in days_in_year]
 
             conv_factors = [
@@ -2806,6 +2946,239 @@ class GroupGridder(BaseGridder):
             self.plot_monthly_scaling()
 
 
+class V4ExpressUpdater(EmiProxyGridder):
+
+    def __init__(
+        self,
+        gch4i_name: str,
+        emi_id: Path,
+        proxy_id: Path,
+    ):
+        super().__init__(gch4i_name, emi_id, proxy_id, express=True)
+        self.v4_proxy_output_path = v4_tmp_data_dir_path / f"{self.proxy_id}.parquet"
+        # self.v4_proxy_output_path = v4_proxy_data_dir_path / f"{self.proxy_id}.parquet"
+        self.get_geo_filter()
+
+    def express_prepare_vector_proxy(self):
+        self.read_proxy_file()
+        self.get_rel_emi_col()
+        # in the express we do the update in this order:
+        # 1. copy 2022 data to 2023
+        # 2. bring individual missing state(s) forward to 2023 using the closest year
+        #    available
+        # 3. fill in the missing state(s) using the whole state geometry
+
+        updater_functions = [self.copy_2022_to_2023, self.bring_state_year_forward]
+
+        for func in updater_functions:
+            # apply the update function
+            func()
+            # QC the time/geo data
+            if (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
+                self.check_vector_proxy_time_geo("year", bypass_error=True)
+                self.scale_emi_to_month()
+                # if QC does not pass for year, continue to the next function and skip
+                # month check
+                if not self.time_geo_qc_pass:
+                    continue
+                # if QC passes for year, check year_month
+                else:
+                    self.check_vector_proxy_time_geo("year_month", bypass_error=True)
+                    # if QC passes, break the loop and go on to allocation and gridding
+                    if self.time_geo_qc_pass:
+                        break
+            elif self.proxy_time_step == self.emi_time_step:
+                self.check_vector_proxy_time_geo(self.time_col, bypass_error=True)
+                # if QC passes, break the loop and go on to allocation and gridding
+                if self.time_geo_qc_pass:
+                    break
+
+        # if QC does not pass after all updater functions, raise an error
+        if not self.time_geo_qc_pass:
+            self.status = "express update failed"
+            self.update_status()
+            raise ValueError(self.status)
+        # else, move on. Save the new file and grid the data.
+        else:
+            self.proxy_gdf.to_parquet(self.v4_proxy_output_path, index=False)
+            self.allocate_emissions_to_proxy()
+            self.QC_proxy_allocation()
+            self.grid_vector_data()
+
+    def copy_2022_to_2023(self):
+        self.logger.info("EXPRESS: attempting to replicate 2022 data to 2023")
+        if 2023 in self.proxy_gdf.year.unique():
+            self.logger.info("EXPRESS: 2023 data already present, skipping copy step")
+        else:
+            new_year_data = self.proxy_gdf.query("year == 2022").copy()
+            new_year_data["year"] = 2023
+            if self.time_col == "year_month":
+                new_year_data["year_month"] = new_year_data["year_month"].str.replace(
+                    "2022", "2023"
+                )
+            self.proxy_gdf = pd.concat([self.proxy_gdf, new_year_data], ignore_index=True)
+        
+
+    def raster_copy_2022_to_2023(self):
+        self.logger.info("EXPRESS: attempting to replicate 2022 data to 2023")
+
+        # Update 'year_month' coordinate if present
+        if "year_month" in self.proxy_ds.coords:
+            ds_2023 = self.proxy_ds.isel({"year_month": slice(120, 132)}).copy()
+            ds_2023 = ds_2023.assign_coords(
+                year_month=[
+                    str(ym).replace("2022", "2023") for ym in ds_2023.year_month.values
+                ],
+                year=(
+                    "year_month",
+                    np.repeat(2023, len(ds_2023.year_month.values)),
+                ),
+                month=(
+                    "year_month",
+                    pd.to_datetime(ds_2023.year_month.values).month,
+                ),
+            )
+            self.proxy_ds = xr.concat(
+                [self.proxy_ds, ds_2023], dim="year_month"
+            ).sortby("year_month")
+        elif "year" in self.proxy_ds.coords:
+            years = self.proxy_ds.year.values
+            if 2022 in years and 2023 not in years:
+                idx_2022 = list(years).index(2022)
+                data_2022 = self.proxy_ds.isel(year=idx_2022)
+                data_2023 = data_2022.copy(deep=True)
+                data_2023 = data_2023.assign_coords(year=2023)
+                self.proxy_ds = xr.concat(
+                    [self.proxy_ds, data_2023], dim="year"
+                ).sortby("year")
+
+    def express_prepare_raster_proxy(self):
+        # read the proxy file
+        self.proxy_ds = xr.open_dataset(
+            self.proxy_input_path
+        )  # .rename({"geoid": geo_col})
+        self.proxy_ds = self.proxy_ds.assign_coords(
+            x=("x", self.gepa_profile.x), y=("y", self.gepa_profile.y)
+        )
+
+        if "fips" not in self.emi_df.columns:
+            self.emi_df = self.emi_df.merge(
+                self.state_gdf[["state_code", "fips"]], on="state_code", how="left"
+            )
+        if "fips" not in self.proxy_ds.coords:
+            if "geoid" in self.proxy_ds.coords:
+                self.proxy_ds = self.proxy_ds.rename({"geoid": "fips"})
+            elif "statefp" in self.proxy_ds.coords:
+                self.proxy_ds = self.proxy_ds.rename({"statefp": "fips"})
+
+        self.raster_copy_2022_to_2023()
+
+        # if the emi is month and the proxy is annual, we expand the dimensions of
+        # the proxy, repeating the year values for every month in the year
+        # we stack the year/month dimensions into a single year_month so that
+        # it aligns with the emissions data as a time x X x Y array.
+        if self.emi_time_step == "monthly" and self.proxy_time_step == "annual":
+            self.proxy_ds = (
+                self.proxy_ds.expand_dims(dim={"month": np.arange(1, 13)}, axis=0)
+                .stack({"year_month": ["year", "month"]}, create_index=False)
+                .sortby(["year_month", "y", "x"])
+            )
+            year_months = pd.to_datetime(
+                self.proxy_ds[["year", "month"]].to_dataframe().assign(day=1)
+            ).dt.strftime("%Y-%m")
+            self.proxy_ds = self.proxy_ds.assign_coords(
+                year_month=("year_month", year_months)
+            ).transpose("year_month", "y", "x")
+
+        elif (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
+            # print("DEBUG: scaling emis")
+            self.scale_emi_to_month()
+
+        # check that the proxy and emi files have matching state years
+        # NOTE: this is going to arise when the proxy data are lacking adequate
+        # spatial or temporal coverage. Failure here will require finding new data
+        # and/or filling in missing state/years.
+        self.check_raster_proxy_time_geo()
+
+        match self.emi_geo_level:
+            case "state":
+                self.get_state_gdf()
+                self.admin_gdf = self.state_gdf
+            case "county":
+                self.get_county_gdf()
+                self.admin_gdf = self.county_gdf
+        # NOTE: this is slow.
+        self.make_emi_grid()
+
+        # here we are going to remove missing years from the proxy dataset
+        # so we can stack it against the emissions dataset
+        if self.missing_years:
+            self.proxy_ds = self.proxy_ds.drop_sel(year=list(self.missing_years))
+
+        # assign the emissions array to the proxy dataset
+        # proxy_ds["emissions"] = ([time_col, "y", "x"], emi_xr)
+        self.proxy_ds["emissions"] = (self.emi_xr.dims, self.emi_xr.data)
+
+        # # look to make sure the emissions loaded in the correct orientation
+        # proxy_ds["emissions"].sel(year_month=(2020, 1)).where(lambda x: x > 0).plot(
+        #     cmap="hot"
+        # )
+        # proxy_ds["emissions"].sel(year=2020).where(lambda x: x > 0).plot(cmap="hot")
+        # plt.show()
+        # calculate the emissions for the proxy array by multiplying the proxy by
+        # the gridded emissions data
+        self.proxy_ds["results"] = (
+            self.proxy_ds[self.proxy_rel_emi_col] * self.proxy_ds["emissions"]
+        )
+
+    def find_closest_year(self, arr, target):
+        arr = np.array(arr)
+        idx = (np.abs(arr - target)).argmin()
+        return arr[idx]
+
+    def bring_state_year_forward(self):
+
+        states_missing_data = self.time_geo_qc_df.query("has_proxy == False")
+        self.logger.info(
+            f"Filling in missing data for {len(states_missing_data)} state/years"
+        )
+        supp_data_df = pd.DataFrame()
+        for row in states_missing_data.itertuples():
+            missing_state = row.state_code
+            missing_year = row.year
+            self.logger.info(
+                f"looking for data for state: {missing_state}, year: {missing_year}"
+            )
+            # first look if the state has any data regardless of year.
+            state_data = self.proxy_gdf.query("state_code == @missing_state")
+            if not state_data.empty:
+                iyear_closest = self.find_closest_year(state_data.year, missing_year)
+                self.logger.info(
+                    f"Found data for state: {missing_state} with year {iyear_closest}"
+                )
+                sup_data = state_data.query("year == @iyear_closest").assign(
+                    year=missing_year,
+                    ch4_mg=1.0,
+                )
+                if self.has_monthly:
+                    sup_data = sup_data.assign(
+                        year_month=lambda df: df["year_month"].str.replace(
+                            str(iyear_closest), str(missing_year)
+                        ),
+                    )
+                supp_data_df = pd.concat([supp_data_df, sup_data], ignore_index=True)
+
+    def run_update(self):
+        self.read_emi_file()
+        if self.file_type == "parquet":
+            self.express_prepare_vector_proxy()
+        elif self.file_type == "netcdf":
+            self.express_prepare_raster_proxy()
+            # raise NotImplementedError("raster proxy express update not implemented yet")
+        self.qc_and_write_output()
+        self.conn.close()
+
+
 def run_whole_group(gch4i_name, g_info):
     gridding_rows = g_info.mapping_df.query(f"gch4i_name == '{gch4i_name}'")
     gridding_rows
@@ -2832,7 +3205,7 @@ def run_whole_group(gch4i_name, g_info):
         gridding_group_data = g_info.ready_groups_df.query(
             f"gch4i_name == '{gch4i_name}'"
         )
-        gg = GroupGridder(gch4i_name, gridding_group_data, prelim_gridded_dir)
+        gg = GroupGridder(gch4i_name, gridding_group_data, v4_prelim_gridded_dir)
         gg.run_gridding()
     else:
         print("one or more emi/proxy pairs are not ready for gridding.")
