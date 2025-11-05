@@ -31,9 +31,9 @@ from geocube.api.core import make_geocube
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_sector_data_dir_path,
     years,
 )
 from gch4i.utils import (
@@ -43,7 +43,7 @@ from gch4i.utils import (
 
 # %% Pytask Function
 crop_name = "all_crop"
-nass_cdl_path = sector_data_dir_path / "nass_cdl"
+nass_cdl_path = v4_sector_data_dir_path / "nass_cdl"
 # %%
 
 
@@ -51,9 +51,9 @@ nass_cdl_path = sector_data_dir_path / "nass_cdl"
 @task(id="all_crop_proxy")
 def task_all_crop_proxy(
     input_paths: list[Path] = sorted(list(nass_cdl_path.glob("*_all_crop_perc.tif"))),
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / f"{crop_name}_proxy.nc"
+        v4_proxy_data_dir_path / f"{crop_name}_proxy.nc"
     ),
 ) -> None:
 
@@ -73,8 +73,8 @@ def task_all_crop_proxy(
     # data and stack them into a single numpy array
     raster_list = []
     for in_file in input_paths:
-        if not in_file.exists():
-            continue
+        # if not in_file.exists():
+        #     continue
         with rasterio.open(in_file) as src:
             raster_list.append(src.read(1))
 
@@ -148,3 +148,24 @@ def task_all_crop_proxy(
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         profile.profile["crs"]
     ).to_netcdf(output_path)
+
+
+# %%
+from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo
+
+grid_info = GriddingInfo()
+
+for row in grid_info.mapping_df.query(f"proxy_id == 'all_crop_proxy'").itertuples():
+    try:
+        gridder = EmiProxyGridder(
+            gch4i_name=row.gch4i_name,
+            proxy_id=row.proxy_id,
+            emi_id=row.emi_id,
+        )
+        gridder.run_gridding()
+    except Exception as e:
+        print(f"Error for {row.gch4i_name}, {row.proxy_id}, {row.emi_id}: {e}")
+
+grid_info.get_status_table()
+grid_info.display_all_pair_statuses()
+# %%

@@ -34,29 +34,25 @@ from pytask import Product, mark
 from tqdm.auto import tqdm
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
-    tmp_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_sector_data_dir_path,
     years,
 )
 from gch4i.utils import GEPA_spatial_profile, normalize, normalize_xr
 
 # %% Pytask Function
 
-source_dir = sector_data_dir_path / "combustion_stationary"
-pop_paths = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif"))
-
-
-@mark.persist
+source_dir = v4_sector_data_dir_path / "stationary_combustion"
+pop_paths = list((v4_sector_data_dir_path / "worldpop").glob("usa_pop_*_reprojected.tif"))
+# %%
 def task_rwc_proxy(
     NEI_resi_wood_inputfile: Path = source_dir / "NEI 2020 RWC Throughputs.xlsx",
     pop_input_paths: Path = pop_paths,
-    county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "rwc_proxy.nc",
+    county_path: Path = v4_global_data_dir_path / "tl_2020_us_county.zip",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "rwc_proxy.nc",
 ) -> None:
-
     # %%
     # replacements identified in v2.
     # replacements = {
@@ -91,7 +87,7 @@ def task_rwc_proxy(
         gpd.read_file(county_path)
         .rename(columns=str.lower)
         .astype({"statefp": int})
-        .query("(statefp < 60)")
+        .query("(statefp < 60) & (statefp != 2) & (statefp != 15)")
         .to_crs(4326)
     )
     county_gdf.head()
@@ -211,14 +207,6 @@ def task_rwc_proxy(
         res_dict[the_year] = rwc_xr
 
     # %%
-    # since we have population data up to 2020, we need to duplicate the latest data
-    # into the years we don't have
-    expanded_years = [x for x in years if x not in res_dict.keys()]
-    latest_year = max(res_dict.keys())
-    expanded_years, latest_year
-    for the_year in expanded_years:
-        res_dict[the_year] = res_dict[latest_year].assign_coords(year=the_year)
-    # %%
     rwc_xr = xr.concat(
         list(res_dict.values()), dim="year", create_index_for_new_dim=True
     )
@@ -284,4 +272,23 @@ def task_rwc_proxy(
         rwc_xr.rio.crs
     ).to_netcdf(output_path)
 
+# %%
+# %%
+from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo
+
+grid_info = GriddingInfo()
+
+for row in grid_info.mapping_df.query(f"proxy_id == 'rwc_proxy'").itertuples():
+    try:
+        gridder = EmiProxyGridder(
+            gch4i_name=row.gch4i_name,
+            proxy_id=row.proxy_id,
+            emi_id=row.emi_id,
+        )
+        gridder.run_gridding()
+    except Exception as e:
+        print(f"Error for {row.gch4i_name}, {row.proxy_id}, {row.emi_id}: {e}")
+
+grid_info.get_status_table()
+grid_info.display_all_pair_statuses()
 # %%

@@ -21,23 +21,24 @@ Output Files:          - {proxy_data_dir_path}/abd_coal_proxy.parquet
 import multiprocessing
 from pathlib import Path
 from typing import Annotated
-from zipfile import ZipFile
+
 
 import numpy as np
-from pytask import Product, mark, task
+from pytask import Product
+import pytask
 
-from gch4i.config import sector_data_dir_path, years, intermediate_data_dir_path
-from gch4i.utils import download_url, make_raster_binary, warp_to_gepa_grid
+from gch4i.config import v4_sector_data_dir_path, years
+from gch4i.utils import download_url, unzip_file, make_raster_binary, warp_to_gepa_grid
 
 NUM_WORKERS = multiprocessing.cpu_count()
 
-nass_cdl_path = sector_data_dir_path / "nass_cdl"
+nass_cdl_path = v4_sector_data_dir_path / "nass_cdl"
 
 # https://www.nass.usda.gov/Research_and_Science/Cropland/metadata/metadata_nc23.htm
 # the list of all "crop" classification values in CDL. Any value in this list will be
 # marked as 1 in the binary layer, and the percentage layer will be the percentage of
 # 1 cells in the percentage layer during warping.
-cdl_crop_vals = np.concat([np.arange(1, 60), np.arange(66, 77), np.arange(204, 254)]) #EEM Question - what happens here if the code is looking for crop id #7, but there is no category code #7 in the dataset?
+cdl_crop_vals = np.concat([np.arange(1, 60), np.arange(66, 77), np.arange(204, 254)])
 rice_crop_vals = np.array([3])
 # cdl_other_vals = np.concatenate([np.arange(61, 66), np.arange(81, 195)])
 
@@ -46,16 +47,9 @@ crop_val_dict = {
     "rice": rice_crop_vals,
 }
 
-# %% Unzip CDL
-
-def unzip_cdl(zip_path, output_path):
-    """unzip an input path zip_path to the output path"""
-    with ZipFile(zip_path, "r") as z:
-        z.extract(output_path.name, output_path.parent)
-
 
 # %% Download all the years of NASS CDL data
-cdl_download_dict = {}
+cdl_prep_dict = {}
 for year in years:
 
     zip_file_name = f"{year}_30m_cdls.zip"
@@ -68,54 +62,14 @@ for year in years:
     zip_path = nass_cdl_path / zip_file_name
     cdl_input_path = nass_cdl_path / tif_file_name
 
-    cdl_download_dict[f"cdl_dl_{year}"] = dict(
+    cdl_prep_dict[f"cdl_dl_{year}"] = dict(
         url=url,
         zip_path=zip_path,
         cdl_path=cdl_input_path,
     )
 
 
-# %% Pytask Function
-for _id, kwargs in cdl_download_dict.items():
-
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_download_cdl(
-        url: str,
-        zip_path: Annotated[Path, Product],
-    ):
-        download_url(url, zip_path)
-
-
-# %% Unzip all the CDL data we need
-cdl_unzip_dict = {}
-for year in years:
-
-    zip_file_name = f"{year}_30m_cdls.zip"
-    tif_file_name = f"{year}_30m_cdls.tif"
-
-    zip_path = nass_cdl_path / zip_file_name
-    cdl_input_path = nass_cdl_path / tif_file_name
-
-    cdl_unzip_dict[f"cdl_unzip_{year}"] = dict(
-        zip_path=zip_path,
-        cdl_path=cdl_input_path,
-    )
-
-# %% Pytask Function
-for _id, kwargs in cdl_unzip_dict.items():
-
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_unzip_cdl(
-        zip_path: Annotated[Path, Product],
-        cdl_path: Annotated[Path, Product],
-    ):
-        unzip_cdl(zip_path, cdl_path)
-
-
-# %% Calculate the binary and percentage crop layers
-
+# Calculate the binary and percentage crop layers
 # create the binary and percentage crop layers for each crop type
 # the will take the raw 30 meter data, create a binary layer for the list of crop values
 # in CDL, and then warp that binary layer to the GEPA grid
@@ -140,25 +94,44 @@ for crop_name, crop_vals in crop_val_dict.items():
 calc_crop_perc
 
 # %% Pytask Function
-for _id, kwargs in calc_crop_perc.items():
 
-    @mark.persist
-    @task(id=_id, kwargs=kwargs)
-    def task_calc_cdl_perc(
-        cdl_input_path: Path,
-        output_path_binary: Annotated[Path, Product],
-        output_path_perc: Annotated[Path, Product],
-        crop_vals: np.array,
-    ):
 
-        make_raster_binary(
-            input_path=cdl_input_path,
-            output_path=output_path_binary,
-            true_vals=crop_vals,
-            num_workers=NUM_WORKERS,
-        )
-        warp_to_gepa_grid(
-            input_path=output_path_binary,
-            output_path=output_path_perc,
-            num_threads=NUM_WORKERS,
-        )
+def task_download_unzip_cdl(
+    url: str,
+    zip_path: Annotated[Path, Product],
+    cdl_path: Annotated[Path, Product],
+):
+    download_url(url, zip_path)
+    unzip_file(zip_path, cdl_path)
+
+
+def task_calc_cdl_perc(
+    cdl_input_path: Path,
+    output_path_binary: Annotated[Path, Product],
+    output_path_perc: Annotated[Path, Product],
+    crop_vals: np.array,
+):
+
+    make_raster_binary(
+        input_path=cdl_input_path,
+        output_path=output_path_binary,
+        true_vals=crop_vals,
+        num_workers=NUM_WORKERS,
+    )
+    warp_to_gepa_grid(
+        input_path=output_path_binary,
+        output_path=output_path_perc,
+        num_threads=NUM_WORKERS,
+    )
+
+
+# %%
+import pytask
+
+sesh = pytask.build(
+    dry_run=True,
+    tasks=
+    [task_download_unzip_cdl(**kwargs) for _id, kwargs in cdl_prep_dict.items()]
+    + [task_calc_cdl_perc(**kwargs) for _id, kwargs in calc_crop_perc.items()],
+)
+# %%

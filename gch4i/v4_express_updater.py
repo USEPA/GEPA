@@ -26,7 +26,7 @@ Outputs:
 """
 
 # %%
-from networkx import display
+from IPython.display import display
 from tqdm.auto import tqdm
 
 from gch4i.gridding_utils import GriddingInfo, V4ExpressUpdater

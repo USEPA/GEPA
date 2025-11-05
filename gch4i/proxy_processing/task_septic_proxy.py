@@ -78,28 +78,30 @@ from pytask import Product, mark
 from tqdm.auto import tqdm
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
-    tmp_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_sector_data_dir_path,
+    v4_tmp_data_dir_path,
     years,
 )
 from gch4i.utils import GEPA_spatial_profile, normalize_xr
 
 # %%
-source_dir = sector_data_dir_path / "septic"
+source_dir = v4_sector_data_dir_path / "septic"
+population_dir = v4_sector_data_dir_path / "worldpop"
 
 
 # %%
 @mark.persist
 def task_septic_proxy(
-    pop_input_paths: Path = list(tmp_data_dir_path.glob("usa_ppp_*_reprojected.tif")),
+    pop_input_paths: Path = list(population_dir.glob("usa_pop_*_reprojected.tif")),
     smod_zip_path: str = f"zip://{source_dir}/GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_V2_0.zip",
     smod_shp_path: str = "GHS_SMOD_E2020_GLOBE_R2023A_54009_1000_UC_V2_0.shp",
     census_urban_path: str = f"zip://{source_dir}/tl_2020_us_uac20_corrected.zip",
     ahs_septic_use_path: Path = source_dir / "AHS TABLE4 3_12_2025.csv",
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "septic_pop_proxy.nc",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
+    / "septic_pop_proxy.nc",
 ) -> None:
 
     # %%
@@ -152,11 +154,6 @@ def task_septic_proxy(
             # pop_arr = np.where(pop_arr > 0, pop_arr, np.nan)
             pop_arrs_list.append(pop_arr)
 
-    # this duplicates the 2020 data into 2021 and 2022 since those population data
-    # are not available yet.
-    pop_arrs_list.append(pop_arr)
-    pop_arrs_list.append(pop_arr)
-
     # stack the population arrays together
     pop_arr = np.stack(pop_arrs_list)
     pop_arr = np.astype(np.flip(pop_arr, axis=1), np.float64)
@@ -167,8 +164,8 @@ def task_septic_proxy(
         dims=["year", "y", "x"],
         coords={
             "year": years,
-            "y": GEPA_spatial_profile.y,
-            "x": GEPA_spatial_profile.x,
+            "y": gepa_profile.y,
+            "x": gepa_profile.x,
         },
     )  # .where(lambda x: x > 0)
     tmp_file = rasterio.MemoryFile()
@@ -207,7 +204,7 @@ def task_septic_proxy(
     census_urban_peri_gdf = census_urban_gdf.overlay(smod_gdf, how="difference")
     # then concat them together
     urban_gdf = pd.concat([smod_gdf, census_urban_peri_gdf])
-    urban_gdf.to_parquet(tmp_data_dir_path / "urban_gdf.parquet")
+    urban_gdf.to_parquet(v4_tmp_data_dir_path / "urban_gdf.parquet")
 
     # %%
     ax = smod_gdf.plot(color="xkcd:teal")
@@ -235,7 +232,7 @@ def task_septic_proxy(
 
     # this is a temporary file as a convenience to look at ourside of Python. So I don't
     # list it in the function.
-    urban_grid_path = tmp_data_dir_path / "septic_urban.tif"
+    urban_grid_path = v4_tmp_data_dir_path / "septic_urban.tif"
 
     try:
         urban_grid.rio.to_raster(urban_grid_path, profile=gepa_profile.profile)
@@ -354,4 +351,23 @@ def task_septic_proxy(
     )
     out_ds.to_netcdf(output_path)
 
-    # %%
+
+# %%
+from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo
+
+grid_info = GriddingInfo()
+
+for row in grid_info.mapping_df.query(f"proxy_id == 'septic_pop_proxy'").itertuples():
+    try:
+        gridder = EmiProxyGridder(
+            gch4i_name=row.gch4i_name,
+            proxy_id=row.proxy_id,
+            emi_id=row.emi_id,
+        )
+        gridder.run_gridding()
+    except Exception as e:
+        print(f"Error for {row.gch4i_name}, {row.proxy_id}, {row.emi_id}: {e}")
+
+grid_info.get_status_table()
+grid_info.display_all_pair_statuses()
+# %%

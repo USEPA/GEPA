@@ -17,7 +17,7 @@ v4_ghgi_data_dir_path = V4_DATA_PATH / "ghgi"
 v4_tmp_data_dir_path = V4_DATA_PATH / "tmp"
 v4_emi_data_dir_path = V4_DATA_PATH / "emis"
 v4_proxy_data_dir_path = V4_DATA_PATH / "proxy"
-v4_sector_data_dir_path = V4_DATA_PATH / "sector"
+v4_sector_data_dir_path = V4_DATA_PATH / "open_data"
 v4_intermediate_data_dir_path = V4_DATA_PATH / "interim"
 v4_prelim_gridded_dir = V4_DATA_PATH / "gridded_data_prelim"
 v4_final_gridded_dir = V4_DATA_PATH / "gridded_data_final"
@@ -48,7 +48,7 @@ census_geometry_list = ["county", "state", "primaryroads"]
 
 # the years of the data processing.
 min_year = 2012
-max_year = 2022
+max_year = 2023
 years = range(min_year, max_year + 1)
 
 EQ_AREA_CRS = "ESRI:102003"

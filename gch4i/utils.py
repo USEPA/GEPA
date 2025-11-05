@@ -1,11 +1,13 @@
 import calendar
 import concurrent
 import logging
+import re
 import threading
 import time
 import warnings
+from datetime import datetime
 from pathlib import Path
-import re
+from zipfile import ZipFile
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -24,22 +26,20 @@ from geocube.api.core import make_geocube
 from geopy.exc import GeocoderServiceError, GeocoderTimedOut
 from geopy.geocoders import Nominatim
 from joblib import Parallel, delayed
+from pyproj import CRS
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
 from rasterio.plot import show
 from rasterio.profiles import default_gtiff_profile
 from rasterio.warp import reproject
 from tqdm.auto import tqdm
-from datetime import datetime
-
-from pyproj import CRS
 
 from gch4i.config import (
     V3_DATA_PATH,
-    v4_global_data_dir_path,
     load_road_globals,
     max_year,
     min_year,
+    v4_global_data_dir_path,
     years,
 )
 
@@ -97,7 +97,7 @@ def load_area_matrix(resolution=0.1, plot=False) -> np.array:
 
     gepa_profile = GEPA_spatial_profile(resolution)
     res_text = str(resolution).replace(".", "")
-    input_path = global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
+    input_path = v4_global_data_dir_path / f"gridded_area_{res_text}_cm2.tif"
     with rasterio.open(input_path) as src:
         area_matrix = src.read(1)
 
@@ -249,6 +249,12 @@ def us_state_to_abbrev(state_name: str) -> str:
         if state_name in us_state_to_abbrev_dict
         else state_name
     )
+
+
+def unzip_file(zip_path, output_path):
+    """unzip an input path zip_path to the output path"""
+    with ZipFile(zip_path, "r") as z:
+        z.extract(output_path.name, output_path.parent)
 
 
 def download_url(url, output_path):
