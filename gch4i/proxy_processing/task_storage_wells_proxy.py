@@ -20,13 +20,12 @@ import numpy as np
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    proxy_data_dir_path,
-    sector_data_dir_path,
-    V3_DATA_PATH,
-    global_data_dir_path
+    v4_proxy_data_dir_path,
+    v4_open_data_dir_path,
+    v4_global_data_dir_path
 )
 
-state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
 
 
 # %% Pytask Function
@@ -34,12 +33,12 @@ state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
 @task(id="storage_wells_proxy")
 def get_storage_wells_proxy_data(
     # Inputs
-    EIA_StorFields_inputfile: Path = sector_data_dir_path / 'eia/191 Field Level Storage Data (Annual).csv',
-    EIA_StorFields_locs_inputfile: Path = sector_data_dir_path / 'eia/EIA_Natural_Gas_Underground_Storage.csv',
+    EIA_StorFields_inputfile: Path = v4_open_data_dir_path / 'eia/191 Field Level Storage Data (Annual) 2012-2023.csv',
+    EIA_StorFields_locs_inputfile: Path = v4_open_data_dir_path / 'eia/EIA_Natural_Gas_Underground_Storage.csv',
 
     # Outputs
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "storage_wells_proxy.parquet"
+        v4_proxy_data_dir_path / "storage_wells_proxy.parquet"
     ),
 ):
     """
@@ -120,8 +119,7 @@ def get_storage_wells_proxy_data(
     )
 
     # load county geometries as fallback locations for facilities without known lat-lon
-    #county_fips = pd.read_csv(V3_DATA_PATH / 'geospatial/county_fips.csv')[['STATEFP', 'COUNTYFP', 'STATE', 'COUNTYNAME']]
-    county_shapes = gpd.read_file(V3_DATA_PATH / 'geospatial/cb_2018_us_county_500k/cb_2018_us_county_500k.shp')
+    county_shapes = gpd.read_file(v4_global_data_dir_path / 'cb_2018_us_county_500k/cb_2018_us_county_500k/cb_2018_us_county_500k.shp')
     county_shapes['STATEFP'] = county_shapes['STATEFP'].astype('int64')
     county_shapes['COUNTYFP'] = county_shapes['COUNTYFP'].astype('int64')
     # merge county geometries with fips codes
