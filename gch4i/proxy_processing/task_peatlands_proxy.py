@@ -1,13 +1,13 @@
 """
 Name:                   task_peatlands_proxy.py
-Date Last Modified:     2024-01-22
+Date Last Modified:     2025-10-07
 Authors Name:           C. Coxen (RTI International)
 Purpose:                Generate proxy data for peatlands emissions
-Input Files:            - {emi_data_dir_path}/peatlands_emi.csv
-                        - {sector_data_dir_path}/peatlands/peat_producers_2013.csv
-                          {sector_data_dir_path}/peatlands/
+Input Files:            - {v4_emi_data_dir_path}/peatlands_emi.csv
+                        - {v4_open_data_dir_path}/peatlands/peat_producers_2013.csv
+                          {v4_open_data_dir_path}/peatlands/
                             peat_producers_2013_geocoded.csv
-Output Files:           - peatlands_proxy.parquet
+Output Files:           - {v4_proxy_data_dir_path}/peatlands_proxy.parquet
 Notes:                  - This script assigns GHGI emissions from peatland production
                             based on the location of peat producers sourced from the
                             2013 USGS peatland producers dataset
@@ -29,8 +29,8 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    sector_data_dir_path,
-    proxy_data_dir_path
+    v4_open_data_dir_path,
+    v4_proxy_data_dir_path
 )
 from gch4i.utils import (
     geocode_address,
@@ -38,9 +38,9 @@ from gch4i.utils import (
 )
 
 # %% Input data paths
-peatland_producers_path = sector_data_dir_path / "peatlands" / "peat_producers_2013.csv"
-geocoded_peatland_producers_path = sector_data_dir_path / "peatlands" / "peat_producers_2013_geocoded.csv"
-proxy_output_path = proxy_data_dir_path / "peatlands_proxy.parquet"
+peatland_producers_path = v4_open_data_dir_path / "peatlands" / "peat_producers_2013.csv"
+geocoded_peatland_producers_path = v4_open_data_dir_path / "peatlands" / "peat_producers_2013_geocoded.csv"
+proxy_output_path = v4_proxy_data_dir_path / "peatlands_proxy.parquet"
 
 # %% Pytask function
 @mark.persist

@@ -1,6 +1,6 @@
 """
 Name:                   task_mob_comb_railroads_proxy.py
-Date Last Modified:     2025-01-24
+Date Last Modified:     2025-11-11
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of mobile combustion railroad proxy emissions
 Input Files:            - Raw Input: {global_data_dir_path}/raw/
@@ -23,7 +23,15 @@ from joblib import Parallel, delayed
 from pytask import Product, mark, task
 from tqdm.auto import tqdm
 
-from gch4i.config import global_data_dir_path, proxy_data_dir_path, years
+from gch4i.config import (
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
+    v4_proxy_data_dir_path,
+    #v4_tmp_data_dir_path,
+    years
+)
+
+
 from gch4i.utils import normalize
 
 parallel = Parallel(n_jobs=-1, verbose=10)
@@ -37,7 +45,7 @@ parallel = Parallel(n_jobs=-1, verbose=10)
 # @mark.persist
 # @task(id="railroads_proxy")
 # def task_get_railroads_proxy(
-raw_path = global_data_dir_path / "raw"
+raw_path = v4_open_data_dir_path / "mobile_combustion" / "raw"  # v4_global_data_dir_path / "raw"
 
 rail_input_paths = []
 for year in years:
@@ -96,10 +104,10 @@ def state_overlay(input_path, state_in_path):
 @mark.persist
 @task(id="railroads_proxy")
 def task_railroad_proxy(
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
     input_paths: list[Path] = rail_input_paths,
     output_proxy_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "railroads_proxy.parquet"
+        v4_proxy_data_dir_path / "railroads_proxy.parquet"
     ),
 ):
     # %%

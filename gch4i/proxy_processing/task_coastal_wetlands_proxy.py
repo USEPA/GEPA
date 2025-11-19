@@ -1,6 +1,6 @@
 """
 Name:                   task_coastal_wetlands_proxy.py
-Date Last Modified:     2025-01-23
+Date Last Modified:     2025-10-07
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script processes the coastal wetlands data from the CCAP
                         dataset to create a proxy for the emissions from coastal
@@ -11,12 +11,12 @@ Purpose:                This script processes the coastal wetlands data from the
                         saved as a netcdf file. The data for 2012 and 2016 are
                         replicated into the following years to match the years of the
                         emissions data.
-Input Files:            - {sector_data_dir_path}/coastal_wetlands/
+Input Files:            - {v4_open_data_dir_path}/coastal_wetlands/
                             conus_2010_ccap_landcover_20200311.tif
-                        - {sector_data_dir_path}/coastal_wetlands/
+                        - {v4_open_data_dir_path}/coastal_wetlands/
                             conus_2016_ccap_landcover_20200311.tif
-                        - {sector_data_dir_path}/coastal_wetlands/tidal_mhhws_extent.img
-Output Files:           - {proxy_data_dir_path}/coastal_wetlands_proxy.nc
+                        - {v4_open_data_dir_path}/coastal_wetlands/tidal_mhhws_extent.img
+Output Files:           - {v4_proxy_data_dir_path}/coastal_wetlands_proxy.nc
 """
 
 # %% Import Libraries
@@ -38,9 +38,9 @@ from geocube.api.core import make_geocube
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_open_data_dir_path,
     years,
 )
 from gch4i.utils import (
@@ -79,9 +79,9 @@ Monica
 """
 
 # %% Set File Paths
-cw_dir_path = sector_data_dir_path / "coastal_wetlands"
+cw_dir_path = v4_open_data_dir_path / "coastal_wetlands"
 tidal_mask_warped = cw_dir_path / "tidal_mask_warped.tif"
-proxy_output_path = proxy_data_dir_path / "coastal_wetlands_proxy.nc"
+proxy_output_path = v4_proxy_data_dir_path / "coastal_wetlands_proxy.nc"
 
 # https://coastalimagery.blob.core.windows.net/ccap-landcover/CCAP_bulk_download/Regional_30meter_Land_Cover/ccap-class-scheme-highres.pdf
 COASTAL_WETLAND_CLASSES = np.array([13, 14, 15])
@@ -181,7 +181,7 @@ for id, kwargs in prep_dict.items():
 @task
 def task_coastal_wetlands_proxy(
     input_paths: list[Path] = list(cw_dir_path.glob("coastal_wetlands_*_gepa.tif")),
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = proxy_output_path,
 ) -> None:
 

@@ -1,15 +1,15 @@
 """
 Name:                   task_iron_steel_proxy.py
-Date Last Modified:     2025-02-05
+Date Last Modified:     2025-11-19
 Authors Name:           Andrew Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
 Input Files:            Subpart Q Iron API Call:
                         - https://data.epa.gov/efservice/q_subpart_level_information/
                             pub_dim_facility/ghg_name/=/Methane/CSV
-                        Inventory: {ghgi_data_dir_path}/
-                            2C1_iron_and_steel/State_Iron-Steel_1990-2022.xlsx
+                        Inventory: {v4_ghgi_data_dir_path}/
+                            2C1_iron_and_steel/State_Iron-Steel_1990-2023.xlsx
                         State Geo: {global_data_dir_path}/tl_2020_us_state.zip
-Output Files:           - {proxy_data_dir_path}/iron_steel_proxy.parquet
+Output Files:           - {v4_proxy_data_dir_path}/iron_steel_proxy.parquet
 """
 
 ########################################################################################
@@ -23,8 +23,14 @@ import numpy as np
 import pandas as pd
 from pytask import Product, mark, task
 
-from gch4i.config import emi_data_dir_path  # V3_DATA_PATH,
-from gch4i.config import ghgi_data_dir_path, global_data_dir_path, proxy_data_dir_path
+from gch4i.config import (
+    v4_emi_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
+    v4_proxy_data_dir_path,
+    v3_proxy_data_dir_path
+)
 
 ########################################################################################
 # %% Pytask
@@ -34,13 +40,17 @@ from gch4i.config import ghgi_data_dir_path, global_data_dir_path, proxy_data_di
 @task(id="iron_steel_proxy")
 def task_get_iron_steel_proxy_data(
     inventory_workbook_path: Path = (
-        ghgi_data_dir_path / "2C1_iron_and_steel/State_Iron-Steel_1990-2022.xlsx"
+        v4_ghgi_data_dir_path / "2C1_iron_and_steel/State_Iron-Steel_1990-2023.xlsx"
     ),
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    subpart_q: Path = (
+        v4_open_data_dir_path
+        / "ghgrp/GHGRP_SubpartQ_Emissions_2010-2023.csv"
+    ),
     subpart_q_path="https://data.epa.gov/efservice/q_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
-    emi_iron_steel_path: Path = emi_data_dir_path / "iron_steel_emi.csv",
+    emi_iron_steel_path: Path = v4_emi_data_dir_path / "iron_steel_emi.csv",
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "iron_steel_proxy.parquet"
+        v4_proxy_data_dir_path / "iron_steel_proxy.parquet"
     ),
 ):
     """
@@ -63,7 +73,7 @@ def task_get_iron_steel_proxy_data(
     ghgi_facilities_df = pd.read_excel(
         inventory_workbook_path,
         sheet_name="GHGRP_Facilities",
-        skiprows=2,
+        skiprows=3,
         nrows=132,
         usecols="A:J",
     ).rename(columns=lambda x: str(x).lower())
@@ -80,18 +90,25 @@ def task_get_iron_steel_proxy_data(
     )
 
     # Get full subpart Q data
-    subpart_Q = pd.read_csv(
-        subpart_q_path,
-        usecols=[
-            "facility_id",
-            "facility_name",
-            "reporting_year",
-            "ghg_quantity",
-            "latitude",
-            "longitude",
-            "address1",
-        ],
-    ).rename(columns={"reporting_year": "year"})
+    if subpart_q.exists():
+        print(f"Found subpart Q locally at {subpart_q}")
+        subpart_Q = pd.read_csv(
+            subpart_q
+        )
+    else:
+        print("Downloading subpart Q from EPA API")
+        subpart_Q = pd.read_csv(
+            subpart_q_path,
+            usecols=[
+                "facility_id",
+                "facility_name",
+                "reporting_year",
+                "ghg_quantity",
+                "latitude",
+                "longitude",
+                "address1",
+            ],
+        ).rename(columns={"reporting_year": "year"})
 
     # Merge GHGI facilities with subpart Q facilities to grab facility_id
     ghgi_facilities_df = pd.merge(
@@ -199,6 +216,23 @@ def task_get_iron_steel_proxy_data(
         (proxy_df["facility_id"] == 1001699) & (proxy_df["year"] == 2018),
         ["ghg_quantity", "latitude", "longitude"],
     ] = [0, 33.36792, -79.29486]
+
+    # V4 UPDATE: GHGI data `GHGRP Facilities` was never updated past 2022, so we will
+    # grab 2023 data from subpart Q for all facilities that already exist in our df
+    subpart_Q_2023 = (
+        subpart_Q_red.query("facility_id in @proxy_df['facility_id'].unique() and year == 2023")
+    )[["facility_id", "year", "ghg_quantity", "latitude", "longitude"]]
+    # Grab facility_name and state_code for 2023 data
+    subpart_Q_2023 = subpart_Q_2023.merge(
+        ghgi_facilities_df[["facility_id", "facility_name", "state_code"]].drop_duplicates(),
+        on="facility_id",
+        how="left"
+    )
+    # Concatenate 2023 data to proxy_df    
+    proxy_df = pd.concat(
+        [proxy_df, subpart_Q_2023], ignore_index=True
+    ).reset_index(drop=True)
+
 
     ####################################################################################
     # %% Generate Relative Emissions
@@ -339,6 +373,5 @@ def task_get_iron_steel_proxy_data(
         raise ValueError("not all values are normed correctly!")
     # %%
     proxy_gdf.to_parquet(output_path)
-
 
 # %%

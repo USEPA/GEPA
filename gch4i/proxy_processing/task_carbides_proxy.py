@@ -1,10 +1,10 @@
 """
 Name:                   task_carbides_proxy.py
-Date Last Modified:     2024-11-26
+Date Last Modified:     2025-10-06
 Authors Name:           A. Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
 Input Files:            - Proxy_Facilities.xlsx
-                        - Carbide_Facilities_2012-2022.csv
+                        - Carbide_Facilities_2012-2023.csv
 Output Files:           - carbides_proxy.parquet
 Notes:                  - V2 only had location of one facilitiy, in IL
                         - Documentation reflects method for locating other facilities
@@ -24,19 +24,18 @@ import pandas as pd
 import geopandas as gpd
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    proxy_data_dir_path,
+    V4_DATA_PATH,
+    v4_open_data_dir_path,
+    v4_proxy_data_dir_path,
     max_year,
     min_year
 )
 
 ########################################################################################
 # %% Load Path Files
-GEPA_Carbide_Path = V3_DATA_PATH.parent / "GEPA_Source_Code" / "GEPA_Carbide"
+EPA_Proxy_Facilities_Path = v4_open_data_dir_path / "carbides/Proxy_Facilities.xlsx"
 
-EPA_Proxy_Facilities_Path = GEPA_Carbide_Path / "InputData/Proxy_Facilities.xlsx"
-
-EPA_GHGRP_facilities_path = GEPA_Carbide_Path / "InputData/GHGRP/Carbide_Facilities_2012-2022.csv"
+EPA_GHGRP_facilities_path = v4_open_data_dir_path / "carbides/Carbide_Facilities_2012-2023.csv"
 
 ########################################################################################
 # %% Pytask
@@ -47,7 +46,7 @@ EPA_GHGRP_facilities_path = GEPA_Carbide_Path / "InputData/GHGRP/Carbide_Facilit
 def task_get_carbides_proxy_data(
     EPA_Proxy_Facilities_Path: Path = EPA_Proxy_Facilities_Path,
     EPA_GHGRP_facilities_path: Path = EPA_GHGRP_facilities_path,
-    output_path: Annotated[Path, Product] = proxy_data_dir_path
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "carbides_proxy.parquet"
 ):
     """
@@ -89,7 +88,8 @@ def task_get_carbides_proxy_data(
                      "longitude",
                      "city",
                      "state",
-                     "year"))
+                     "year"),
+            skiprows=1)
         .rename(columns={"state": "state_code"})
         .drop_duplicates(subset=['facility_id', 'city', 'year'], keep='first')
         .reset_index(drop=True)

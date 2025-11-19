@@ -1,13 +1,13 @@
 """
 Name:                   task_comb_mob_mines.py
-Date Last Modified:     2025-01-23
+Date Last Modified:     2025-10-08
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script creates a proxy for mobile combustion mines. This
                         proxy is created from the MSHA dataset and the US state
                         shapefile. All active mines are used here, relative emissions
                         are calculated by state, and the data is normalized. The
                         emissions are equally allocated to all mines by state.
-Input Files:            - Mines.zip
+Input Files:            - Mines.txt
                         - tl_2020_us_state.zip
 Output Files:           - mines_proxy.parquet
 """
@@ -26,9 +26,9 @@ import pandas as pd
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_open_data_dir_path,
 )
 from gch4i.utils import normalize
 
@@ -36,24 +36,24 @@ from gch4i.utils import normalize
 @mark.persist
 @task(id="mines_proxy")
 def task_mob_comb_mines(
-    msha_path: Path = sector_data_dir_path / "abandoned_mines/Mines.zip",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "mines_proxy.parquet",
+    msha_path: Path = v4_open_data_dir_path / "abandoned_mines/Mines.txt",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "mines_proxy.parquet",
 ):
 
-    with ZipFile(msha_path) as z:
-        with z.open("Mines.txt") as f:
-            msha_df = (
-                pd.read_table(
-                    f,
-                    sep="|",
-                    encoding="ISO-8859-1",
-                    usecols=["MINE_ID", "LATITUDE", "LONGITUDE", "CURRENT_MINE_STATUS"],
-                )
-                .query("CURRENT_MINE_STATUS == 'Active'")
-                .dropna(subset=["LATITUDE", "LONGITUDE"])
-                .set_index("MINE_ID")
-            )
+    #with ZipFile(msha_path) as z:
+    #    with z.open("Mines.txt") as f:
+    msha_df = (
+        pd.read_table(
+            msha_path,
+            sep="|",
+            encoding="ISO-8859-1",
+            usecols=["MINE_ID", "LATITUDE", "LONGITUDE", "CURRENT_MINE_STATUS"],
+        )
+        .query("CURRENT_MINE_STATUS == 'Active'")
+        .dropna(subset=["LATITUDE", "LONGITUDE"])
+        .set_index("MINE_ID")
+    )
 
     state_gdf = (
         gpd.read_file(state_path)
@@ -101,3 +101,5 @@ def task_mob_comb_mines(
     proxy_gdf.plot(ax=ax, color="xkcd:goldenrod", markersize=1)
 
     proxy_gdf.to_parquet(output_path)
+
+# %%

@@ -45,14 +45,14 @@ from shapely import from_wkt
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, box
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    global_data_dir_path,
+    V4_DATA_PATH,
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
     load_road_globals,
     load_state_ansi,
     max_year,
     min_year,
-    proxy_data_dir_path,
-    tmp_data_dir_path,
+    v4_proxy_data_dir_path,
     years,
 )
 from gch4i.utils import *
@@ -82,9 +82,9 @@ def task_roads_proxy() -> None:
     #########################################################################
     # get gridded overlay and output to file
     out_dir = task_outputs_path / "overlay_cell_state_region"
-    input_path: Path = tmp_data_dir_path / "population_proxy_raw.tif"
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-    output_path = proxy_data_dir_path / "roads_proxy.nc"
+    input_path: Path = v4_open_data_dir_path / "worldpop" / "population_proxy_raw.tif"
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
+    output_path = v4_proxy_data_dir_path / "roads_proxy.nc"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"RUNNING OVERLAY")
@@ -118,7 +118,8 @@ def task_roads_proxy() -> None:
         #     continue
         epsg = "ESRI:102003"
         road_type_col = "road_type"
-        road_proxy_df = get_road_proxy_data().rename(columns={"state_code": "state"})
+        road_proxy_df = get_road_proxy_data()
+        road_proxy_df.rename(columns={"state_code": "state"}, inplace=True)
 
         cells = get_overlay_gdf(year, crs=epsg).rename(
             columns={"STUSPS": "state", "urban": "region"}
@@ -263,7 +264,8 @@ def task_roads_proxy() -> None:
 
         del roads
 
-        road_proxy_df = get_road_proxy_data().rename(columns={"state_code": "state"})
+        road_proxy_df = get_road_proxy_data().rename(columns={"state_code": "state",
+                                                              "emission_allocation": "proxy"})
         print(
             road_proxy_df.loc[road_proxy_df["year"] == year]
             .groupby(["state", "year", "vehicle"])
@@ -288,12 +290,14 @@ def task_roads_proxy() -> None:
         print(example.proxy.sum())
         print(example.methane_emission_allocation.sum())
 
-        ax = state_gdf.join(
+        ax = state_gdf.merge(
             long_table.groupby(["state", "year"])
             .methane_emission_allocation.sum()
-            .reset_index()
-            .set_index("state"),
-            on="STUSPS",
+            .reset_index(),
+            # CHANGED FROM on="STUSPS" TO left and right on
+            left_on="state_code",
+            right_on="state",
+            how="left"
         ).plot(column="methane_emission_allocation", legend=True)
         ax.set_title(f"Methane Emission Allocation by State for {year}")
         print(
@@ -346,7 +350,7 @@ def task_roads_proxy() -> None:
     )
 
     # convert proxy df to xarray/netcdf, with dimensions for x, y, and year
-    proxy_out_path = V3_DATA_PATH / "proxy"
+    proxy_out_path = V4_DATA_PATH / "proxy"
 
     cells_proxy = cells.join(long_data, how="left").reset_index(names=["cell_id"])
 
@@ -425,6 +429,7 @@ def task_roads_proxy() -> None:
     with rio.open(input_path) as src:
         ras_crs = src.crs
 
+    # NOTE: Is long_table needed here? It seems unused.
     # read in roads_df by year
     long_table = pd.read_csv(csv_path)
     long_table["methane_emission_allocation"] = long_table[
@@ -458,7 +463,12 @@ def task_roads_proxy() -> None:
         return x / x.sum()
 
     # apply the normalization function to the population data
-    out_ds = ds.groupby(["year", "statefp"]).apply(normalize).sortby(["year", "y", "x"])
+    out_ds = (
+    ds.groupby("year")
+      .map(lambda d: d.groupby(d.statefp).map(normalize))
+      .sortby(["year", "y", "x"])
+      )
+
     out_ds["rel_emi"].shape
 
     # check that the normalization worked
@@ -487,11 +497,15 @@ def task_roads_proxy() -> None:
     out_ds["rel_emi"].sel(year=2020).plot.imshow()
     plt.show()
 
+    # FLIP Y-AXIS
+    out_ds = out_ds.sortby("y", ascending=False)
+
+
     out_ds["rel_emi"].transpose("year", "y", "x").round(10).rio.write_crs(
         ras_crs
     ).to_netcdf(output_path)
 
     out_ds["rel_emi"].round(10).rio.write_crs(ras_crs).to_netcdf(
-        output_path.with_stem("road_proxy_noTranspose.nc")
+        output_path.with_stem("road_proxy_noTranspose")
     )
     # %%
