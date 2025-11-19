@@ -162,15 +162,21 @@ def get_storage_wells_proxy_data(
     proxy_gdf = proxy_gdf[proxy_gdf['state_code'].isin(state_fips['state_code'].unique())]
 
     # drop now-unnecessary columns
-    proxy_gdf = proxy_gdf[['year', 'state_code', 'rel_emi', 'geometry']].reset_index()
+    proxy_gdf = proxy_gdf[['year', 'rel_emi', 'geometry']].reset_index(drop=True)
 
     ###############################################################
     # Normalize and save
     ###############################################################
 
-    # Normalize relative emissions to sum to 1 for each year and state
+    # Normalize relative emissions to sum to 1 for each year (national-level proxy)
     # drop state-years with 0 total volume
-    proxy_gdf = (proxy_gdf.groupby(['state_code', 'year'])
+
+    # Remove invalid and empty geometries
+    proxy_gdf['valid_geometries'] = proxy_gdf.is_valid
+    proxy_gdf['empty_geometries'] = proxy_gdf.is_empty
+    proxy_gdf = proxy_gdf.query("valid_geometries == True").query("empty_geometries == False").reset_index(drop=True).drop(columns=['valid_geometries', 'empty_geometries'])
+
+    proxy_gdf = (proxy_gdf.groupby(['year'])
                  .filter(lambda x: x['rel_emi'].sum() > 0))
     # normalize to sum to 1
     proxy_gdf['rel_emi'] = (proxy_gdf.groupby(['year'])['rel_emi']
@@ -179,9 +185,6 @@ def get_storage_wells_proxy_data(
     sums = proxy_gdf.groupby(["year"])["rel_emi"].sum()
     # assert that the sums are close to 1
     assert np.isclose(sums, 1.0, atol=1e-8).all(), f"Relative emissions do not sum to 1 for each year and state; {sums}"
-
-    # Drop state_code
-    proxy_gdf = proxy_gdf.drop(columns=['state_code'])
 
     # Save to parquet
     proxy_gdf.to_parquet(output_path)
