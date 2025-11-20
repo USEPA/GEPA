@@ -1,6 +1,6 @@
 """
 Name:                   task_coal_surface_and_under_proxy.py
-Date Last Modified:     2025-01-27
+Date Last Modified:     2025-10-06
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script produces proxies for underground and surface coal
                         mines, and post mining for both. The proxies are based on the
@@ -9,18 +9,18 @@ Purpose:                This script produces proxies for underground and surface
                         underground or surface mines. The production data is then joined
                         with the mines database to get the production data for each
                         mine.
-Input Files:            -   {ghgi_data_dir_path} / "1B1a_coal_mining_underground/
-                            Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        -   {ghgi_data_dir_path} / "1B1a_coal_mining_surface/
-                            Coal_90-22_FRv1-InvDBcorrection.xlsx"
-                        -   {sector_data_dir_path} / "abandoned_mines/Mines.zip"
-                        -   {global_data_dir_path} / "tl_2020_us_state.zip"
-                        -   {sector_data_dir_path} / "coal" / "Updated_Loc.csv",
-                        -   {sector_data_dir_path} / "coal" / "Updated_Loc_ug.csv",
-                        -   {EIA_dir_path} / "coalpublic{year}.xls"
-Output Files:           -   {proxy_data_dir_path} /
+Input Files:            -   {v4_ghgi_data_dir_path} / "1B1a_coal_mining_underground/
+                            Coal_90-23_FRv1.xlsx"
+                        -   {v4_ghgi_data_dir_path} / "1B1a_coal_mining_surface/
+                            Coal_90-23_FRv1.xlsx"
+                        -   {v4_open_data_dir_path} / "abandoned_mines/Mines.zip"
+                        -   {v4_global_data_dir_path} / "tl_2020_us_state.zip"
+                        -   {v4_open_data_dir_path} / "coal" / "Updated_Loc.csv",
+                        -   {v4_open_data_dir_path} / "coal" / "Updated_Loc_ug.csv",
+                        -   {v4_open_data_dir_path} / "coal" / "coalpublic{year}.xls"
+Output Files:           -   {v4_proxy_data_dir_path} /
                             "coal_{mine_type.lower()}_proxy.parquet"
-                        -   {proxy_data_dir_path} /
+                        -   {v4_proxy_data_dir_path} /
                             "coal_post_{mine_type.lower()}_proxy.parquet"
 
 NOTE: The 2021 and recent EIA files had to be converted manually to the .xlsx format.
@@ -48,10 +48,12 @@ from pytask import Product, mark, task
 from tqdm.auto import tqdm
 
 from gch4i.config import (
-    ghgi_data_dir_path,
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_tmp_data_dir_path,
+    v3_proxy_data_dir_path,
+    v4_open_data_dir_path,
     years,
 )
 from gch4i.utils import download_url, normalize
@@ -111,6 +113,7 @@ inv_ug_mine_count_by_year = {
     2020: 231,
     2021: 203,
     2022: 209,
+    2023: 207
 }
 
 
@@ -118,9 +121,9 @@ inv_ug_mine_count_by_year = {
 # 'CM Emissions Summary' cell C 40.
 mmcf_to_Gg = 51921
 # coal input data
-coal_sector_dir = sector_data_dir_path / "coal"
+coal_sector_dir = v4_open_data_dir_path / "coal"
 # county geospatial data
-CNTY_GEO_PATH: Path = global_data_dir_path / "tl_2020_us_county.zip"
+CNTY_GEO_PATH: Path = v4_global_data_dir_path / "tl_2020_us_county.zip"
 # EIA input data
 EIA_dir_path = coal_sector_dir / "EIA"
 
@@ -178,24 +181,24 @@ for mine_type in mine_types:
 
     if mine_type == "Underground":
         ghgi_file_name = (
-            "1B1a_coal_mining_underground/Coal_90-22_FRv1-InvDBcorrection.xlsx"
+            "1B1a_coal_mining_underground/Coal_90-23_FRv1.xlsx"
         )
     if mine_type == "Surface":
         ghgi_file_name = (
-            "1B1a_coal_mining_surface/" "Coal_90-22_FRv1-InvDBcorrection.xlsx"
+            "1B1a_coal_mining_surface/Coal_90-23_FRv1.xlsx"
         )
 
     param_dict[mine_type] = dict(
         mine_type=mine_type,
-        inventory_workbook_path=(ghgi_data_dir_path / ghgi_file_name),
-        msha_path=sector_data_dir_path / "abandoned_mines/Mines.zip",
+        inventory_workbook_path=(v4_ghgi_data_dir_path / ghgi_file_name),
+        msha_path=v4_open_data_dir_path / "abandoned_mines/Mines.txt",  # Changed from .zip to .txt
         eia_paths=eia_input_paths,
-        state_path=global_data_dir_path / "tl_2020_us_state.zip",
-        output_path_under=(
-            proxy_data_dir_path / f"coal_{mine_type.lower()}_proxy.parquet"
+        state_path=v4_global_data_dir_path / "tl_2020_us_state.zip",
+        output_path_coal=(  # Originally: output_path_under
+            v4_proxy_data_dir_path / f"coal_{mine_type.lower()}_proxy.parquet"
         ),
-        output_path_under_post=(
-            proxy_data_dir_path / f"coal_post_{mine_type.lower()}_proxy.parquet"
+        output_path_coal_post=(  # Originally: output_path_under_post
+            v4_proxy_data_dir_path / f"coal_post_{mine_type.lower()}_proxy.parquet"
         ),
     )
 
@@ -264,32 +267,30 @@ for _id, kwargs in param_dict.items():
 
         # %%
         # load the MSHA mine data
-        with ZipFile(msha_path) as z:
-            with z.open("Mines.txt") as f:
-                msha_df = (
-                    pd.read_table(
-                        f,
-                        sep="|",
-                        encoding="ISO-8859-1",
-                        usecols=[
-                            "MINE_ID",
-                            "CURRENT_MINE_NAME",
-                            "LATITUDE",
-                            "LONGITUDE",
-                            "CURRENT_MINE_TYPE",
-                            "CURRENT_MINE_STATUS",
-                            "FIPS_CNTY_CD",
-                            "BOM_STATE_CD",
-                        ],
-                    )
-                    .astype({"MINE_ID": int})
-                    .set_index("MINE_ID")
-                    .query("CURRENT_MINE_TYPE == @mine_type")
-                    .assign(
-                        fips=lambda df: df["BOM_STATE_CD"].astype(str).str.zfill(2)
-                        + df["FIPS_CNTY_CD"].astype(str).str.zfill(3)
-                    )
-                )
+        msha_df = (
+            pd.read_table(
+                msha_path,
+                sep="|",
+                encoding="ISO-8859-1",
+                usecols=[
+                    "MINE_ID",
+                    "CURRENT_MINE_NAME",
+                    "LATITUDE",
+                    "LONGITUDE",
+                    "CURRENT_MINE_TYPE",
+                    "CURRENT_MINE_STATUS",
+                    "FIPS_CNTY_CD",
+                    "BOM_STATE_CD",
+                ],
+            )
+            .astype({"MINE_ID": int})
+            .set_index("MINE_ID")
+            .query("CURRENT_MINE_TYPE == @mine_type")
+            .assign(
+                fips=lambda df: df["BOM_STATE_CD"].astype(str).str.zfill(2)
+                + df["FIPS_CNTY_CD"].astype(str).str.zfill(3)
+            )
+        )
 
         # this is used to get location data onto inventory mines and EIA mines via
         # MINE ID

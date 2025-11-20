@@ -1,6 +1,6 @@
 """
 Name:                   task_abandoned_og_wells_emi.py
-Date Last Modified:     2025-08-21
+Date Last Modified:     2025-11-19
 Authors Name:           A. Burnette, Nick Kruskamp (RTI International)
 Purpose:                Mapping of wells emissions to State, Year, emissions format
 gch4i_name:             1B2ab_abandoned_og_wells
@@ -21,6 +21,7 @@ import pandas as pd
 from gch4i.config import (
     V4_DATA_PATH,
     v4_emi_data_dir_path,
+    v3_emi_data_dir_path,
     v4_ghgi_data_dir_path,
     max_year,
     min_year,
@@ -155,3 +156,12 @@ for _id, _kwargs in emi_parameters_dict.items():
         )
         # Save the emissions data to the output path
         emission_group_df.to_csv(output_path)
+
+# # %% Testing
+# v3_aog_gas = pd.read_csv(v3_emi_data_dir_path / "aog_gas_wells_emi.csv", index_col=0)
+# v4_aog_gas = pd.read_csv(v4_emi_data_dir_path / "aog_gas_wells_emi.csv", index_col=0)
+
+# # %%
+# v3_aog_oil = pd.read_csv(v3_emi_data_dir_path / "aog_oil_wells_emi.csv", index_col=0)
+# v4_aog_oil = pd.read_csv(v4_emi_data_dir_path / "aog_oil_wells_emi.csv", index_col=0)
+# # %%

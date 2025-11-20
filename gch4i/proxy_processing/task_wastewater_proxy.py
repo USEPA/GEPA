@@ -1,6 +1,6 @@
 """
 Name:                   task_wastewater_proxy.py
-Date Last Modified:     2025-06-18
+Date Last Modified:     2025-10-07
 Authors Name:           C. Coxen (RTI International)
 Purpose:                Mapping of wastewater proxy emissions
 Input Files:            - ww_dom_nonseptic_emi.csv
@@ -28,9 +28,11 @@ Notes:                  - Openbrewerydb data was pulled in to fill in gaps in th
 """
 
 # %%
+import os
+
 from pathlib import Path
 
-from typing import List
+from typing import List, Annotated
 import requests
 import time
 from pyarrow import parquet
@@ -43,12 +45,14 @@ from geopy.distance import geodesic
 
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    proxy_data_dir_path,
-    emi_data_dir_path,
-    sector_data_dir_path,
+    V4_DATA_PATH,
+    v4_proxy_data_dir_path,
+    v4_emi_data_dir_path,
+    v4_open_data_dir_path,
+    v3_emi_data_dir_path,
+    v3_proxy_data_dir_path,
     min_year,
-    global_data_dir_path,
+    v4_global_data_dir_path,
     years
 )
 
@@ -59,44 +63,44 @@ from gch4i.utils import (
 # %% File paths
 
 # Wastewater emissions data
-ww_dom_nonseptic_emi_path = emi_data_dir_path / "ww_dom_nonseptic_emi.csv"
-ww_sep_emi_path = emi_data_dir_path / "ww_sep_emi.csv"
-ww_brew_emi_path = emi_data_dir_path / "ww_brew_emi.csv"
-ww_ethanol_emi_path = emi_data_dir_path / "ww_ethanol_emi.csv"
-ww_fv_emi_path = emi_data_dir_path / "ww_fv_emi.csv"
-ww_mp_emi_path = emi_data_dir_path / "ww_mp_emi.csv"
-ww_petrref_emi_path = emi_data_dir_path / "ww_petrref_emi.csv"
-ww_pp_emi_path = emi_data_dir_path / "ww_pp_emi.csv"
+ww_dom_nonseptic_emi_path = v4_emi_data_dir_path / "ww_dom_nonseptic_emi.csv"
+ww_sep_emi_path = v4_emi_data_dir_path / "ww_sep_emi.csv"
+ww_brew_emi_path = v4_emi_data_dir_path / "ww_brew_emi.csv"
+ww_ethanol_emi_path = v4_emi_data_dir_path / "ww_ethanol_emi.csv"
+ww_fv_emi_path = v4_emi_data_dir_path / "ww_fv_emi.csv"
+ww_mp_emi_path = v4_emi_data_dir_path / "ww_mp_emi.csv"
+ww_petrref_emi_path = v4_emi_data_dir_path / "ww_petrref_emi.csv"
+ww_pp_emi_path = v4_emi_data_dir_path / "ww_pp_emi.csv"
 
 # FRS data
-frs_naics_path = V3_DATA_PATH / "global/NATIONAL_NAICS_FILE.CSV"
-frs_facility_path = V3_DATA_PATH / "global/NATIONAL_FACILITY_FILE.CSV"
+frs_naics_path = v4_global_data_dir_path / "NATIONAL_NAICS_FILE.CSV"
+frs_facility_path = v4_global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV"
 
 # Brewery df data
-brewery_file = sector_data_dir_path / "industrial_wastewater/openbrewerydb_geolocated.csv"
+brewery_file = v4_open_data_dir_path / "industrial_wastewater/openbrewerydb_geolocated.csv"
 
 # ECHO data
-echo_file_directory = sector_data_dir_path / "industrial_wastewater/ECHO"
+echo_file_directory = v4_open_data_dir_path / "ECHO"
 combined_echo_file_path = echo_file_directory / "combined_echo_data.csv"
 
 # GHGRP Data
-ghgrp_emi_ii_inputfile = sector_data_dir_path / "industrial_wastewater/ghgrp_subpart_ii.csv"
-ghgrp_facility_ii_inputfile = sector_data_dir_path / "industrial_wastewater/SubpartII_Facilities.csv"
+ghgrp_emi_ii_inputfile = v4_open_data_dir_path / "ghgrp/ghgrp_subpart_ii.csv"
+ghgrp_facility_ii_inputfile = v4_open_data_dir_path / "ghgrp/SubpartII_Facilities.csv"
 
 # Output file paths
-pp_output_file = proxy_data_dir_path / "ww_pp_proxy.parquet"
-mp_output_file = proxy_data_dir_path / "ww_mp_proxy.parquet"
-fv_output_file = proxy_data_dir_path / "ww_fv_proxy.parquet"
-ethanol_output_file = proxy_data_dir_path / "ww_ethanol_proxy.parquet"
-brew_output_file = proxy_data_dir_path / "ww_brew_proxy.parquet"
-petrref_output_file = proxy_data_dir_path / "ww_petrref_proxy.parquet"
-nonseptic_output_file = proxy_data_dir_path / "ww_nonseptic_proxy.parquet"
+pp_output_file = v4_proxy_data_dir_path / "ww_pp_proxy.parquet"
+mp_output_file = v4_proxy_data_dir_path / "ww_mp_proxy.parquet"
+fv_output_file = v4_proxy_data_dir_path / "ww_fv_proxy.parquet"
+ethanol_output_file = v4_proxy_data_dir_path / "ww_ethanol_proxy.parquet"
+brew_output_file = v4_proxy_data_dir_path / "ww_brew_proxy.parquet"
+petrref_output_file = v4_proxy_data_dir_path / "ww_petrref_proxy.parquet"
+nonseptic_output_file = v4_proxy_data_dir_path / "ww_nonseptic_proxy.parquet"
 
 # %% Pytask function
 @mark.persist
 @task(id="wastewater_proxy")
 def create_wastewater_proxy_files(
-   input_paths: list[Path] = list(ww_dom_nonseptic_emi_path, 
+   input_paths: list[Path] = [ww_dom_nonseptic_emi_path, 
                                   ww_sep_emi_path, 
                                   ww_brew_emi_path, 
                                   ww_ethanol_emi_path, 
@@ -107,19 +111,19 @@ def create_wastewater_proxy_files(
                                   frs_naics_path,
                                   frs_facility_path,
                                   brewery_file,
-                                  echo_file_directory,
-                                  combined_echo_file_path,
+                                  #echo_file_directory,
+                                  #combined_echo_file_path,
                                   ghgrp_emi_ii_inputfile,
                                   ghgrp_facility_ii_inputfile
-                                  ),
-    output_path: Annotated[Path, Product] = list(pp_output_file,
+   ],
+    output_path: Annotated[list[Path], Product] = [pp_output_file,
                                     mp_output_file,
                                     fv_output_file,
                                     ethanol_output_file,
                                     brew_output_file,
                                     petrref_output_file,
                                     nonseptic_output_file
-                                    )
+    ]
     ) -> None:
 
     # %% Read in emi data
@@ -1204,9 +1208,22 @@ def create_wastewater_proxy_files(
     }
 
     # Process all industries
+    # for industry_name, (naics_prefix, sic_codes) in industries.items():
+    #     result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
+    #     exec(f"echo_{industry_name.lower()} = result_df")
+    # Process all industries
+    echo_industries = {}
     for industry_name, (naics_prefix, sic_codes) in industries.items():
         result_df = extract_industry_facilities(echo_nonpotw, industry_name, naics_prefix, sic_codes)
-        exec(f"echo_{industry_name.lower()} = result_df")
+        echo_industries[industry_name] = result_df
+
+    # Unpack into individual variables for easier access
+    echo_pp = echo_industries['pp']
+    echo_mp = echo_industries['mp']
+    echo_fv = echo_industries['fv']
+    echo_eth = echo_industries['eth']
+    echo_brew = echo_industries['brew']
+    echo_petrref = echo_industries['petrref']
 
     # %% Step 2.5 Add the FRS data to the ECHO data
 
@@ -1224,7 +1241,7 @@ def create_wastewater_proxy_files(
 
     facility_info = facility_info.rename(columns={
         'primary_naics': 'NAICS Code',
-        'state_name': 'State',
+        'state': 'State',  # Changed from state_name to state
         'year': 'Year'
     })
 
@@ -1291,4 +1308,58 @@ def create_wastewater_proxy_files(
 
     final_nonseptic.to_parquet(nonseptic_output_file, index=False)
 
-# %%
+# %% TESTING
+
+# #nonseptic = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_nonseptic_proxy.parquet')
+# petrref = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_petrref_proxy.parquet')
+# brew = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_brew_proxy.parquet')
+# ethanol = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_ethanol_proxy.parquet')
+# fv = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_fv_proxy.parquet')
+# mp = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_mp_proxy.parquet')
+# pp = gpd.read_parquet(v4_proxy_data_dir_path / 'ww_pp_proxy.parquet')
+
+# # emis
+# petrref_emi = pd.read_csv(ww_petrref_emi_path).query("ghgi_ch4_kt > 0")
+# brew_emi = pd.read_csv(ww_brew_emi_path)
+# ethanol_emi = pd.read_csv(ww_ethanol_emi_path)
+# fv_emi = pd.read_csv(ww_fv_emi_path)
+# mp_emi = pd.read_csv(ww_mp_emi_path)
+# pp_emi = pd.read_csv(ww_pp_emi_path)
+
+# # Compare
+# df_unique = petrref_emi[['state_code', 'year']].drop_duplicates()
+# gdf_unique = petrref[['state_code', 'year']].drop_duplicates()
+# missing_combos = df_unique.merge(
+#     gdf_unique,
+#     on=['state_code', 'year'],
+#     how='left',
+#     indicator=True
+# ).query('_merge == "left_only"').drop('_merge', axis=1)
+
+
+# # %% V3 Proxy Data
+# # Proxy data
+# v3_petrref = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_petrref_proxy.parquet')
+# v3_brew = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_brew_proxy.parquet')
+# v3_ethanol = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_ethanol_proxy.parquet')
+# v3_fv = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_fv_proxy.parquet')
+# v3_mp = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_mp_proxy.parquet')
+# v3_pp = gpd.read_parquet(v3_proxy_data_dir_path / 'ww_pp_proxy.parquet')
+
+# # Emi Data
+# v3_petrref_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_petrref_emi.csv')
+# v3_brew_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_brew_emi.csv')
+# v3_ethanol_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_ethanol_emi.csv')
+# v3_fv_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_fv_emi.csv')
+# v3_mp_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_mp_emi.csv')
+# v3_pp_emi = pd.read_csv(v3_emi_data_dir_path / 'ww_pp_emi.csv')
+
+# # Compare
+# v3_df_unique = v3_petrref_emi[['state_code', 'year']].drop_duplicates()
+# v3_gdf_unique = v3_petrref[['state_code', 'year']].drop_duplicates()
+# v3_missing_combos = v3_df_unique.merge(
+#     v3_gdf_unique,
+#     on=['state_code', 'year'],
+#     how='left',
+#     indicator=True
+# ).query('_merge == "left_only"').drop('_merge', axis=1)

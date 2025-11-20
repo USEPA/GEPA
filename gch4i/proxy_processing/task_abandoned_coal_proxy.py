@@ -1,14 +1,14 @@
 """
 Name:                  task_abandoned_coal_proxy.py
-Date Last Modified:    2025-01-22
+Date Last Modified:    2025-10-08
 Authors Name:          Nick Kruskamp (RTI International)
 Purpose:               Process abandoned coal proxy data for emissions.
 Input Files:           - Inventory Workbook: {ghgi_data_dir_path}/1B1a_abandoned_coal/
-                        AbandonedCoalMines1990-2022_FRv1.xlsx
-                       - MSHA: {sector_data_dir_path}/abandoned_mines/Mines.zip
-                       - County: {global_data_dir_path}/tl_2020_us_county.zip
-                       - State: {global_data_dir_path}/tl_2020_us_state.zip
-Output Files:          - {proxy_data_dir_path}/abd_coal_proxy.parquet
+                        AbandonedCoalMines1990-2023_FRv1.xlsx
+                       - MSHA: {open_data_dir_path}/abandoned_mines/Mines.zip
+                       - County: {v4_global_data_dir_path}/tl_2020_us_county.zip
+                       - State: {v4_global_data_dir_path}/tl_2020_us_state.zip
+Output Files:          - {v4_proxy_data_dir_path}/abd_coal_proxy.parquet
 """
 
 # %% Import Libraries
@@ -27,12 +27,12 @@ import seaborn as sns
 from pytask import Product, mark, task
 
 from gch4i.config import (
-    ghgi_data_dir_path,
-    global_data_dir_path,
-    sector_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
     max_year,
     min_year,
-    proxy_data_dir_path,
+    v4_proxy_data_dir_path,
 )
 from gch4i.utils import name_formatter
 
@@ -45,13 +45,13 @@ pd.set_option("future.no_silent_downcasting", True)
 @task(id="abd_coal_proxy")
 def task_get_abd_coal_proxy_data(
     inventory_workbook_path: Path = (
-        ghgi_data_dir_path / "1B1a_abandoned_coal/AbandonedCoalMines1990-2022_FRv1.xlsx"
+        v4_ghgi_data_dir_path / "1B1a_abandoned_coal/AbandonedCoalMines1990-2023_FRv1.xlsx"
     ),
-    msha_path: Path = sector_data_dir_path / "abandoned_mines/Mines.zip",
-    county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    msha_path: Path = v4_open_data_dir_path / "abandoned_mines/Mines.txt",
+    county_path: Path = v4_global_data_dir_path / "tl_2020_us_county.zip",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
     output_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "abd_coal_proxy.parquet"
+        v4_proxy_data_dir_path / "abd_coal_proxy.parquet"
     ),
 ):
     """
@@ -163,7 +163,7 @@ def task_get_abd_coal_proxy_data(
     # Create the ratios dataframe from the inventory workbook. Get the ratios of mines
     # that are sealed, venting, and flooded by basin and year. the rows to skip to find
     # each of the ratio tables.
-    skip_row_list = [26, 29, 29, 29, 29, 29, 29, 29, 30, 30, 30]
+    skip_row_list = [26, 29, 29, 29, 29, 29, 29, 29, 30, 30, 30, 30]
     ratio_list = []
     for year, skip_row in zip(range(min_year, max_year + 1), skip_row_list):
 
@@ -218,26 +218,25 @@ def task_get_abd_coal_proxy_data(
     )
 
     # load the MSHA mine data
-    with ZipFile(msha_path) as z:
-        with z.open("Mines.txt") as f:
-            msha_df = (
-                pd.read_table(
-                    f,
-                    sep="|",
-                    encoding="ISO-8859-1",
-                    # usecols=["MINE_ID", "LATITUDE", "LONGITUDE"],
-                )
-                # EEM: this identifies whether the mine was a coal mine (C) or metal/non-metal mine
-                .query("COAL_METAL_IND == 'C'")
-                .dropna(subset=["LATITUDE", "LONGITUDE"])
-                .assign(
-                    formatted_name=lambda df: name_formatter(df["CURRENT_MINE_NAME"]),
-                    formatted_county=lambda df: name_formatter(df["FIPS_CNTY_NM"]),
-                    formatted_state=lambda df: name_formatter(df["STATE"]),
-                    date_abd=lambda df: pd.to_datetime(df["CURRENT_STATUS_DT"]),
-                )
-                # .set_index("MINE_ID")
-            )
+
+    msha_df = (
+        pd.read_table(
+            msha_path,
+            sep="|",
+            encoding="ISO-8859-1",
+            # usecols=["MINE_ID", "LATITUDE", "LONGITUDE"],
+        )
+        # EEM: this identifies whether the mine was a coal mine (C) or metal/non-metal mine
+        .query("COAL_METAL_IND == 'C'")
+        .dropna(subset=["LATITUDE", "LONGITUDE"])
+        .assign(
+            formatted_name=lambda df: name_formatter(df["CURRENT_MINE_NAME"]),
+            formatted_county=lambda df: name_formatter(df["FIPS_CNTY_NM"]),
+            formatted_state=lambda df: name_formatter(df["STATE"]),
+            date_abd=lambda df: pd.to_datetime(df["CURRENT_STATUS_DT"]),
+        )
+        # .set_index("MINE_ID")
+    )
 
     # make the mines data spatial
     msha_gdf = gpd.GeoDataFrame(

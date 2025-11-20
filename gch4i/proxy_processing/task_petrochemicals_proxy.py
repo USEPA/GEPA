@@ -1,3 +1,18 @@
+"""
+Name:                   task_petrochemicals_proxy.py
+Date Last Modified:     2025-11-19
+Original Author Name:   Unknown
+Editing Authors Name:   Andrew Burnette (RTI International)
+Purpose:                Mapping of petrochemical production facilities
+Input Files:            Subpart X API Call:
+                        - https://data.epa.gov/efservice/x_subpart_level_information/
+                            pub_dim_facility/ghg_name/=/Methane/CSV
+                        Inventory: {v4_ghgi_data_dir_path}/
+                            "2B8_petrochemicals/State_Petrochemicals_1990-2023.xlsx",
+                        State Geo: {v4_global_data_dir_path}/tl_2020_us_state.zip
+Output Files:           - {v4_proxy_data_dir_path}/petrochemicals.parquet
+"""
+
 # %%
 from pathlib import Path
 from typing import Annotated
@@ -14,10 +29,11 @@ import seaborn as sns
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    V3_DATA_PATH,
-    proxy_data_dir_path,
-    global_data_dir_path,
-    ghgi_data_dir_path,
+    V4_DATA_PATH,
+    v4_proxy_data_dir_path,
+    v4_global_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_open_data_dir_path,
     max_year,
     min_year,
 )
@@ -28,10 +44,11 @@ from gch4i.utils import name_formatter
 @mark.persist
 @task(id="petrochemicals_proxy")
 def task_get_petrochemicals_proxy_data(
-    inventory_workbook_path: Path = ghgi_data_dir_path / "2B8_petrochemicals/State_Petrochemicals_1990-2022.xlsx",
+    inventory_workbook_path: Path = v4_ghgi_data_dir_path / "2B8_petrochemicals/State_Petrochemicals_1990-2023.xlsx",
+    subpart_x: Path = (v4_open_data_dir_path / 'ghgrp/GHGRP_SubpartX_Emissions_2010-2023.csv'),
     subpart_x_path = "https://data.epa.gov/efservice/x_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "petrochemicals_proxy.parquet",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "petrochemicals_proxy.parquet"
 ):
     """
     Four petrochemical production facilities with Arylonitrile production report
@@ -72,20 +89,20 @@ def task_get_petrochemicals_proxy_data(
             sheet_name="SRI&ICIS",
             skiprows=1,
             nrows=130,
-            usecols="A:D,AB:AL",
+            usecols="A:D,AB:AM",
         )
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"company": "facility_name", "state": "state_name"})
         .rename(columns={"capacity.22": "2012", "capacity.23": "2013", "capacity.24": "2014",
         "capacity.25": "2015", "capacity.26": "2016", "capacity.27": "2017", 
         "capacity.28": "2018", "capacity.29": "2019", "capacity.30": "2020",
-        "capacity.31": "2021", "capacity.32": "2022"})
+        "capacity.31": "2021", "capacity.32": "2022", "capacity.33": "2023"})  # Added 2023 column
         .query("petrochemical == 'Acrylonitrile'")
         .drop(columns=["petrochemical"])
         .astype({"state_name":str})
         .merge(state_gdf[["state_code", "state_name"]], on="state_name")
         # drop facilities that have all nan values
-        .dropna(subset=[str(x) for x in list(range(2012,2023))])
+        .dropna(subset=[str(x) for x in list(range(2012,2024))])  # Changed from 2023 to 2024
         .reset_index(drop=True)
     )
 
@@ -116,21 +133,40 @@ def task_get_petrochemicals_proxy_data(
     ghgi_facilities_df.loc[imatch, 'city'] = 'port lavaca'
 
     # Get and format Subpart X facility locations
-    facility_locations_df = (
-        pd.read_csv(
-            subpart_x_path,
-            usecols=("facility_name",
-                     "facility_id",
-                     "latitude",
-                     "longitude",
-                     "city",
-                     "state")
+    if subpart_x.exists():
+        print(f"Found subpart X locally at {subpart_x}")
+        facility_locations_df = (
+            pd.read_csv(
+                subpart_x,
+                usecols=("facility_name",
+                        "facility_id",
+                        "latitude",
+                        "longitude",
+                        "city",
+                        "state")
             )
-        .rename(columns=lambda x: str(x).lower())
-        .rename(columns={"state": "state_code"})
-        .drop_duplicates(subset=['facility_id', 'city'], keep='first')
-        .reset_index(drop=True)
-    )
+            .rename(columns=lambda x: str(x).lower())
+            .rename(columns={"state": "state_code"})
+            .drop_duplicates(subset=['facility_id', 'city'], keep='first')
+            .reset_index(drop=True)
+        )
+    else:
+        print("Downloading subpart X from EPA API")
+        facility_locations_df = (
+            pd.read_csv(
+                subpart_x_path,
+                usecols=("facility_name",
+                        "facility_id",
+                        "latitude",
+                        "longitude",
+                        "city",
+                        "state")
+                )
+            .rename(columns=lambda x: str(x).lower())
+            .rename(columns={"state": "state_code"})
+            .drop_duplicates(subset=['facility_id', 'city'], keep='first')
+            .reset_index(drop=True)
+        )
 
     # Match GHGI facilities to Subpart X facility locations
     for ifacility in np.arange(0,len(ghgi_facilities_df)):
@@ -143,7 +179,7 @@ def task_get_petrochemicals_proxy_data(
     # Format proxy data to consolidate years into a single column
     ghgi_facilities_w_locations_df = ghgi_facilities_df.melt(id_vars=[
         'facility_name', 'state_code', 'lat', 'lon'],
-        value_vars=list(ghgi_facilities_df.columns.values)[3:14],
+        value_vars=list(ghgi_facilities_df.columns.values)[3:15],  # Updated to next year (15)
         var_name='year', value_name='capacity_kt')
     
     ghgi_facilities_w_locations_df['rel_emi'] = ghgi_facilities_w_locations_df.groupby(["state_code", "year"])['capacity_kt'].transform(lambda x: x / x.sum() if x.sum() > 0 else 0)

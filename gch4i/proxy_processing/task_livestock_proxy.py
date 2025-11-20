@@ -1,3 +1,13 @@
+"""
+Name:                   task_livestock_proxy.py
+Date Last Modified:     2025-10-06
+Original Authors Name:  Unknown
+Last Updated Author:    A. Burnette (RTI International)
+Purpose:                Mapping of livestock proxy emissions
+Input Files:            - 
+Output Files:           - {v4_proxy_data_dir_path}/
+"""
+
 # %%
 # TODO: pytask this file
 
@@ -19,9 +29,9 @@ from rasterio.features import rasterize
 from tqdm import tqdm
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_open_data_dir_path,
     years,
 )
 from gch4i.utils import GEPA_spatial_profile, warp_to_gepa_grid, normalize
@@ -93,10 +103,10 @@ recode_rank_dict = {
     6: 0.4999,
 }
 
-livestock_dir_path = sector_data_dir_path / "USDA_NASS"
+livestock_dir_path = v4_open_data_dir_path / "livestock" / "USDA_NASS"
 # the paths to the output files
 
-dst_paths = [proxy_data_dir_path / f"livestock_{x}_proxy.nc" for x in proxy_name_list]
+dst_paths = [v4_proxy_data_dir_path / f"livestock_{x}_proxy.nc" for x in proxy_name_list]
 
 
 @mark.persist
@@ -108,11 +118,11 @@ def task_livestock_proxy() -> None:
 # USDA data that holds the animal rank shapefiles
 luc_input_path: Path = livestock_dir_path / "LUC_ranked_US48_HI_AK.zip"
 # the high res gridded path we'll use to first calculate the rank probability
-high_res_area_input_path: Path = global_data_dir_path / "gridded_area_001_cm2.tif"
+high_res_area_input_path: Path = v4_global_data_dir_path / "gridded_area_001_cm2.tif"
 # the low res area path used as a referenc to build xarray datasett
-area_input_path: Path = global_data_dir_path / "gridded_area_01_cm2.tif"
+area_input_path: Path = v4_global_data_dir_path / "gridded_area_01_cm2.tif"
 # the county shapefile which is used to normalize data to the right geographic level
-county_path: Path = global_data_dir_path / "tl_2020_us_county.zip"
+county_path: Path = v4_global_data_dir_path / "tl_2020_us_county.zip"
 # the outputs paths for all the proxies
 output_paths: Annotated[list[Path], Product] = dst_paths
 
@@ -233,7 +243,7 @@ for gepa_path in tqdm(gepa_paths, desc="normalizing and saving proxy"):
     # print(f"are all county/year norm sums equal to 1? {vals_are_one}")
     for proxy_name, usda_name in proxy_usda_dict.items():
         if usda_name.split(".")[0] in gepa_path.stem:
-            out_path = proxy_data_dir_path / f"livestock_{proxy_name}_proxy.nc"
+            out_path = v4_proxy_data_dir_path / f"livestock_{proxy_name}_proxy.nc"
             out_ds.rio.write_crs(high_res_profile.profile["crs"]).to_netcdf(out_path)
 
 # %%

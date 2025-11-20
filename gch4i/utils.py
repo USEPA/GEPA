@@ -33,6 +33,7 @@ from tqdm.auto import tqdm
 from datetime import datetime
 
 from pyproj import CRS
+from shapely.geometry import box
 
 from gch4i.config import (
     V3_DATA_PATH,
@@ -909,7 +910,7 @@ def read_reduce_data(year):
     road_data = road_data[["year", "road_type", "geometry"]]
 
     # Write to parquet
-    road_data.to_parquet()
+    road_data.to_parquet(out_path)  # EDIT: added out_path
 
     del (
         road_data,
@@ -922,13 +923,13 @@ def read_reduce_data(year):
         other_red,
     )
 
-    gc.collect()
+    #gc.collect()
 
     return out_path
 
 
 def get_roads_path(
-    year, raw_roads_path: Path = V3_DATA_PATH / "global/raw_roads", raw=True
+    year, raw_roads_path: Path = V4_DATA_PATH / "open_data/mobile_combustion/raw/raw_roads", raw=True
 ):
     """
     If raw is True, it returns the parquet files of the original roads data at at path:
@@ -1485,7 +1486,7 @@ def calculate_state_proxies(
 
 
 # Unpack State Proxy Arrays
-def unpack_state_proxy(state_proxy_array, proxy_name="Emission Allocation"):
+def unpack_state_proxy(state_proxy_array, num_years, proxy_name):
     reshaped_state_proxy = state_proxy_array.reshape(-1)
 
     row_index = np.repeat(["urban", "rural"], 3 * 57 * num_years)
@@ -1506,12 +1507,10 @@ def unpack_state_proxy(state_proxy_array, proxy_name="Emission Allocation"):
     )
 
     df["State_abbr"] = df["State"].map(state_mapping)
-
-    cols = df.columns.tolist()
-    state_index = cols.index("State")
-    cols.insert(state_index + 1, cols.pop(cols.index("State_abbr")))
-    df = df[cols]
-
+    
+    # Explicitly specify the column order you want
+    df = df[["Region", "Road Type", "State", "State_abbr", "Year", proxy_name]]
+    
     return df
 
 
@@ -1544,7 +1543,7 @@ def unpack_state_allroads_proxy(vmt_tot):
 
 # Generate Roads Proportions Data
 def get_roads_proportion_data(
-    pas_proxy, lig_proxy, hea_proxy, out_path, proxy_name="Emission Allocation"
+    pas_proxy, lig_proxy, hea_proxy, out_path, proxy_name="emission_allocation"
 ):
     """
     Formats data for roads proxy emissions
@@ -1574,7 +1573,7 @@ def get_roads_proportion_data(
 
     del pas_proxy, lig_proxy, hea_proxy
 
-    gc.collect()
+    #gc.collect()
 
     return None
 
@@ -1616,9 +1615,9 @@ def get_road_proxy_data(
         )
 
         # Unpack State Proxy Outputs
-        pas_proxy = unpack_state_proxy(pas_proxy, num_years)
-        lig_proxy = unpack_state_proxy(lig_proxy, num_years)
-        hea_proxy = unpack_state_proxy(hea_proxy, num_years)
+        pas_proxy = unpack_state_proxy(pas_proxy, num_years, proxy_name="emission_allocation")
+        lig_proxy = unpack_state_proxy(lig_proxy, num_years, proxy_name="emission_allocation")
+        hea_proxy = unpack_state_proxy(hea_proxy, num_years, proxy_name="emission_allocation")
         # tot_proxy = unpack_state_allroads_proxy(vmt_tot)
 
         # Generate Roads Proportions Data

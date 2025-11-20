@@ -1,21 +1,21 @@
 """
 Name:                   task_stat_comb_proxy.py
-Date Last Modified:     2025-07-04
+Date Last Modified:     2025-10-06
 Authors Name:           H. Lohman (RTI International); A. Burnette (RTI International)
 Purpose:                Mapping of stationary combustion proxy emissions
-Input Files:            - State Geo: global_data_dir_path / "tl_2020_us_state.zip"
-                        - EIA 923 Heat Input: sector_data_dir_path / "eia/EIA-923"
-                        - EIA Plant Locations: sector_data_dir_path / "eia/EIA-923/Power_Plants.csv"
+Input Files:            - State Geo: v4_global_data_dir_path / "tl_2020_us_state.zip"
+                        - EIA 923 Heat Input: v4_open_data_dir_path / "eia"
+                        - EIA Plant Locations: v4_open_data_dir_path / "eia/Power_Plants.csv"
                         - Oregon Plant: https://ghgdata.epa.gov/ghgp/service/facilityDetail/2012?id=1007940&ds=E&et=FC_CL&popup=true
-                        - GHGRP Subpart C: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
-                        - GHGRP Subpart D: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
-                        - GHGRP Subpart D Locations: sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+                        - GHGRP Subpart C: v4_open_data_dir_path / "ghgrp/GHGRP_SubpartC_Emissions_2010-2023.csv"
+                        - GHGRP Subpart D: v4_open_data_dir_path / "ghgrp/GHGRP_SubpartD_Emissions_2010-2023.csv"
+                        - GHGRP Subpart D Locations: v4_open_data_dir_path / "ghgrp/GHGRP_FacilityInfo_2010-2023.csv"
 
-Output Files:           - {proxy_data_dir_path} / elec_coal_proxy.parquet
-                        - {proxy_data_dir_path} / elec_gas_proxy.parquet
-                        - {proxy_data_dir_path} / elec_oil_proxy.parquet
-                        - {proxy_data_dir_path} / elec_wood_proxy.parquet
-                        - {proxy_data_dir_path} / indu_proxy.parquet
+Output Files:           - {v4_proxy_data_dir_path} / elec_coal_proxy.parquet
+                        - {v4_proxy_data_dir_path} / elec_gas_proxy.parquet
+                        - {v4_proxy_data_dir_path} / elec_oil_proxy.parquet
+                        - {v4_proxy_data_dir_path} / elec_wood_proxy.parquet
+                        - {v4_proxy_data_dir_path} / indu_proxy.parquet
 Notes:                  - Work with the GHGI Inventory Team to determine if we should
                           use ARP or EIA 923 data for the electricity generation proxies.
                         - Update the GHGRP Subpart C and D data to rely on the API links
@@ -26,6 +26,7 @@ Notes:                  - Work with the GHGI Inventory Team to determine if we s
 # %% STEP 0.1. Load Packages
 
 from pathlib import Path
+import os
 
 # import os
 from typing import Annotated
@@ -37,11 +38,14 @@ from pytask import Product, mark, task
 
 from gch4i.config import (
     V3_DATA_PATH,
-    emi_data_dir_path,
-    global_data_dir_path,
-    proxy_data_dir_path,
-    sector_data_dir_path,
+    V4_DATA_PATH,
+    v4_emi_data_dir_path,
+    v4_global_data_dir_path,
+    v4_open_data_dir_path,
+    v4_proxy_data_dir_path,
     years,
+    min_year,
+    max_year
 )
 
 ########################################################################################
@@ -52,17 +56,17 @@ from gch4i.config import (
 Global_Func_Path = V3_DATA_PATH.parent / "Global_Functions" / "Global_Functions"
 
 # State
-state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
+state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
 
 # Stationary Combustion Emission Files
-elec_coal_emi_path: Path = emi_data_dir_path / "stat_comb_elec_coal_emi.csv"
-elec_gas_emi_path: Path = emi_data_dir_path / "stat_comb_elec_gas_emi.csv"
-elec_oil_emi_path: Path = emi_data_dir_path / "stat_comb_elec_oil_emi.csv"
-elec_wood_emi_path: Path = emi_data_dir_path / "stat_comb_elec_wood_emi.csv"
+elec_coal_emi_path: Path = v4_emi_data_dir_path / "stat_comb_elec_coal_emi.csv"
+elec_gas_emi_path: Path = v4_emi_data_dir_path / "stat_comb_elec_gas_emi.csv"
+elec_oil_emi_path: Path = v4_emi_data_dir_path / "stat_comb_elec_oil_emi.csv"
+elec_wood_emi_path: Path = v4_emi_data_dir_path / "stat_comb_elec_wood_emi.csv"
 
 # EIA 923 Data (data source for electricity generation proxies in v3)
-EIA_923_path: Path = sector_data_dir_path / "eia/EIA-923"
-EIA_923_plant_locs_path: Path = sector_data_dir_path / "eia/EIA-923/Power_Plants.csv"
+EIA_923_path = Path(v4_open_data_dir_path) / "eia/"
+EIA_923_plant_locs_path: Path = v4_open_data_dir_path / "eia/Power_Plants.csv"
 
 # Oregon power plant location for electricity generation proxies
 # https://ghgdata.epa.gov/ghgp/service/facilityDetail/2012?id=1007940&ds=E&et=FC_CL&popup=true
@@ -76,13 +80,13 @@ EIA_923_plant_locs_path: Path = sector_data_dir_path / "eia/EIA-923/Power_Plants
 
 # GHGRP Data (reporting format changed in 2015)
 GHGRP_subC_inputfile = (
-    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartCEmissions_2010-2023.csv"
+    v4_open_data_dir_path / "ghgrp/GHGRP_SubpartC_Emissions_2010-2023.csv"
 )  # subpart C facility IDs and emissions (locations not available)
 GHGRP_subD_inputfile = (
-    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_SubpartDEmissions_2010-2023.csv"
+    v4_open_data_dir_path / "ghgrp/GHGRP_SubpartD_Emissions_2010-2023.csv"
 )  # subpart D facility IDs and emissions
 GHGRP_subDfacility_loc_inputfile = (
-    sector_data_dir_path / "combustion_stationary/GHGRP/GHGRP_FacilityInfo_2010-2023.csv"
+    v4_open_data_dir_path / "ghgrp/GHGRP_FacilityInfo_2010-2023.csv"
 )  # subpart D facility info (for all years, with ID & lat and lons)
 # EEM: I believe that the HGGRP facility info is not only subpart D facilities, but a master list of all emitting facilities. Therefore, we want to only include the
 # facilities that report to subpart C (that are not also in subpart D). The logic here is that Subpart C is all stationary fuel combustion sources, where subpart D
@@ -97,14 +101,14 @@ GHGRP_subDfacility_loc_inputfile = (
 def task_get_electricity_generation_proxy_data(
     state_path=state_path,
     facility_path=EIA_923_plant_locs_path,
-    input_path=EIA_923_path,
-    elec_coal_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    #input_path=EIA_923_path,
+    elec_coal_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "elec_coal_proxy.parquet",
-    elec_gas_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    elec_gas_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "elec_gas_proxy.parquet",
-    elec_oil_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    elec_oil_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "elec_oil_proxy.parquet",
-    elec_wood_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    elec_wood_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "elec_wood_proxy.parquet",
 ):
     """
@@ -147,7 +151,7 @@ def task_get_electricity_generation_proxy_data(
     eia_923_plants = pd.DataFrame()
     for iyear in years:
         eia_923_file_name = f"EIA923_Schedules_2_3_4_5_M_12_{iyear}_Final_Revision.xlsx"
-        eia_923_file_path = os.path.join(input_path, eia_923_file_name)
+        eia_923_file_path = os.path.join(EIA_923_path, eia_923_file_name)
         data_iyear = pd.read_excel(
             eia_923_file_path,
             sheet_name="Page 1 Generation and Fuel Data",
@@ -666,7 +670,7 @@ def create_raw_indu_proxy(
     subpart_C=GHGRP_subC_inputfile,
     subpart_D=GHGRP_subD_inputfile,
     facility_path=GHGRP_subDfacility_loc_inputfile,
-    reporting_indu_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    reporting_indu_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "indu_proxy.parquet",
 ):
     """
@@ -747,7 +751,7 @@ def task_get_reporting_indu_proxy_data(
     subpart_C=GHGRP_subC_inputfile,
     subpart_D=GHGRP_subD_inputfile,
     facility_path=GHGRP_subDfacility_loc_inputfile,
-    reporting_indu_proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path
+    reporting_indu_proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
     / "indu_proxy.parquet",
 ):
 

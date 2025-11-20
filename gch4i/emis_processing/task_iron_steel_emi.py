@@ -1,13 +1,13 @@
 """
 Name:                   task_iron_steel_emi.py
-Date Last Modified:     2025-08-21
+Date Last Modified:     2025-11-18
 Authors Name:           Chris Coxen
 Purpose:                Mapping of iron and steel emissions to State, Year, emissions
                         format
 gch4i_name:             2C1_iron_and_steel
-Input Files:            - {ghgi_data_dir_path}/2C1_iron_and_steel/
+Input Files:            - {gv4_ghgi_data_dir_path}/2C1_iron_and_steel/
                             State_Iron-Steel_1990-2023.xlsx
-Output Files:           - {emi_data_dir_path}/
+Output Files:           - {v4_emi_data_dir_path}/
                             iron_steel_emi.csv
 """
 

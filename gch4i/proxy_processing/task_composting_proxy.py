@@ -1,6 +1,6 @@
 """
 Name:                   task_composting_proxy.py
-Date Last Modified:     2025-01-30
+Date Last Modified:     2025-10-07
 Authors Name:           Nick Kruskamp (RTI International)
 Purpose:                This script combined 4 different facility level datasets into
                         a single composting proxy. The datasets are from the FRS,
@@ -32,9 +32,9 @@ from pytask import Product, mark, task
 from shapely import Point, wkb
 
 from gch4i.config import (
-    global_data_dir_path,
-    proxy_data_dir_path,  # noqa
-    sector_data_dir_path,
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,  # noqa
+    v4_open_data_dir_path,
 )
 from gch4i.utils import name_formatter, normalize
 
@@ -43,7 +43,7 @@ from gch4i.utils import name_formatter, normalize
 COMPOSTING_FRS_NAICS_CODE = 562219
 DUPLICATION_TOLERANCE_M = 2_500  # 2.5 km
 
-composting_dir = sector_data_dir_path / "composting"
+composting_dir = v4_open_data_dir_path / "composting"
 
 
 # %% Pytask Function
@@ -51,15 +51,15 @@ composting_dir = sector_data_dir_path / "composting"
 @task(id="composting_proxy")
 def get_composting_proxy_data(
     excess_food_op_path: Path = composting_dir / "CompostFacilities.xlsx",
-    frs_facility_path: Path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
-    frs_naics_path: Path = global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
+    frs_facility_path: Path = v4_global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
+    frs_naics_path: Path = v4_global_data_dir_path / "NATIONAL_NAICS_FILE.CSV",
     biocycle_path: Path = composting_dir / "biocycle_locs_clean.csv",
     comp_council_path: Path = (
         composting_dir / "STA Certified Compost Participants Map.kml"
     ),
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
     dst_path: Annotated[Path, Product] = (
-        proxy_data_dir_path / "composting_proxy.parquet"
+        v4_proxy_data_dir_path / "composting_proxy.parquet"
     ),
 ):
     """

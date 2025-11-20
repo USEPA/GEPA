@@ -47,10 +47,9 @@ v4_intermediate_data_dir_path = V4_DATA_PATH / "interim"
 v4_prelim_gridded_dir = V4_DATA_PATH / "gridded_data_prelim"
 v4_final_gridded_dir = V4_DATA_PATH / "gridded_data_final"
 
-# v4_logging_dir = V4_DATA_PATH.parents[0] / "gridding_log_and_qc"
-# v4_gridded_output_dir = v4_logging_dir / "gridded_output"
-
-# v4_status_db_path = v4_logging_dir / "gridding_status.db"
+v4_logging_dir = V4_DATA_PATH.parents[0] / "gridding_log_and_qc"
+v4_gridded_output_dir = v4_logging_dir / "gridded_output"
+v4_status_db_path = v4_logging_dir / "gridding_status.db"
 
 # this is used by the file task_download_census_geo.py to download specific census
 # geometry files
@@ -100,23 +99,24 @@ def load_global_file_names():
     )
 
 
+# UPDATED load_road_globals to use V4_DATA_PATH and V4 global paths
 def load_road_globals():
-    raw_path = Path(V3_DATA_PATH) / "global/raw"
-    raw_roads_path = Path(V3_DATA_PATH) / "global/raw_roads"
+    raw_path = Path(V4_DATA_PATH) / "open_data/mobile_combustion/raw"
+    raw_roads_path = Path(V4_DATA_PATH) / "open_data/mobile_combustion/raw/raw_roads"
 
     road_file = str(raw_path / "tl_")
     raw_road_file = str(raw_roads_path / "tl_")
 
-    task_outputs_path = Path(V3_DATA_PATH) / "global/raw_roads/task_outputs"
+    task_outputs_path = Path(V4_DATA_PATH) / "open_data/mobile_combustion/raw/raw_roads/task_outputs"
 
-    global_path = Path(V3_DATA_PATH) / "global"
+    global_path = Path(V4_DATA_PATH) / "global"
     gdf_state_files = str(global_path / "tl_2020_us_state/tl_2020_us_state.shp")
 
     global_input_path = Path(V3_DATA_PATH.parent) / "GEPA_Source_code/Global_InputData"
     state_ansi_path = str(global_input_path / "ANSI/ANSI_state.txt")
 
     GEPA_Comb_Mob_path = (
-        Path(V3_DATA_PATH.parent) / "GEPA_Source_Code/GEPA_Combustion_Mobile/InputData"
+        Path(V4_DATA_PATH) / "open_data/mobile_combustion"
     )
     State_vmt_file = str(GEPA_Comb_Mob_path / "vm2/vm2_")
     State_vdf_file = str(GEPA_Comb_Mob_path / "vm4/vm4_")
