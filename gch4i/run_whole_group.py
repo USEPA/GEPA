@@ -1,9 +1,4 @@
-# %% STEP 0. Load packages, configuration files, and local parameters ------------------
-# for testing/development
-%load_ext autoreload
-%autoreload 2
 # %%
-
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +15,6 @@ gpd.options.io_engine = "pyogrio"
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", 20)
 pd.set_option("future.no_silent_downcasting", True)
-
-
-
-
 
 
 # %%
@@ -48,7 +39,7 @@ g_info = GriddingInfo(update_mapping=True, save_file=True)
 g_info.display_all_pair_statuses()
 # %%
 run_these_groups = [
-    "1B2bi_ng_exploration",
+    # "1B2bi_ng_exploration",
     # "1A_mobile_combustion",
     # "1B2biv_ng_transmission_storage",
     # "3A_enteric_fermentation",
@@ -59,6 +50,7 @@ run_these_groups = [
     # "1B2ai_petroleum_exploration",
     # "1B2aii_petroleum_production",
     # "1B2aiii_petroleum_transport",
+    "3F4_fbar",
 ]
 
 # %%

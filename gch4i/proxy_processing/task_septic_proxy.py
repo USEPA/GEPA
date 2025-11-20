@@ -355,7 +355,7 @@ def task_septic_proxy(
 # %%
 from gch4i.gridding_utils import EmiProxyGridder, GriddingInfo
 
-grid_info = GriddingInfo()
+grid_info = GriddingInfo(update_mapping=True)
 
 for row in grid_info.mapping_df.query(f"proxy_id == 'septic_pop_proxy'").itertuples():
     try:
@@ -370,4 +370,6 @@ for row in grid_info.mapping_df.query(f"proxy_id == 'septic_pop_proxy'").itertup
 
 grid_info.get_status_table()
 grid_info.display_all_pair_statuses()
+# %%
+grid_info.get_status_table
 # %%

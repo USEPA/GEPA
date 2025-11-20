@@ -57,6 +57,7 @@ from tqdm.auto import tqdm
 
 from gch4i.config import (
     V3_DATA_PATH,
+    v3_final_gridded_dir,
     V4_DATA_PATH,
     max_year,
     min_year,
@@ -69,6 +70,7 @@ from gch4i.config import (
     v4_status_db_path,
     v4_tmp_data_dir_path,
     years,
+    version_num,
 )
 from gch4i.utils import (
     GEPA_spatial_profile,
@@ -81,26 +83,28 @@ from gch4i.utils import (
 REL_EMI_COL_LIST = ["rel_emi", "ch4", "emis_kt", "ch4_flux"]
 
 
+prev_version_num = version_num - 1
+
+
 class GriddingInfo:
     def __init__(self, update_mapping=False, save_file=False):
         self.update_mapping: bool = update_mapping
         self.save_file: bool = save_file
-        self.v2_data_path: Path = (
-            V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
-        )
+        if version_num == 3:
+            self.v2_data_path: Path = (
+                V3_DATA_PATH.parents[1] / "v2_v3_comparison_crosswalk.csv"
+            )
+            self.v2_df = pd.read_csv(self.v2_data_path).rename(
+                columns={"v3_gch4i_name": "gch4i_name"}
+            )
         self.data_guide_path: Path = (
             V4_DATA_PATH.parents[0] / "gch4i_data_guide_v4.xlsx"
         )
-        # self.emi_proxy_info_path: Path = (
-        #     V4_DATA_PATH.parents[1] / "emi_proxy_mapping_output.csv"
-        # )
         self.status_db_path: Path = v4_logging_dir / "gridding_status.db"
         self.guide_sheet = pd.read_excel(
             self.data_guide_path, sheet_name="emi_proxy_mapping"
         )
-        self.v2_df = pd.read_csv(self.v2_data_path).rename(
-            columns={"v3_gch4i_name": "gch4i_name"}
-        )
+
         self.get_status_table(save=False)
         self.get_mapping_df()
         self.get_ready_pairs()
@@ -390,12 +394,20 @@ class GriddingInfo:
 
         # filter the emi/proxy data to only those groups that are ready for gridding
         # NOTE: not all v3 gridding groups have a v2 product
-        self.ready_groups_df = (
-            self.group_ready_status[self.group_ready_status["status"] == True]
-            .join(self.v2_df.set_index("gch4i_name"))
-            .fillna({"v2_key": ""})
-            .astype({"v2_key": str})
-        ).merge(self.mapping_df, on="gch4i_name", how="left")
+        if version_num == 3:
+            self.ready_groups_df = (
+                self.group_ready_status[self.group_ready_status["status"] == True]
+                .join(self.v2_df.set_index("gch4i_name"))
+                .fillna({"pv_key": ""})
+                .astype({"pv_key": str})
+            ).merge(self.mapping_df, on="gch4i_name", how="left")
+        # from version 3 on, we assume the group names are the same as before and that
+        # they are all accounted for.
+        else:
+            self.ready_groups_df = (
+                self.group_ready_status[self.group_ready_status["status"] == True]
+            ).merge(self.mapping_df, on="gch4i_name", how="left")
+            self.ready_groups_df["pv_key"] = self.ready_groups_df["gch4i_name"]
 
     def display_all_group_statuses(self):
         # display the progress of the gridding groups
@@ -511,12 +523,18 @@ class EmiProxyGridder(BaseGridder):
         self.annual_output_path = self.qc_dir / f"{self.base_name}.tif"
 
         self.express = express
-        self.emi_input_path = self.get_path(self.emi_id, v4_emi_data_dir_path)
+        self.emi_input_path = self.get_path(self.emi_id, v4_emi_data_dir_path, "emi")
         if express:
-            self.logger.info("Running in express mode, using v3 proxy data")
-            self.proxy_input_path = self.get_path(self.proxy_id, v3_proxy_data_dir_path)
+            self.logger.info(
+                f"Running in express mode, using v{version_num} proxy data"
+            )
+            self.proxy_input_path = self.get_path(
+                self.proxy_id, v3_proxy_data_dir_path, "proxy"
+            )
         else:
-            self.proxy_input_path = self.get_path(self.proxy_id, v4_proxy_data_dir_path)
+            self.proxy_input_path = self.get_path(
+                self.proxy_id, v4_proxy_data_dir_path, "proxy"
+            )
         self.file_type = (
             "parquet" if self.proxy_input_path.suffix == ".parquet" else "netcdf"
         )
@@ -657,16 +675,16 @@ class EmiProxyGridder(BaseGridder):
         self.logger.info("=" * 83)
         self.logger.info(f"Gridding {self.base_name}.")
 
-    def get_path(self, file_name, file_path):
+    def get_path(self, file_name, file_path, file_type):
         try:
             in_path = list(file_path.glob(f"{file_name}.*"))[0]
             if not in_path.exists():
-                self.status = "emi file not found"
+                self.status = f"{file_type} file not found"
                 self.update_status()
                 self.logger.critical(self.status)
                 raise FileNotFoundError(self.status)
         except IndexError:
-            self.status = "emi file not found"
+            self.status = f"{file_type} file not found"
             self.update_status()
             self.logger.critical(self.status)
             raise FileNotFoundError(self.status)
@@ -1976,7 +1994,7 @@ class GroupGridder(BaseGridder):
             self.monthly_scale_output_path = (
                 self.dst_dir / f"monthly_scaling/{self.group_name}_monthly_scaling.tif"
             )
-        self.v2_name = self.data_df["v2_key"].iloc[0]
+        self.pv_name = self.data_df["pv_key"].iloc[0]
         self.tif_flux_output_path = self.dst_dir / f"{self.group_name}_ch4_emi_flux.tif"
         self.tif_kt_output_path = (
             self.dst_dir / f"{self.group_name}_ch4_kt_per_year.tif"
@@ -2173,7 +2191,7 @@ class GroupGridder(BaseGridder):
                 },
                 name=self.group_name,
             ).assign_coords(
-                year=("time", np.repeat(years, len(years) + 1)),
+                year=("time", np.repeat(years, 12)),
                 month=("time", np.tile(np.arange(1, 13), len(years))),
             )
         return out_mass_da
@@ -2209,7 +2227,8 @@ class GroupGridder(BaseGridder):
         )
 
         self.emi_check_df.to_csv(
-            self.qc_dir / f"{self.group_name}_ch4_v3_emi_qc.csv", index=False
+            self.qc_dir / f"{self.group_name}_ch4_v{version_num}_emi_qc.csv",
+            index=False,
         )
 
         if not all(self.emi_check_df["qc_pass"]):
@@ -2218,19 +2237,19 @@ class GroupGridder(BaseGridder):
             raise ValueError("QC FAILED")
         else:
             print(
-                f"QC PASSED: v3 gridded emissions for {self.group_name} "
+                f"QC PASSED: v{version_num} gridded emissions for {self.group_name} "
                 "match inventory emissions."
             )
 
-        self._plot_v3_emission_check()
+        self._plot_current_v_emission_check()
 
-    def _plot_v3_emission_check(self) -> None:
+    def _plot_current_v_emission_check(self) -> None:
         fig, (ax1, ax2) = plt.subplots(
             2, layout="constrained", figsize=(10, 6), dpi=300
         )
         fig.suptitle(
             f"{self.group_name}\n"
-            "Comparison of v3 Inventory Emissions and Gridded Emissions",
+            f"Comparison of v{version_num} Inventory Emissions and Gridded Emissions",
             fontsize=14,
         )
 
@@ -2253,7 +2272,7 @@ class GroupGridder(BaseGridder):
         ax2.set_ylabel("Relative Difference (%)")
 
         plt.savefig(
-            self.qc_dir / f"{self.group_name}_ch4_v3_emi_qc.png",
+            self.qc_dir / f"{self.group_name}_ch4_v{version_num}_emi_qc.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -2343,7 +2362,9 @@ class GroupGridder(BaseGridder):
         )
 
         # Save the plots as PNG files to the figures directory
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_annual_flux.png")
+        plt.savefig(
+            self.qc_dir / f"{self.group_name}_ch4_v{version_num}_annual_flux.png"
+        )
         # Show the plot for review
         plt.show()
         # close the plot
@@ -2410,7 +2431,7 @@ class GroupGridder(BaseGridder):
         # Save the plot as a PNG file
         plt.savefig(
             self.qc_dir
-            / f"{self.group_name}_ch4_v3_flux_difference_{first_year}-{last_year}.png"
+            / f"{self.group_name}_ch4_v{version_num}_flux_difference_{first_year}-{last_year}.png"
         )
         # Show the plot for review
         plt.show()
@@ -2450,9 +2471,10 @@ class GroupGridder(BaseGridder):
             if (self.group_name == "3A_enteric_fermentation") | (
                 self.group_name == "3B_manure_management"
             ):
-                self.logger.info(
-                    "INFO: replacing 29 with 28 for February in livestock emissions"
-                )
+                # self.logger.info(
+                #     "INFO: replacing 29 with 28 for February in livestock emissions"
+                # )
+                print("INFO: replacing 29 with 28 for February in livestock emissions")
                 days_in_months = [28 if x == 29 else x for x in days_in_months]
 
             conv_factors = [
@@ -2475,7 +2497,7 @@ class GroupGridder(BaseGridder):
             if (self.group_name == "3A_enteric_fermentation") | (
                 self.group_name == "3B_manure_management"
             ):
-                self.logger.info("INFO: replacing 366 with 365 in livestock emissions")
+                print("INFO: replacing 366 with 365 in livestock emissions")
                 days_in_year = [365 if x == 366 else x for x in days_in_year]
 
             conv_factors = [
@@ -2499,117 +2521,136 @@ class GroupGridder(BaseGridder):
 
     def QC_flux_emis(self) -> None:
         """
-        Function to compare and plot the difference between v2 and v3 for each year of the
-        raster data for each sector.
+        Function to compare and plot the difference between current and previous versions
+        for each year of the raster data for each sector.
         """
 
-        # Plot the difference between v2 and v3 methane emissions for each year
+        # Plot the difference between current and previous methane emissions for each
+        # year
 
         actual_years = set(self.annual_flux_da.time.values.astype(int))
         expected_years = set(range(min_year, max_year + 1))
         missing_years = expected_years - actual_years
         if missing_years:
             Warning(
-                f"Missing years in v3 data for {self.group_name}: {sorted(missing_years)}"
+                f"Missing years in v{version_num} data for {self.group_name}: {sorted(missing_years)}"
             )
 
         # Check for negative values
         for year in self.annual_flux_da.time:
             year_val = int(year.values)
             # v3_arr = np.flip(self.annual_flux_da.sel(time=year).values, 0)
-            v3_arr = self.annual_flux_da.sel(time=year).values
-            neg_count = np.sum(v3_arr < 0)
+            current_v_arr = self.annual_flux_da.sel(time=year).values
+            neg_count = np.sum(current_v_arr < 0)
             if neg_count > 0:
-                neg_percent = (neg_count / v3_arr.size) * 100
+                neg_percent = (neg_count / current_v_arr.size) * 100
                 Warning(
                     f"Source {self.group_name}, Year {year_val} has {neg_count} "
                     "negative values ({neg_percent:.2f}% of cells)"
                 )
 
-        # compare against v2 values, if v2_data exists
-        if self.v2_name == "":
-            Warning(
-                f"there is no v2 raster data to compare against v3 for {self.group_name}!"
-            )
+        # compare against previous versions, if previous version data exists
+        if version_num == 3:
+            if self.v2_name == "":
+                Warning(
+                    f"there is no v2 raster data to compare against v3 for {self.group_name}!"
+                )
         else:
-            # Get v2 flux raster data
-            v2_data_paths = V3_DATA_PATH.glob("Gridded_GHGI_Methane_v2_*.nc")
-            v2_data_paths = [
-                f for f in v2_data_paths if "Monthly_Scale_Factors" not in f.stem
+            # Get previous version flux raster data
+            prev_v_data_paths = list(
+                v3_final_gridded_dir.glob(
+                    f"Gridded_GHGI_Methane_v{prev_version_num}_[0-9][0-9][0-9][0-9].nc"
+                )
+            )
+            prev_v_data_paths = [
+                f for f in prev_v_data_paths if "Monthly_Scale_Factors" not in f.stem
             ]
-            v2_data_dict = {}
-            # The v2 data are not projected, so we get warnings reading all these files
-            # suppress the warnings about no georeference.
+            prev_v_data_dict = {}
+            # NOTE: The v2 data are not projected, so we get warnings reading all these
+            # files suppress the warnings about no georeference.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                for in_path in v2_data_paths:
-                    v2_year = int(in_path.stem.split("_")[-1])
-                    v2_data = rioxarray.open_rasterio(in_path, variable=self.v2_name)[
-                        self.v2_name
-                    ].values.squeeze(axis=0)
-                    v2_data_dict[v2_year] = v2_data
+                for in_path in prev_v_data_paths:
+                    prev_v_year = int(in_path.stem.split("_")[-1])
+                    prev_v_data = rioxarray.open_rasterio(
+                        in_path, variable=f"emi_ch4_{self.group_name}"
+                    )[f"emi_ch4_{self.group_name}"].values.squeeze(axis=0)
+                    prev_v_data_dict[prev_v_year] = prev_v_data
 
-            v2_arr = np.array(list(v2_data_dict.values()))
+            prev_v_arr = np.array(list(prev_v_data_dict.values()))
 
-            self.v2_flux_da = xr.DataArray(
-                v2_arr,
+            self.prev_v_flux_da = xr.DataArray(
+                prev_v_arr,
                 dims=["time", "y", "x"],
                 coords=[
-                    list(v2_data_dict.keys()),
+                    list(prev_v_data_dict.keys()),
                     self.gepa_profile.y,
                     self.gepa_profile.x,
                 ],
-                name=self.v2_name,
+                name=self.group_name,
             )
 
-            v3_time_match_da = self.annual_flux_da.sel(time=list(v2_data_dict.keys()))
+            current_v_time_match_da = self.annual_flux_da.sel(
+                time=list(prev_v_data_dict.keys())
+            )
 
-            v2_flux_yearly_sums = np.nansum(self.v2_flux_da.values, axis=(1, 2))
-            v3_flux_yearly_sums = np.nansum(v3_time_match_da.values, axis=(1, 2))
+            prev_v_flux_yearly_sums = np.nansum(self.prev_v_flux_da.values, axis=(1, 2))
+            current_v_flux_yearly_sums = np.nansum(
+                current_v_time_match_da.values, axis=(1, 2)
+            )
 
             flux_dif_df = pd.DataFrame(
                 {
-                    "year": list(v2_data_dict.keys()),
-                    "v2_sum": v2_flux_yearly_sums,
-                    "v3_sum": v3_flux_yearly_sums,
+                    "year": list(prev_v_data_dict.keys()),
+                    f"v{prev_version_num}_sum": prev_v_flux_yearly_sums,
+                    f"v{version_num}_sum": current_v_flux_yearly_sums,
                 }
             ).assign(metric="flux")
 
-            self.flux_diff_da = (v3_time_match_da - self.v2_flux_da).where(
+            self.flux_diff_da = (current_v_time_match_da - self.prev_v_flux_da).where(
                 lambda x: x != 0
             )
 
-            v3_mass_da = self.calculate_flux(
-                v3_time_match_da, timestep="year", direction="flux2mass"
+            current_v_mass_da = self.calculate_flux(
+                current_v_time_match_da, timestep="year", direction="flux2mass"
             )
-            self.v2_mass_da = self.calculate_flux(
-                self.v2_flux_da, timestep="year", direction="flux2mass"
+            self.prev_v_mass_da = self.calculate_flux(
+                self.prev_v_flux_da, timestep="year", direction="flux2mass"
             )
-            self.mass_diff_da = (v3_mass_da - self.v2_mass_da).where(lambda x: x != 0)
+            self.mass_diff_da = (current_v_mass_da - self.prev_v_mass_da).where(
+                lambda x: x != 0
+            )
             self.write_tif_output(
                 self.mass_diff_da,
-                self.qc_dir / f"{self.group_name}_ch4_v3_v2_mass_diff.tif",
+                self.qc_dir
+                / f"{self.group_name}_ch4_v{version_num}_v{prev_version_num}_mass_diff.tif",
             )
             self.write_tif_output(
                 self.flux_diff_da,
-                self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_diff.tif",
+                self.qc_dir
+                / f"{self.group_name}_ch4_v{version_num}_v{prev_version_num}_flux_diff.tif",
             )
 
-            v2_mass_yearly_sums = np.nansum(self.v2_mass_da.values, axis=(1, 2))
-            v3_mass_yearly_sums = np.nansum(v3_mass_da.values, axis=(1, 2))
+            prev_v_mass_yearly_sums = np.nansum(self.prev_v_mass_da.values, axis=(1, 2))
+            current_v_mass_yearly_sums = np.nansum(
+                current_v_mass_da.values, axis=(1, 2)
+            )
 
             mass_dif_df = pd.DataFrame(
                 {
-                    "year": list(v2_data_dict.keys()),
-                    "v2_sum": v2_mass_yearly_sums,
-                    "v3_sum": v3_mass_yearly_sums,
+                    "year": list(prev_v_data_dict.keys()),
+                    f"v{prev_version_num}_sum": prev_v_mass_yearly_sums,
+                    f"v{version_num}_sum": current_v_mass_yearly_sums,
                 }
             ).assign(metric="mass")
 
             self.flux_qc_df = pd.concat([flux_dif_df, mass_dif_df], axis=0).assign(
-                yearly_dif=lambda df: df["v3_sum"] - df["v2_sum"],
-                rel_diff=lambda df: np.abs(df["v3_sum"] - df["v2_sum"])
-                / ((df["v3_sum"] + df["v2_sum"]) / 2),
+                yearly_dif=lambda df: df[f"v{version_num}_sum"]
+                - df[f"v{prev_version_num}_sum"],
+                rel_diff=lambda df: np.abs(
+                    df[f"v{version_num}_sum"] - df[f"v{prev_version_num}_sum"]
+                )
+                / ((df[f"v{version_num}_sum"] + df[f"v{prev_version_num}_sum"]) / 2),
             )
             self.flux_qc_df
 
@@ -2626,9 +2667,15 @@ class GroupGridder(BaseGridder):
             hue="metric",
             palette=sns.color_palette(["xkcd:violet", "xkcd:green"], 2),
         )
-        g.figure.suptitle(f"{self.group_name} v2 v v3 Relative difference", fontsize=14)
+        g.figure.suptitle(
+            f"{self.group_name} v{prev_version_num} v v{version_num} Relative difference",
+            fontsize=14,
+        )
         g.set_axis_labels("Year", "relative difference")
-        g.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_percent_difference.png")
+        g.savefig(
+            self.qc_dir
+            / f"{self.group_name}_ch4_v{version_num}_v{prev_version_num}_percent_difference.png"
+        )
         plt.show()
         plt.close()
 
@@ -2640,31 +2687,31 @@ class GroupGridder(BaseGridder):
                 "This is used to determine which variable to plot."
             )
         if var == "flux":
-            v3_data = self.annual_flux_da
-            v2_data = self.v2_flux_da
+            current_v_data = self.annual_flux_da
+            prev_v_data = self.prev_v_flux_da
         elif var == "mass":
-            v3_data = self.annual_mass_da
-            v2_data = self.v2_mass_da
+            current_v_data = self.annual_mass_da
+            prev_v_data = self.prev_v_mass_da
 
-        tmp_v3_df = (
-            v3_data.rename(var)
+        tmp_current_v_df = (
+            current_v_data.rename(var)
             .to_dataframe()
             .reset_index()
             .drop(columns=["x", "y"])
-            .assign(version="v3")
+            .assign(version=f"v{version_num}")
             .query(f"{var} != 0")
             .dropna(subset=[var])
         )
-        tmp_v2_df = (
-            v2_data.rename(var)
+        tmp_prev_v_df = (
+            prev_v_data.rename(var)
             .to_dataframe()
             .reset_index()
             .drop(columns=["x", "y"])
-            .assign(version="v2")
+            .assign(version=f"v{prev_version_num}")
             .query(f"{var} != 0")
             .dropna(subset=[var])
         )
-        compare_df = pd.concat([tmp_v2_df, tmp_v3_df], ignore_index=True)
+        compare_df = pd.concat([tmp_prev_v_df, tmp_current_v_df], ignore_index=True)
         g = sns.relplot(
             data=compare_df,
             x="time",
@@ -2675,7 +2722,7 @@ class GroupGridder(BaseGridder):
             aspect=2,
         )
         g.figure.suptitle(
-            f"{self.group_name} v2 vs v3 {var} timeseries",
+            f"{self.group_name} v{prev_version_num} vs v{version_num} {var} timeseries",
         )
 
     def plot_map_version_difference(self):
@@ -2705,30 +2752,39 @@ class GroupGridder(BaseGridder):
             ax.add_feature(cfeature.COASTLINE)
             ax.add_feature(cfeature.STATES)
             ax.set_extent([-125, -66.5, 24, 49.5], crs=ccrs.PlateCarree())
-        fg.fig.suptitle(f"{self.group_name} v2 to v3 methane emissions difference")
+        fg.fig.suptitle(
+            f"{self.group_name} v{prev_version_num} to v{version_num} methane emissions difference"
+        )
         # Add labels to the color bar
         cbar = fg.cbar
         cbar.ax.text(
             -0.01,
             0.5,
-            "v2 higher",
+            f"v{prev_version_num} higher",
             va="center",
             ha="right",
             transform=cbar.ax.transAxes,
         )
         cbar.ax.text(
-            1.01, 0.5, "v3 higher", va="center", ha="left", transform=cbar.ax.transAxes
+            1.01,
+            0.5,
+            f"v{version_num} higher",
+            va="center",
+            ha="left",
+            transform=cbar.ax.transAxes,
         )
         plt.savefig(
-            self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_difference_maps.png"
+            self.qc_dir
+            / f"{self.group_name}_ch4_v{version_num}_v{prev_version_num}_flux_difference_maps.png"
         )
         plt.show()
         plt.close()
 
     def _plot_difference_histogram(self):
         """
-        Function to plot a histogram of the differences between v2 and v3 fluxes for each year.
-        This is useful for visualizing the distribution of differences in flux values.
+        Function to plot a histogram of the differences between previous and current
+        fluxes for each year. This is useful for visualizing the distribution of
+        differences in flux values.
         """
         fig, axs = plt.subplots(
             3, 3, figsize=(20, 12), sharex=True, sharey=True, layout="constrained"
@@ -2739,20 +2795,22 @@ class GroupGridder(BaseGridder):
                 .where(lambda x: x != 0)
                 .values.flatten()
             )
-            v2_flux = (
-                self.v2_flux_da.sel(time=year).where(lambda x: x != 0).values.flatten()
+            prev_v_flux = (
+                self.prev_v_flux_da.sel(time=year)
+                .where(lambda x: x != 0)
+                .values.flatten()
             )
 
             # Remove NaN values
             annual_flux = annual_flux[~np.isnan(annual_flux)]
-            v2_flux = v2_flux[~np.isnan(v2_flux)]
+            prev_v_flux = prev_v_flux[~np.isnan(prev_v_flux)]
             bins = np.histogram_bin_edges(
-                np.concatenate([annual_flux, v2_flux]), bins=75
+                np.concatenate([annual_flux, prev_v_flux]), bins=75
             )
 
             # Create histogram
             annual_flux, _ = np.histogram(annual_flux, bins)
-            v2_flux, _ = np.histogram(v2_flux, bins)
+            prev_v_flux, _ = np.histogram(prev_v_flux, bins)
 
             width = np.diff(bins)[0] * 0.4  # Adjust width for better visibility
 
@@ -2766,9 +2824,9 @@ class GroupGridder(BaseGridder):
             )
             ax.bar(
                 bins[:-1] - width / 2,
-                v2_flux,
+                prev_v_flux,
                 width=width,
-                label="V2 Flux",
+                label=f"v{prev_version_num} Flux",
                 align="edge",
                 color="xkcd:green",
             )
@@ -2780,8 +2838,14 @@ class GroupGridder(BaseGridder):
 
         for ax in axs.ravel()[-2:]:
             ax.set_visible(False)
-        fig.suptitle(f"{self.group_name} v2/v3 Flux Comparison", fontsize=16)
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_v2_flux_histogram.png")
+        fig.suptitle(
+            f"{self.group_name} v{prev_version_num}/v{version_num} Flux Comparison",
+            fontsize=16,
+        )
+        plt.savefig(
+            self.qc_dir
+            / f"{self.group_name}_ch4_v{version_num}_v{prev_version_num}_flux_histogram.png"
+        )
         plt.show()
         plt.close()
 
@@ -2917,7 +2981,9 @@ class GroupGridder(BaseGridder):
         )
         g.ax.set(xlabel="Month", ylabel="Monthly Flux Scaling")
         g.figure.suptitle(f"{self.group_name} v3 Monthly Scaling", fontsize=16)
-        plt.savefig(self.qc_dir / f"{self.group_name}_ch4_v3_monthly_scaling.png")
+        plt.savefig(
+            self.qc_dir / f"{self.group_name}_ch4_v{version_num}_monthly_scaling.png"
+        )
         plt.show()
         plt.close()
 
@@ -2955,38 +3021,39 @@ class V4ExpressUpdater(EmiProxyGridder):
         proxy_id: Path,
     ):
         super().__init__(gch4i_name, emi_id, proxy_id, express=True)
-        self.v4_proxy_output_path = v4_tmp_data_dir_path / f"{self.proxy_id}.parquet"
-        # self.v4_proxy_output_path = v4_proxy_data_dir_path / f"{self.proxy_id}.parquet"
+        self.v4_proxy_output_path = v4_proxy_data_dir_path / f"{self.proxy_id}.parquet"
         self.get_geo_filter()
 
     def express_prepare_vector_proxy(self):
-        self.read_proxy_file()
-        self.get_rel_emi_col()
+
         # in the express we do the update in this order:
         # 1. copy 2022 data to 2023
         # 2. bring individual missing state(s) forward to 2023 using the closest year
         #    available
         # 3. fill in the missing state(s) using the whole state geometry
-
-        updater_functions = [self.copy_2022_to_2023, self.bring_state_year_forward]
+        updater_functions = [
+            self.copy_2022_to_2023,
+            self.bring_state_year_forward,
+            # NOTE: if we continue to fail, use alt proxy w/ individual states filled
+            self.fill_whole_state_geometry,
+        ]
 
         for func in updater_functions:
             # apply the update function
             func()
             # QC the time/geo data
             if (self.proxy_time_step == "monthly") & (self.emi_time_step == "annual"):
+                # first check the year
                 self.check_vector_proxy_time_geo("year", bypass_error=True)
-                self.scale_emi_to_month()
-                # if QC does not pass for year, continue to the next function and skip
-                # month check
+                # if it doesn't pass the year check, continue to the next function
                 if not self.time_geo_qc_pass:
                     continue
-                # if QC passes for year, check year_month
-                else:
-                    self.check_vector_proxy_time_geo("year_month", bypass_error=True)
-                    # if QC passes, break the loop and go on to allocation and gridding
-                    if self.time_geo_qc_pass:
-                        break
+                # if it did pass, scale the emi to month and check year_month
+                self.scale_emi_to_month()
+                self.check_vector_proxy_time_geo("year_month", bypass_error=True)
+                # if QC passes, break the loop and go on to allocation and gridding
+                if self.time_geo_qc_pass:
+                    break
             elif self.proxy_time_step == self.emi_time_step:
                 self.check_vector_proxy_time_geo(self.time_col, bypass_error=True)
                 # if QC passes, break the loop and go on to allocation and gridding
@@ -3016,8 +3083,9 @@ class V4ExpressUpdater(EmiProxyGridder):
                 new_year_data["year_month"] = new_year_data["year_month"].str.replace(
                     "2022", "2023"
                 )
-            self.proxy_gdf = pd.concat([self.proxy_gdf, new_year_data], ignore_index=True)
-        
+            self.proxy_gdf = pd.concat(
+                [self.proxy_gdf, new_year_data], ignore_index=True
+            )
 
     def raster_copy_2022_to_2023(self):
         self.logger.info("EXPRESS: attempting to replicate 2022 data to 2023")
@@ -3137,49 +3205,177 @@ class V4ExpressUpdater(EmiProxyGridder):
         return arr[idx]
 
     def bring_state_year_forward(self):
+        """for states that are missing data for certain years, look to see if that state
+        has data for other years. If so, find the closest year available and use that to
+        fill in the missing year."""
 
-        states_missing_data = self.time_geo_qc_df.query("has_proxy == False")
         self.logger.info(
-            f"Filling in missing data for {len(states_missing_data)} state/years"
+            "EXPRESS: bringing forward closest year data for missing "
+            "individual state/year data"
         )
-        supp_data_df = pd.DataFrame()
-        for row in states_missing_data.itertuples():
-            missing_state = row.state_code
-            missing_year = row.year
+
+        states_missing_data = self.time_geo_qc_df.query(
+            "has_proxy == False"
+        ).sort_values(by=["state_code", "year"])
+
+        num_states_missing = len(states_missing_data.state_code.unique())
+        self.logger.info(f"Filling in missing data for {num_states_missing} states")
+
+        for missing_state, missing_year_data in states_missing_data.groupby(
+            "state_code"
+        ):
             self.logger.info(
-                f"looking for data for state: {missing_state}, year: {missing_year}"
+                f"looking for data for state: {missing_state} to fill in years..."
             )
             # first look if the state has any data regardless of year.
+            proxy_has_state_data = missing_state in self.proxy_gdf.state_code.unique()
+            if not proxy_has_state_data:
+                self.logger.warning(
+                    f"No data found for state: {missing_state} in proxy data at all."
+                )
+                continue
             state_data = self.proxy_gdf.query("state_code == @missing_state")
+            available_years = state_data.year.unique()
+            self.logger.info(
+                f"State {missing_state} has data for years: {available_years}"
+            )
+            # if the state data is not empty, it should mean we have at least 1 year
+            # to work with. We will find the closest year available and use that to fill
+            # in the missing year.
             if not state_data.empty:
-                iyear_closest = self.find_closest_year(state_data.year, missing_year)
-                self.logger.info(
-                    f"Found data for state: {missing_state} with year {iyear_closest}"
-                )
-                sup_data = state_data.query("year == @iyear_closest").assign(
-                    year=missing_year,
-                    ch4_mg=1.0,
-                )
-                if self.has_monthly:
-                    sup_data = sup_data.assign(
-                        year_month=lambda df: df["year_month"].str.replace(
-                            str(iyear_closest), str(missing_year)
-                        ),
+                # for each year of missing data for the state
+                for missing_year in missing_year_data.year.unique():
+                    print(missing_year)
+                    # find the closest year available for the state
+                    iyear_closest = self.find_closest_year(
+                        state_data.year, missing_year
                     )
-                supp_data_df = pd.concat([supp_data_df, sup_data], ignore_index=True)
+                    self.logger.info(
+                        f"Found data for state: replacing {missing_year} with year {iyear_closest}"
+                    )
+                    # get that year of data
+                    sup_data = state_data.query("year == @iyear_closest").assign(
+                        year=missing_year,
+                        # ch4_mg=1.0,
+                    )
+                    # adjust the monthly column to replace the missing year with the
+                    # fill in year
+                    if self.proxy_time_step == "monthly":
+                        sup_data = sup_data.assign(
+                            year_month=lambda df: df["year_month"].str.replace(
+                                str(iyear_closest), str(missing_year)
+                            ),
+                        )
+                    # if we have found the data, append it to the proxy_gdf
+                    self.proxy_gdf = pd.concat(
+                        [self.proxy_gdf, sup_data], ignore_index=True
+                    )
+            # if no data for the state at all, log a warning. This still will then need
+            # to be filled in using the whole state geometry.
+            else:
+                self.logger.warning(
+                    f"No data found for state: {missing_state}, cannot fill in year "
+                    f"{missing_year}"
+                )
+
+    def fill_whole_state_geometry(self):
+        self.logger.info(
+            "EXPRESS: filling in missing state/year data using whole state geometry"
+        )
+        # get the states and years that are still missing data
+        states_missing_data = (
+            self.time_geo_qc_df.query("has_proxy == False")
+            .sort_values(by=["state_code", "year"])
+            .loc[:, ["state_code", "year"]]
+        )
+
+        # join the state geometries, a right join here should give each of the remaining
+        # state/year combinations the full state geometry and retain this as a
+        # geodataframe
+        states_w_geo = pd.merge(
+            self.state_gdf[["state_code", "geometry"]],
+            states_missing_data,
+            on="state_code",
+            how="right",
+        )
+        # assign a relative emi of 1.0 for annual data
+        states_w_geo[self.proxy_rel_emi_col] = 1.0
+
+        # if monthly data, explode to 12 months and assign relative emi of 1/12
+        if self.proxy_time_step == "monthly":
+            states_w_geo = (
+                states_w_geo.assign(
+                    month=lambda df: [list(range(1, 13)) for _ in range(df.shape[0])]
+                )
+                .explode("month")
+                .reset_index(drop=True)
+                .assign(
+                    year_month=lambda df: pd.to_datetime(
+                        df[["year", "month"]].assign(DAY=1)
+                    ).dt.strftime("%Y-%m"),
+                )
+            )
+            states_w_geo["annual_rel_emi"] = 1 / 12
+            states_w_geo[self.proxy_rel_emi_col] = 1
+
+        self.proxy_gdf = pd.concat([self.proxy_gdf, states_w_geo], ignore_index=True)
+
+        # num_states_missing = len(states_missing_data.state_code.unique())
+        # self.logger.info(
+        #     f"Filling in missing data for {num_states_missing} states using whole "
+        #     "state geometry"
+        # )
+        # # for row in states_missing_data.itertuples():
+        # for missing_state, missing_year_data in states_missing_data.groupby(
+        #     "state_code"
+        # ):
+        #     self.logger.info(f"Filling in data for state: {missing_state} for years...")
+        #     # get the whole state geometry
+        #     state_geom = self.state_gdf.query(
+        #         "state_code == @missing_state"
+        #     ).geometry.values[0]
+        #     # for each year of missing data for the state
+        #     for missing_year in missing_year_data.year.unique():
+        #         self.logger.info(
+        #             f"Filling in data for state: {missing_state}, year: {missing_year}"
+        #         )
+        #         # create a new row with the whole state geometry and the missing year
+        #         new_row = {
+        #             "state_code": missing_state,
+        #             "geometry": state_geom,
+        #             "year": missing_year,
+        #             self.proxy_rel_emi_col: 1.0,
+        #         }
+        #         new_row = pd.DataFrame([new_row])
+        #         # adjust the monthly column to replace the missing year with the
+        #         # fill in year
+        #         if self.has_monthly:
+        #             # Create 12 months of data for the missing year
+        #             monthly_rows = []
+        #             for month in range(1, 13):
+        #                 month_row = new_row.copy()
+        #                 month_row[self.time_col] = f"{missing_year}-{month:02d}"
+        #                 month_row[self.proxy_rel_emi_col] = 1 / 12
+        #                 monthly_rows.append(month_row)
+
+        #             # Replace new_row with the monthly data
+        #             new_row = pd.concat(monthly_rows, ignore_index=True)
+
+        # self.proxy_gdf = pd.concat([self.proxy_gdf, new_row], ignore_index=True)
 
     def run_update(self):
         self.read_emi_file()
         if self.file_type == "parquet":
+            self.read_proxy_file()
+            self.get_rel_emi_col()
             self.express_prepare_vector_proxy()
         elif self.file_type == "netcdf":
             self.express_prepare_raster_proxy()
-            # raise NotImplementedError("raster proxy express update not implemented yet")
         self.qc_and_write_output()
         self.conn.close()
 
 
-def run_whole_group(gch4i_name, g_info):
+def run_whole_group(gch4i_name, g_info, express=False):
     gridding_rows = g_info.mapping_df.query(f"gch4i_name == '{gch4i_name}'")
     gridding_rows
     for emi_proxy_data in tqdm(

@@ -19,10 +19,11 @@ import pandas as pd
 import xarray as xr
 
 from gch4i.config import (
-    final_gridded_dir,
-    global_data_dir_path,
-    prelim_gridded_dir,
+    v4_final_gridded_dir,
+    v4_global_data_dir_path,
+    v4_prelim_gridded_dir,
     years as YEARS,
+    version_num,
 )
 from gch4i.utils import load_area_matrix, GEPA_spatial_profile
 from tqdm.auto import tqdm
@@ -31,11 +32,11 @@ from tqdm.auto import tqdm
 class CreateFinalNetCDFs:
     def __init__(self):
         # the path to the directory where the group gridded data is stored
-        self.input_dir = prelim_gridded_dir
+        self.input_dir = v4_prelim_gridded_dir
         # the path to the directory where the final gridded data will be saved
-        self.output_dir = final_gridded_dir
+        self.output_dir = v4_final_gridded_dir
         # the path to the directory where the monthly scaling factors are stored
-        self.monthly_scaling_dir = prelim_gridded_dir / "monthly_scaling"
+        self.monthly_scaling_dir = v4_prelim_gridded_dir / "monthly_scaling"
         # flux units
         self.units = "molec cm-2 s-1"
         # attributes written to the final files
@@ -56,7 +57,7 @@ class CreateFinalNetCDFs:
         self.monthly_scale_files = list(
             self.monthly_scaling_dir.glob("*_monthly_scaling.tif")
         )
-        self.area_matrix_path = global_data_dir_path / "gridded_area_01_cm2.tif"
+        self.area_matrix_path = v4_global_data_dir_path / "gridded_area_01_cm2.tif"
         self.gepa_profile = GEPA_spatial_profile()
 
     def _get_month_scale_attrs(self):
@@ -64,7 +65,7 @@ class CreateFinalNetCDFs:
         # this updates the title and adds a "how to" use section
         self.scale_attrs = self.attrs.copy()
         self.scale_attrs["title"] = (
-            "Gridded U.S. Greenhouse Gas Inventory (Version 3): Monthly scaling "
+            f"Gridded U.S. Greenhouse Gas Inventory (Version {version_num}): Monthly scaling "
             "factors for methane emissions."
         )
         self.scale_attrs["how_to_use"] = (
@@ -91,7 +92,7 @@ class CreateFinalNetCDFs:
             enumerate(YEARS), total=len(YEARS), desc="Processing years"
         ):
             # TODO: remove draft when final final.
-            out_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}.nc"
+            out_path = v4_final_gridded_dir / f"Gridded_GHGI_Methane_v{version_num}_{year}.nc"
 
             year_data_dict = {}
             for in_path in self.flux_data_files:
@@ -207,8 +208,8 @@ class CreateFinalNetCDFs:
             ).to_numpy()
             month_data_dict = {}
             out_path = (
-                final_gridded_dir
-                / f"Gridded_GHGI_Methane_v3_Monthly_Scale_Factors_{year}.nc"
+                v4_final_gridded_dir
+                / f"Gridded_GHGI_Methane_v{version_num}_Monthly_Scale_Factors_{year}.nc"
             )
             for in_path in self.monthly_scale_files:
                 # Get the file name and extract the source category and long name

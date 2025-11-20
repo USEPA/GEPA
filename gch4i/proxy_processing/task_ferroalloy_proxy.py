@@ -26,31 +26,33 @@ from geopy.geocoders import Nominatim
 from pytask import Product, mark, task
 
 from gch4i.config import (  # noqa
-    ghgi_data_dir_path,
-    global_data_dir_path,
+    v4_ghgi_data_dir_path,
+    v4_global_data_dir_path,
     max_year,
     min_year,
-    proxy_data_dir_path,
+    v4_proxy_data_dir_path,
 )
 from gch4i.utils import name_formatter
 
 # gpd.options.io_engine = "pyogrio"
+
+ferro_ghgi_dir = v4_ghgi_data_dir_path / "2C2_ferroalloy"
+
+
 
 
 # %% Pytask Function
 @mark.persist
 @task(id="ferro_proxy")
 def task_ferro_proxy_data(
-    EPA_inventory_path: Path = list(
-        ghgi_data_dir_path.rglob("State_Ferroalloys_1990-2022.xlsx")
-    )[0],
-    frs_path: Path = global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
+    EPA_inventory_path: Path = ferro_ghgi_dir / "State_Ferroalloys_1990-2023.xlsx", 
+    frs_path: Path = v4_global_data_dir_path / "NATIONAL_FACILITY_FILE.CSV",
     subpart_k_url: str = (
         "https://data.epa.gov/efservice/k_subpart_level_information/"
         "pub_dim_facility/ghg_name/=/Methane/CSV"
     ),
-    state_geo_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    dst_path: Annotated[Path, Product] = proxy_data_dir_path / "ferro_proxy.parquet",
+    state_geo_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    dst_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "ferro_proxy.parquet",
 ) -> None:
     """
     The facilities have multiple reporting units for each year. This will read in the
@@ -58,8 +60,7 @@ def task_ferro_proxy_data(
     This pulls from the raw table but ends in the same form as the table on sheet
     'GHGRP_kt_Totals'
     """
-    # Read in the SUMMARY facilities emissions data
-
+    # %%
     # read in state geometries and filter to lower 48 + DC
     state_gdf = (
         gpd.read_file(state_geo_path)
@@ -79,7 +80,7 @@ def task_ferro_proxy_data(
             sheet_name="Ferroalloy Calculations",
             skiprows=72,
             nrows=12,
-            usecols="A:AJ",
+            usecols="A:AK",
         )
         .rename(columns=lambda x: str(x).lower())
         .rename(columns={"facility": "facility_name", "state": "state_name"})
@@ -265,3 +266,5 @@ def task_ferro_proxy_data(
     #     tmp_data_dir_path / "v3_ferro_facilities.shp.zip", driver="ESRI Shapefile"
     # )
     ferro_facilities_gdf.to_parquet(dst_path)
+
+# %%

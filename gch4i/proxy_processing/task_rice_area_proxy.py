@@ -64,7 +64,12 @@ from pytask import Product, mark, task
 from rasterio.features import rasterize
 from tqdm.auto import tqdm
 
-from gch4i.config import global_data_dir_path, proxy_data_dir_path, sector_data_dir_path
+from gch4i.config import (
+    v4_global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_sector_data_dir_path,
+    v3_sector_data_dir_path,
+)
 from gch4i.utils import GEPA_spatial_profile, name_formatter, normalize_xr
 
 pd.set_option("future.no_silent_downcasting", True)
@@ -72,8 +77,11 @@ pd.set_option("future.no_silent_downcasting", True)
 GEPA_PROFILE = GEPA_spatial_profile()
 GEPA_PROFILE.profile["count"] = 1
 
-sector_dir: Path = sector_data_dir_path / "USDA_NASS"
-cdl_path: Path = sector_data_dir_path / "nass_cdl"
+
+v3_sector_dir: Path = v3_sector_data_dir_path / "USDA_NASS"
+v4_cdl_path: Path = v4_sector_data_dir_path / "nass_cdl"
+
+
 rice_crop_vals = np.array([3])
 
 
@@ -83,15 +91,16 @@ rice_crop_vals = np.array([3])
 @mark.persist
 @task(id="rice_area_proxy")
 def task_rice_proxy(
-    cdqt_file_path: Path = sector_dir / "2017_cdqt_data.txt",
-    census_file_path: Path = sector_dir / "census_2012-2017_rice_area_harvested.csv",
-    county_path: Path = global_data_dir_path / "tl_2020_us_county.zip",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    cdl_layers: list[Path] = list(cdl_path.glob("*_30m_cdls_rice_perc.tif")),
+    cdqt_file_path: Path = v3_sector_dir / "2017_cdqt_data.txt",
+    census_file_path: Path = v3_sector_dir / "census_2012-2017_rice_area_harvested.csv",
+    county_path: Path = v4_global_data_dir_path / "tl_2020_us_county.zip",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    cdl_layers: list[Path] = list(v4_cdl_path.glob("*_30m_cdls_rice_perc.tif")),
     monthly_scale_path: Path = (
-        sector_data_dir_path / "Rice_Emissions_Scenario_D_MAY16.nc"
+        v3_sector_data_dir_path / "Rice_Emissions_Scenario_D_MAY16.nc"
     ),
-    output_path: Annotated[Path, Product] = proxy_data_dir_path / "rice_area_proxy.nc",
+    output_path: Annotated[Path, Product] = v4_proxy_data_dir_path
+    / "rice_area_proxy.nc",
 ) -> None:
 
     # %%
@@ -192,7 +201,7 @@ def task_rice_proxy(
             raise ValueError(f"Missing geometry for {the_year}")
 
         # this is a byproduct I'm not using, but it is nice to have as reference
-        rice_gdf.to_parquet(sector_dir / f"rice_area_cnty_{the_year}.parquet")
+        rice_gdf.to_parquet(v4_cdl_path / f"rice_area_cnty_{the_year}.parquet")
 
         data_dict[the_year] = rice_gdf
 
@@ -205,7 +214,7 @@ def task_rice_proxy(
     plt.show()
 
     # %%
-    # read in the population data. This one is reference to create the county grid
+    # read in the rice data. This one is reference to create the county grid
     rice_xr = (
         rioxarray.open_rasterio(cdl_layers[0])
         .squeeze("band")
@@ -401,7 +410,9 @@ def task_rice_proxy(
     )
     expanded_monthly_scaling.shape  # Should be (12, 350, 700)
     # we then expand this into n years x 12 months
-    expanded_monthly_scaling = np.repeat(expanded_monthly_scaling, 11, axis=0)
+    expanded_monthly_scaling = np.repeat(
+        expanded_monthly_scaling, len(rice_stack_xr.year), axis=0
+    )
 
     # we expand the yearly data, repeating the yearly value for each month
     # and then multiply the monthly scaling by the yearly data

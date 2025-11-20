@@ -19,17 +19,23 @@ import xarray as xr
 from scipy.constants import Avogadro
 from tqdm.auto import tqdm
 
-from gch4i.config import V3_DATA_PATH, final_gridded_dir, logging_dir, years
+from gch4i.config import (
+    V3_DATA_PATH,
+    v4_final_gridded_dir,
+    v4_logging_dir,
+    years,
+    version_num,
+)
 from gch4i.create_final_netcdfs import CreateFinalNetCDFs
 from gch4i.gridding_utils import GriddingInfo, GroupGridder
 from gch4i.utils import GEPA_spatial_profile, Molarch4
 
 # %%
-file_writer = CreateFinalNetCDFs()
-file_writer.write_outputs()
+
 # %%
 g_info = GriddingInfo(update_mapping=True, save_file=True)
-group_names = list(g_info.v2_df["gch4i_name"])
+# group_names = list(g_info.v2_df["gch4i_name"])
+group_names = g_info.mapping_df["gch4i_name"].unique().tolist()
 group_names
 # %%
 # The EPA color map from their V2 plots
@@ -74,9 +80,9 @@ class QCFinalNetCDFs:
     def __init__(self, group_name):
         # the path to the directory where the final gridded data is saved
         self.group_name = group_name
-        self.flux_data_files = list(final_gridded_dir.glob("*AugTest.nc"))
+        self.flux_data_files = list(v4_final_gridded_dir.glob("*AugTest.nc"))
         self.gepa_profile = GEPA_spatial_profile()
-        self.qc_dir = logging_dir
+        self.qc_dir = v4_logging_dir
 
     convert_flux_for_plotting = GroupGridder.convert_flux_for_plotting
     get_days_in_year = GroupGridder.get_days_in_year
@@ -85,28 +91,27 @@ class QCFinalNetCDFs:
     convert_flux_for_plotting = GroupGridder.convert_flux_for_plotting
 
     def qc_national_mass_sums(self):
-        v3_data_dict = {}
+        mass_data_dict = {}
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             for out_path in self.flux_data_files:
-                v3_year = int(out_path.stem.split("_")[-2])
-                # v3_year = int(out_path.stem.split("_")[-1])
+                the_year = int(out_path.stem.split("_")[-2])
                 final_group_name = "emi_ch4_" + self.group_name
-                v3_data = rioxarray.open_rasterio(out_path, variable=final_group_name)[
+                the_data = rioxarray.open_rasterio(out_path, variable=final_group_name)[
                     final_group_name
                 ].values.squeeze(axis=0)
-                self.v3_area_matrix = rioxarray.open_rasterio(
+                self.area_matrix = rioxarray.open_rasterio(
                     out_path, variable="grid_cell_area"
                 )["grid_cell_area"].values.squeeze(axis=0)
-                v3_data_dict[v3_year] = v3_data
+                mass_data_dict[the_year] = the_data
 
-        v3_arr = np.array(list(v3_data_dict.values()))
+        current_v_arr = np.array(list(mass_data_dict.values()))
 
-        self.v3_flux_da = xr.DataArray(
-            v3_arr,
+        self.current_v_flux_da = xr.DataArray(
+            current_v_arr,
             dims=["time", "y", "x"],
             coords=[
-                list(v3_data_dict.keys()),
+                list(mass_data_dict.keys()),
                 self.gepa_profile.y,
                 self.gepa_profile.x,
             ],
@@ -134,7 +139,7 @@ class QCFinalNetCDFs:
 
             days_in_year = [get_days_in_year(x) for x in times]
             conv_factors = [
-                calc_conversion_factor(x, self.v3_area_matrix) for x in days_in_year
+                calc_conversion_factor(x, self.area_matrix) for x in days_in_year
             ]
 
             conv_ds = xr.DataArray(
@@ -147,20 +152,22 @@ class QCFinalNetCDFs:
             flux_out_da = in_ds / conv_ds
             return flux_out_da
 
-        self.v3_mass_da = calculate_mass(self.v3_flux_da)
-        v3_mass_yearly_sums = np.nansum(self.v3_mass_da.values, axis=(1, 2))
+        self.current_v_mass_da = calculate_mass(self.current_v_flux_da)
+        current_v_mass_yearly_sums = np.nansum(
+            self.current_v_mass_da.values, axis=(1, 2)
+        )
 
         self.mass_sums_df = pd.DataFrame(
             {
-                "year": list(v3_data_dict.keys()),
-                "v3_sum": v3_mass_yearly_sums,
+                "year": list(mass_data_dict.keys()),
+                f"v{version_num}_sum": current_v_mass_yearly_sums,
             }
         ).assign(metric="mass")
 
         # Save mass_sums_df to the qc folder for the group
         self.mass_sums_df.to_csv(
             self.qc_dir
-            / f"{self.group_name}/{self.group_name}_ch4_v3_mass_sum_final_gridded_data_qc.csv",
+            / f"{self.group_name}/{self.group_name}_ch4_v{version_num}_mass_sum_final_gridded_data_qc.csv",
             index=False,
         )
         return self.mass_sums_df
@@ -174,7 +181,7 @@ class QCFinalNetCDFs:
         # we set 0 and negative values as NA
 
         # apply the conversion factor to the annual flux data for plotting
-        plotting_data = self.v3_flux_da.where(lambda x: x != 0)
+        plotting_data = self.current_v_flux_da.where(lambda x: x != 0)
         # print(plotting_data.groupby("time").max(dim=...).values)
         plotting_data = xr.where(plotting_data > 10, 10, plotting_data)
         # print(plotting_data.groupby("time").max(dim=...).values)
@@ -212,7 +219,7 @@ class QCFinalNetCDFs:
         # Save the plots as PNG files to the figures directory
         plt.savefig(
             self.qc_dir
-            / f"{self.group_name}_ch4_v3_annual_flux_final_gridded_data_qc.png"
+            / f"{self.group_name}_ch4_v{version_num}_annual_flux_final_gridded_data_qc.png"
         )
         # Show the plot for review
         plt.show()
@@ -224,8 +231,8 @@ def get_all_scale_data():
     scale_dict = {}
     for year in tqdm(years, total=len(years), desc="reading scale files"):
         in_path = (
-            final_gridded_dir
-            / f"Gridded_GHGI_Methane_v3_Monthly_Scale_Factors_{year}_draft.nc"
+            v4_final_gridded_dir
+            / f"Gridded_GHGI_Methane_v{version_num}_Monthly_Scale_Factors_{year}.nc"
         )
         in_ds = xr.open_dataset(in_path)
         scale_dict[year] = in_ds
@@ -237,7 +244,10 @@ def get_all_scale_data():
 def get_all_flux_data():
     flux_data_dict = {}
     for iyear in tqdm(years, desc="reading flux files"):
-        in_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}_AugTest.nc"
+        in_path = (
+            v4_final_gridded_dir
+            / f"Gridded_GHGI_Methane_v{version_num}_{iyear}.nc"
+        )
         ds = (
             xr.open_dataset(in_path)
             .drop_vars("spatial_ref")
@@ -308,7 +318,7 @@ def plot_a_year(in_ds_path):
             print(f"issue with {var}: {e}")
     fig.suptitle(f"final flux for year {year}")
     fig.tight_layout()
-    plt.savefig(f"{logging_dir}/all_final_flux_{year}.png")
+    plt.savefig(f"{v4_logging_dir}/all_final_flux_{year}.png")
     # plt.show()
     plt.close()
 
@@ -328,7 +338,8 @@ def plot_group_flux_maps(in_ds):
 
 def plot_monthly_scaling(in_ds):
     all_scale_summary_df = (
-        in_ds.mean(dim=["lat", "lon"]).where(lambda x: x != 0)
+        in_ds.mean(dim=["lat", "lon"])
+        .where(lambda x: x != 0)
         .to_dataframe()
         .reset_index()
         .melt(id_vars=["time"], var_name="source", value_name="monthly_flux")
@@ -353,7 +364,7 @@ def plot_monthly_scaling(in_ds):
         aspect=2,
         facet_kws={"sharey": False, "sharex": True},
     )
-    plt.savefig(logging_dir / "all_final_monthly_scaling.png")
+    plt.savefig(v4_logging_dir / "all_final_monthly_scaling.png")
     plt.show()
     plt.close()
 
@@ -409,7 +420,7 @@ def convert_flux_for_plotting(flux_da: xr.DataArray) -> xr.DataArray:
 
 def plot_original_scale_figs():
 
-    scaling_files = list(logging_dir.rglob("*_monthly_scaling.png"))
+    scaling_files = list(v4_logging_dir.rglob("*_monthly_scaling.png"))
     scaling_files = [f for f in scaling_files if not f.name.startswith("all")]
     sorted(scaling_files)
     _, axs = plt.subplots(4, 4, figsize=(10, 10))
@@ -422,21 +433,18 @@ def plot_original_scale_figs():
 
 def final_file_QC():
     for igroup in tqdm(group_names, desc="QC'ing each group"):
-        # if (igroup != "3A_enteric_fermentation") & (igroup != "3B_manure_management"):
-        #     continue
         # Calculate the total national emissions by source and year
         target_mass_sum_list_path: Path = (
-            logging_dir / f"{igroup}/{igroup}_ch4_v3_emi_qc.csv"
+            v4_logging_dir / f"{igroup}/{igroup}_ch4_v{version_num}_emi_qc.csv"
         )
         target_mass_sum_df = pd.read_csv(target_mass_sum_list_path)["ghgi_ch4_kt"]
         mass_sum_list = []
-        flux_arr_list = []
         flux_data_dict = {}
         for iyear in years:
             iyear_days = get_days_in_year(iyear)  # number of days in the year
             # print(iyear, iyear_days)
             final_data_path: Path = (
-                final_gridded_dir / f"Gridded_GHGI_Methane_v3_{iyear}.nc"
+                v4_final_gridded_dir / f"Gridded_GHGI_Methane_v{version_num}_{iyear}.nc"
             )  # path to final gridded data
             ds = xr.open_dataset(final_data_path)  # final gridded netcdf file
             ds.close()
@@ -470,17 +478,18 @@ def final_file_QC():
 
         print(igroup, mass_sum_df["isclose_pass"].all())
         mass_sum_df.to_csv(
-            logging_dir / f"{igroup}/{igroup}_ch4_v3_mass_sum_final_gridded_data_qc.csv",
+            v4_logging_dir
+            / f"{igroup}/{igroup}_ch4_v{version_num}_mass_sum_final_gridded_data_qc.csv",
             index=False,
         )
 
-        v3_arr = xr.concat(flux_data_dict.values(), dim="time").assign_coords(
+        current_v_arr = xr.concat(flux_data_dict.values(), dim="time").assign_coords(
             time=years
         )
 
         # ADD PLOTTING CONVERSION FACTOR
 
-        final_flux_data_arr = convert_flux_for_plotting(v3_arr)
+        final_flux_data_arr = convert_flux_for_plotting(current_v_arr)
 
         plotting_data = final_flux_data_arr.where(lambda x: x != 0)
         # print(plotting_data.groupby("time").max(dim=...).values)
@@ -517,7 +526,8 @@ def final_file_QC():
 
         # Save the plots as PNG files to the figures directory
         plt.savefig(
-            logging_dir / f"{igroup}/{igroup}_ch4_v3_annual_flux_final_gridded_data_qc.png"
+            v4_logging_dir
+            / f"{igroup}/{igroup}_ch4_v{version_num}_annual_flux_final_gridded_data_qc.png"
         )
         # Show the plot for review
         # plt.show()
@@ -526,6 +536,9 @@ def final_file_QC():
 
 
 # %%
+file_writer = CreateFinalNetCDFs()
+file_writer.write_outputs()
+
 final_file_QC()
 # # get the object needed to manage the gridding operations
 # g_info = GriddingInfo(update_mapping=True, save_file=True)
@@ -546,19 +559,11 @@ scaling_ds = get_all_scale_data()
 scaling_ds
 list(scaling_ds.variables.keys())
 # %%
-for year in tqdm(years, desc="plotting each annual file"):
-    in_path = final_gridded_dir / f"Gridded_GHGI_Methane_v3_{year}_AugTest.nc"
-    plot_a_year(in_path)
-
-# %%
 plot_group_scale_maps(scaling_ds)
 # %%
-
 plot_group_flux_maps(all_flux_ds)
 # %%
 plot_monthly_scaling(scaling_ds)
-
-
 # %%
 # For reference, we can look at the attributes (and other features) of the v2 data
 v2_flux_file = V3_DATA_PATH / "Gridded_GHGI_Methane_v2_2012.nc"
@@ -573,14 +578,4 @@ v2_flux_ds = xr.open_dataset(v2_flux_file)
 print(v2_flux_ds.dims)
 v2_flux_ds.close()
 v2_flux_ds
-# %%
-in_path
-# %%
-ds = xr.open_dataset(in_path)
-var_encoding_dict = {var: dict({"zlib": True, "complevel": 4}) for var in ds.variables}
-var_encoding_dict
-# %%
-ds.to_netcdf(in_path, mode="w", format="NETCDF4", encoding=var_encoding_dict)
-# %%
-ds["grid_cell_area"].encoding
 # %%

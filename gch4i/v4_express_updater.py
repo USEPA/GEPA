@@ -4,17 +4,23 @@ Date:       October 6, 2025
 Purpose:    The primary purpose of this script is fill in the data year 2023 using v3
             proxy files that contain data for years 2012-2022.
 
+            Express proxies are those that could not be quickly updated due to data that is
+            not openly available or requires significant processing.
+
             This script is designed to standarize the express update for v4 proxies.
-            These proxies are ones that cannot be quickly updated due to data that is
-            not openly available or requires significant processing. This process will
-            follow a fixed approach for each proxy:
+            This process will follow a fixed approach for each proxy:
 
             The steps are:
 
-            1. Pull the original v3 proxy files that contains data for years 2012-2022
-            2. Replicate the 2022 data to 2023 using the v3 proxy data
-            3. if this does not satify QC, look for individual state/year combinations
-               that are missing data and fill 2023 with that data.
+            Pull the original v3 proxy files that contains data for years 2012-2022
+            1.  Copy the year 2022 data to 2023.
+            2.  if this does not satify QC, look for individual state/year combinations
+                that are missing data and fill 2023 with that data.
+            3.  if there are no state data at all, fill with the entire state
+                geometry.
+
+            The development creates a new class called V4ExpressUpdater that handles
+            the update process. It inherits from the original v3 EmiProxyGridder class.
 
 Inputs:
 
@@ -29,7 +35,7 @@ Outputs:
 from IPython.display import display
 from tqdm.auto import tqdm
 
-from gch4i.gridding_utils import GriddingInfo, V4ExpressUpdater
+from gch4i.gridding_utils import GriddingInfo, V4ExpressUpdater, EmiProxyGridder
 
 # %%
 g_info = GriddingInfo()
@@ -41,7 +47,7 @@ g_info.display_all_pair_statuses()
 SKIP = True
 SKIP_THESE = [
     "complete",
-    "emi file not found",
+    # "emi file not found",
     # "monthly failed, annual failed",
     # "express update failed",
     # "monthly failed, annual complete",
@@ -59,13 +65,28 @@ SKIP_THESE = [
 ]
 
 # %%
+express_grid_these = g_info.pairs_ready_for_gridding_df.query(
+    "(express == True) & (~status.isin(@SKIP_THESE))"
+)
+express_grid_these
+# %%
+regular_grid_these = g_info.pairs_ready_for_gridding_df.query(
+    # "(express == False)"
+    "(express == False) & (~status.isin(@SKIP_THESE))"
+)
+regular_grid_these
+
+# %%
 for row in tqdm(
-    g_info.pairs_ready_for_gridding_df.itertuples(index=False),
-    total=len(g_info.pairs_ready_for_gridding_df),
+    express_grid_these.itertuples(index=False),
+    total=len(express_grid_these),
 ):
     if SKIP and row.status in SKIP_THESE:
-        # print(f"Skipping: {row.gch4i_name} {row.emi_id} {row.proxy_id} ({row.status})")
+        print(f"Skipping: {row.gch4i_name} {row.emi_id} {row.proxy_id} ({row.status})")
         continue
+    # if row.emi_id in ["trans_onshore_emi", "trans_refining_emi"]:
+    #     print(f"Skipping transport: {row.gch4i_name} {row.emi_id} {row.proxy_id}")
+    #     continue
     try:
         exp_updater = V4ExpressUpdater(
             gch4i_name=row.gch4i_name,
@@ -77,19 +98,33 @@ for row in tqdm(
         print(f"ERROR: {row.gch4i_name} {row.emi_id} {row.proxy_id} {e}")
         # break
 # %%
-g_info.get_status_table(save=True)
+for row in tqdm(
+    regular_grid_these.itertuples(index=False),
+    total=len(regular_grid_these),
+):
+    # base_name = f"{row.gch4i_name}-{row.emi_id}-{row.proxy_id}"
+    # out_path = v4_logging_dir / row.gch4i_name / f"{base_name}.tif"
+    # if not out_path.exists():
+    # print(f"Gridding: {row.gch4i_name} {row.emi_id} {row.proxy_id}")
+
+    # if row.emi_id in ["trans_onshore_emi", "trans_refining_emi"]:
+    #     print(f"Skipping transport: {row.gch4i_name} {row.emi_id} {row.proxy_id}")
+    #     continue
+
+    try:
+        gridder = EmiProxyGridder(
+            gch4i_name=row.gch4i_name,
+            emi_id=row.emi_id,
+            proxy_id=row.proxy_id,
+        )
+        gridder.run_gridding()
+    except Exception as e:
+        print(f"ERROR: {row.gch4i_name} {row.emi_id} {row.proxy_id} {e}")
+        # break
+
+
 # %%
-exp_updater.read_emi_file()
-display(exp_updater.emi_df.head())
-exp_updater.read_proxy_file()
-display(exp_updater.proxy_gdf.head())
-exp_updater.get_rel_emi_col()
+g_info.get_status_table()
 # %%
-exp_updater.copy_2022_to_2023()
-# %%
-exp_updater.proxy_gdf.year.value_counts().sort_index()
-# %%
-2023 in exp_updater.proxy_gdf.year.unique()
-# %%
-exp_updater.proxy_gdf.state_code.value_counts().sort_index()
+g_info.display_all_group_statuses()
 # %%

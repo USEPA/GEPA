@@ -19,15 +19,15 @@ import numpy as np
 
 
 from gch4i.config import (
-    global_data_dir_path,
-    sector_data_dir_path
+    v4_global_data_dir_path,
+    v4_sector_data_dir_path
 )
 
 # File Paths
-state_path: Path = global_data_dir_path / "tl_2020_us_state.zip"
-enverus_production_path: Path = sector_data_dir_path / "enverus/production"
+state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip"
+enverus_production_path: Path = v4_sector_data_dir_path / "enverus/production"
 intermediate_outputs_path: Path = enverus_production_path / "intermediate_outputs"
-nei_path: Path = sector_data_dir_path / "nei_og"
+nei_path: Path = v4_sector_data_dir_path / "nei_og"
 
 # State ANSI data
 state_gdf = (

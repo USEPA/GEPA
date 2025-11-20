@@ -9,6 +9,8 @@ load_dotenv(find_dotenv(usecwd=True), override=True)
 # Remove the environment variable
 project_dir_path = os.getenv("V3_DATA_PATH")
 
+version_num = 4
+
 # all v4 paths
 V4_DATA_PATH = Path(project_dir_path) / "gch4i_v4/v4_data"
 v4_figures_data_dir_path = V4_DATA_PATH / "figures"
