@@ -18,8 +18,8 @@ import numpy as np
 from pytask import Product, task, mark
 
 from gch4i.config import (
-    proxy_data_dir_path,
-    global_data_dir_path,
+    v4_proxy_data_dir_path,
+    v4_global_data_dir_path,
     min_year,
     max_year,
 )
@@ -30,8 +30,8 @@ from gch4i.config import (
 @task(id="oil_refineries_proxy")
 def task_get_oil_refineries_proxy_data(
     subpart_y_path="https://data.epa.gov/efservice/y_subpart_level_information/pub_dim_facility/ghg_name/=/Methane/CSV",
-    state_path: Path = global_data_dir_path / "tl_2020_us_state.zip",
-    proxy_output_path: Annotated[Path, Product] = proxy_data_dir_path / "oil_refineries_proxy.parquet",
+    state_path: Path = v4_global_data_dir_path / "tl_2020_us_state.zip",
+    proxy_output_path: Annotated[Path, Product] = v4_proxy_data_dir_path / "oil_refineries_proxy.parquet",
 ):
     """
     Process oil refineries proxy data for methane emissions
